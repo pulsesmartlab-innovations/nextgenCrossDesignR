@@ -1,0 +1,5 @@
+RTOOLS_USR_BIN = $(subst \,/,$(RTOOLS43_HOME))/usr/bin
+
+override BASE = nextgenCrossDesign
+override SED = $(RTOOLS_USR_BIN)/sed.exe
+override RM = $(RTOOLS_USR_BIN)/rm.exe -f

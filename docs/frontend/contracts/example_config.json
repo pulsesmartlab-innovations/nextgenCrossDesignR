@@ -1,0 +1,29 @@
+{
+  "genotype_file": "docs/frontend/contracts/data/genotype.csv",
+  "phenotype_file": "docs/frontend/contracts/data/phenotype.csv",
+  "map_file": "docs/frontend/contracts/data/marker_map.csv",
+  "direction_file": "docs/frontend/contracts/data/trait_direction.csv",
+  "id_col": "NAME",
+  "map_position_unit": "bp",
+  "bp_per_cm": 1000000,
+
+  "prediction_mode": "trait_by_trait",
+  "trait_value_metric": "var_complex",
+  "multi_trait_method": "auto",
+  "progeny": "DH",
+  "grm_method": "vanraden",
+  "selection_prop": 0.2,
+
+  "duplicate_action": "none",
+
+  "n_crosses": 10,
+  "max_uses_per_parent": 4,
+  "optimizer": "evolution",
+  "allocation_method": "ocs",
+  "use_ocs": true,
+  "strategy": "balanced",
+
+  "write_outputs": false,
+  "write_figures": false,
+  "seed": 20260706
+}

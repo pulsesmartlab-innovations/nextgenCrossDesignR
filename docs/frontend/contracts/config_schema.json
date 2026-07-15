@@ -1,0 +1,207 @@
+{
+  "schema": "ng_run_config.v1",
+  "entrypoint": "ng_run_cross_prediction",
+  "runner": "tools/run_cross_prediction_json.R",
+  "note": "Every key mirrors an ng_run_cross_prediction() formal. The headless runner errors on unknown keys. 'gated_by' names an optional package whose absence disables the feature (discover via backend_capabilities.json / requireNamespace). 'allowed' lists match.arg choices (first = default).",
+  "groups": [
+    {
+      "id": "input_data", "label": "Input data",
+      "params": [
+        {"name": "genotype_file", "type": "path", "required": true, "desc": "CSV: parents × markers, dosage 0..ploidy, plus an id column (or pass genotype in-memory)"},
+        {"name": "phenotype_file", "type": "path", "required": true, "desc": "CSV: parents × traits (adjusted means / BLUE / BLUP)"},
+        {"name": "map_file", "type": "path", "required": true, "desc": "CSV: marker, chromosome, position"},
+        {"name": "direction_file", "type": "path", "required": "when prediction_mode = trait_by_trait", "desc": "CSV: trait + selection direction (increase/decrease)"}
+      ]
+    },
+    {
+      "id": "id_mapping", "label": "ID & column mapping (auto-detected if omitted)",
+      "params": [
+        {"name": "id_col", "type": "string", "default": null, "desc": "Global fallback id column for phenotype/genotype/training"},
+        {"name": "phenotype_id_col", "type": "string", "default": null},
+        {"name": "genotype_id_col", "type": "string", "default": null},
+        {"name": "direction_trait_col", "type": "string", "default": null},
+        {"name": "direction_column_col", "type": "string", "default": null},
+        {"name": "direction_direction_col", "type": "string", "default": null},
+        {"name": "map_marker_col", "type": "string", "default": null},
+        {"name": "map_chr_col", "type": "string", "default": null},
+        {"name": "map_pos_col", "type": "string", "default": null},
+        {"name": "map_pos_cm_col", "type": "string", "default": null},
+        {"name": "map_pos_bp_col", "type": "string", "default": null},
+        {"name": "map_position_unit", "type": "enum", "allowed": ["bp", "cM"], "default": "bp"},
+        {"name": "bp_per_cm", "type": "number", "default": null, "desc": "Required with bp positions to derive cM"},
+        {"name": "map_pos_cm_divisor", "type": "number", "default": 1}
+      ]
+    },
+    {
+      "id": "prediction_metric", "label": "Prediction mode & cross-scoring metric",
+      "params": [
+        {"name": "prediction_mode", "type": "enum", "allowed": ["trait_by_trait", "index_as_trait"], "default": "trait_by_trait"},
+        {"name": "traits_to_use", "type": "string[]", "default": null},
+        {"name": "index_col", "type": "string", "default": null, "desc": "Required when prediction_mode = index_as_trait"},
+        {"name": "index_direction", "type": "string", "default": "increase"},
+        {"name": "trait_value_metric", "type": "enum", "allowed": ["uc", "pmv", "vpm", "var_simple", "var_complex", "mean"], "default": "var_complex", "desc": "var_simple is a DIVERSITY proxy, not a merit metric — do not offer it as a merit option"},
+        {"name": "uc_variance_source", "type": "enum", "allowed": ["pmv", "vpm", "var_simple"], "default": "pmv"},
+        {"name": "progeny", "type": "enum", "allowed": ["DH", "RIL"], "default": "DH"},
+        {"name": "recombination_model", "type": "enum", "allowed": ["haldane", "kosambi"], "default": "haldane"},
+        {"name": "selection_prop", "type": "number", "default": 0.1},
+        {"name": "min_effect_reliability", "type": "number", "default": 0.35},
+        {"name": "grm_method", "type": "enum", "allowed": ["vanraden", "yang"], "default": "vanraden"},
+        {"name": "method_varPMV", "type": "enum", "allowed": ["fast", "full_posterior"], "default": "fast"},
+        {"name": "assume_inbred", "type": "boolean", "default": true},
+        {"name": "use_cpp", "type": "boolean", "default": true}
+      ]
+    },
+    {
+      "id": "training_set", "label": "Marker-effect training-set augmentation",
+      "desc": "Extra genotyped+phenotyped individuals that sharpen the ridge fit but are NEVER candidate parents (parents = the main genotype/phenotype tables). Only affects effect-based metrics. Supply genotype AND phenotype.",
+      "params": [
+        {"name": "training_genotype_file", "type": "path", "default": null},
+        {"name": "training_phenotype_file", "type": "path", "default": null},
+        {"name": "training_genotype_id_col", "type": "string", "default": null},
+        {"name": "training_phenotype_id_col", "type": "string", "default": null}
+      ]
+    },
+    {
+      "id": "qc", "label": "Data QC & duplicate handling",
+      "params": [
+        {"name": "duplicate_action", "type": "enum", "allowed": ["remove", "report", "none"], "default": "remove"},
+        {"name": "duplicate_threshold", "type": "number", "default": 0.995},
+        {"name": "duplicate_maf_min", "type": "number", "default": 0.01},
+        {"name": "duplicate_max_missing_prop", "type": "number", "default": 0.4},
+        {"name": "duplicate_min_compared_markers", "type": "integer", "default": 100}
+      ]
+    },
+    {
+      "id": "ld_pruning", "label": "LD pruning",
+      "params": [
+        {"name": "ld_pruning", "type": "boolean", "default": false},
+        {"name": "ld_window", "type": "integer", "default": 100},
+        {"name": "ld_r2_threshold", "type": "number", "default": 0.9},
+        {"name": "ld_maf_threshold", "type": "number", "default": 0.01},
+        {"name": "ld_ploidy", "type": "integer", "default": 2},
+        {"name": "ld_backend", "type": "enum", "allowed": ["auto", "cpp", "r"], "default": "auto"}
+      ]
+    },
+    {
+      "id": "multitrait", "label": "Multi-trait objective",
+      "params": [
+        {"name": "multi_trait_method", "type": "enum", "allowed": ["auto", "weighted", "economic_index", "desired_gain", "threshold"], "default": "auto"},
+        {"name": "trait_weights", "type": "object", "default": null, "desc": "Named numeric, e.g. {\"yield\":0.5,\"disease\":0.5}"},
+        {"name": "threshold_policy", "type": "enum", "allowed": ["soft", "strict"], "default": "soft"},
+        {"name": "threshold_penalty_weight", "type": "number", "default": 1.0},
+        {"name": "threshold_penalty_autoscale", "type": "boolean", "default": true}
+      ]
+    },
+    {
+      "id": "allocation", "label": "Allocation & OCS constraints",
+      "params": [
+        {"name": "n_crosses", "type": "integer", "default": 100},
+        {"name": "max_uses_per_parent", "type": "integer", "default": 6},
+        {"name": "min_unique_parents", "type": "integer", "default": null, "desc": "Hard floor on distinct parents (auto = min(n_parents, 2*n_crosses)); honored on every optimizer"},
+        {"name": "max_pair_kinship", "type": "number", "default": null, "desc": "Cap relatedness of any mated pair (default Inf = off)"},
+        {"name": "optimizer", "type": "enum", "allowed": ["auto", "evolution", "greedy_local", "repair_local", "mip_linear", "mip_contribution"], "default": "auto", "aliases": {"lp": "mip_linear", "mip": "mip_contribution", "ocs": "mip_contribution", "ga": "evolution"}, "desc": "evolution recommended for real/recurrent programs"},
+        {"name": "allocation_method", "type": "enum", "allowed": ["ocs", "alphamate_style", "alphamate_executable"], "default": "ocs"},
+        {"name": "use_ocs", "type": "boolean", "default": true},
+        {"name": "lambda_group", "type": "number", "default": 0.05},
+        {"name": "lambda_mating", "type": "number", "default": 0.02},
+        {"name": "lambda_parent_use", "type": "number", "default": 0},
+        {"name": "lambda_parent_use_mode", "type": "enum", "allowed": ["absolute", "adaptive"], "default": "absolute"},
+        {"name": "lambda_progeny_inbreeding", "type": "number", "default": 0},
+        {"name": "mip_note", "type": "meta", "gated_by": "lpSolve", "desc": "MIP optimizers require lpSolve; absent → degrade to greedy/repair"}
+      ]
+    },
+    {
+      "id": "diversity_dial", "label": "Gain–diversity dial (alternatives to raw lambda_group)",
+      "params": [
+        {"name": "strategy", "type": "enum", "allowed": ["high_gain", "balanced", "diversity"], "default": null},
+        {"name": "diversity_emphasis", "type": "number", "default": null, "desc": "0 = max gain … 100 = max diversity"},
+        {"name": "target_coancestry", "type": "number", "default": null, "desc": "Absolute inbreeding cap (constrained OCS)"}
+      ]
+    },
+    {
+      "id": "constraints", "label": "Breeder mating constraints",
+      "params": [
+        {"name": "min_crosses_per_parent", "type": "integer", "default": 0, "desc": "Min-use-if-used"},
+        {"name": "committed_crosses", "type": "object", "default": null, "desc": "Locked matings: rows of {parent1, parent2}"},
+        {"name": "parent_group", "type": "object", "default": null, "desc": "Named vector: parent -> group (heterotic pool / M-F)"},
+        {"name": "group_permission", "type": "object", "default": null, "desc": "Legal group × group matrix"},
+        {"name": "group_quota", "type": "object", "default": null, "desc": "Per-pair caps, e.g. {\"A||B\": 20}"}
+      ]
+    },
+    {
+      "id": "cost_logistics", "label": "Cost, budget & logistics",
+      "params": [
+        {"name": "cross_cost", "type": "object", "default": null, "desc": "Rows of {parent1, parent2, <factor cols>} joined by unordered pair"},
+        {"name": "cost_col", "type": "string", "default": null},
+        {"name": "budget", "type": "number", "default": null, "desc": "Hard cap on total plan cost (default Inf)"},
+        {"name": "lambda_cost", "type": "number", "default": 0},
+        {"name": "logistic_col", "type": "string", "default": null},
+        {"name": "lambda_logistic", "type": "number", "default": 0}
+      ]
+    },
+    {
+      "id": "marker_lethal", "label": "Marker steering & lethal-allele guarding",
+      "params": [
+        {"name": "marker_target_spec", "type": "object", "default": null, "desc": "Steer a marker's allele frequency (ng_marker_target_spec)"},
+        {"name": "lambda_marker", "type": "number", "default": 0},
+        {"name": "marker_ploidy", "type": "integer", "default": 2},
+        {"name": "lethal_spec", "type": "object", "default": null, "desc": "Deleterious recessive locus (ng_lethal_recessive_spec)"},
+        {"name": "drop_lethal_carrier_crosses", "type": "boolean", "default": true}
+      ]
+    },
+    {
+      "id": "posterior", "label": "Posterior prediction (optional)",
+      "params": [
+        {"name": "run_posterior_prediction", "type": "boolean", "default": false},
+        {"name": "posterior_method", "type": "enum", "allowed": ["mcmc", "closed_form"], "default": "mcmc"},
+        {"name": "nIter", "type": "integer", "default": 5000},
+        {"name": "burnIn", "type": "integer", "default": 500}
+      ]
+    },
+    {
+      "id": "optimizer_internals", "label": "Optimizer internals (advanced)",
+      "params": [
+        {"name": "local_iter", "type": "integer", "default": 2000},
+        {"name": "ocs_iter", "type": "integer", "default": 5},
+        {"name": "evol_solutions", "type": "integer", "default": 100},
+        {"name": "evol_iterations", "type": "integer", "default": 200},
+        {"name": "evol_stop", "type": "integer", "default": 40},
+        {"name": "evol_seed", "type": "integer", "default": null},
+        {"name": "use_parallel", "type": "boolean", "default": false},
+        {"name": "parallel_cores", "type": "integer", "default": null}
+      ]
+    },
+    {
+      "id": "alphamate", "label": "AlphaMate (style + external executable)",
+      "params": [
+        {"name": "alphamate_mode", "type": "enum", "allowed": ["ModeOptTarget1", "ModeMaxCriterion", "ModeMinCoancestry"], "default": "ModeOptTarget1"},
+        {"name": "alphamate_target_degree", "type": "number", "default": 45},
+        {"name": "alphamate_max_contributions", "type": "integer", "default": null},
+        {"name": "alphamate_number_of_parents", "type": "integer", "default": null},
+        {"name": "alphamate_executable", "type": "path", "default": null, "desc": "External AlphaMate binary (only for allocation_method = alphamate_executable)"},
+        {"name": "alphamate_runtime_path", "type": "string", "default": null},
+        {"name": "alphamate_n_threads", "type": "integer", "default": 1}
+      ]
+    },
+    {
+      "id": "priority", "label": "Priority ranking of the plan",
+      "params": [
+        {"name": "priority_breaks", "type": "number[]", "default": [0.1, 0.35, 0.7, 1.0]},
+        {"name": "priority_labels", "type": "string[]", "default": ["highly_priority", "priority", "medium_priority", "low_priority"]},
+        {"name": "priority_score_weight", "type": "number", "default": 1.0},
+        {"name": "priority_kinship_weight", "type": "number", "default": 0.15},
+        {"name": "priority_threshold_weight", "type": "number", "default": 1.0}
+      ]
+    },
+    {
+      "id": "output", "label": "Output & reproducibility",
+      "params": [
+        {"name": "output_dir", "type": "path", "default": null, "desc": "Required if writing a workbook/figures"},
+        {"name": "output_file", "type": "string", "default": "crossing_plan.xlsx"},
+        {"name": "write_outputs", "type": "boolean", "default": false, "gated_by": "openxlsx", "desc": "Writes the breeder crossing-plan .xlsx workbook"},
+        {"name": "write_figures", "type": "boolean", "default": false, "gated_by": "ggplot2", "desc": "Writes priority_score_vs_kinship.png"},
+        {"name": "seed", "type": "integer", "default": 1}
+      ]
+    }
+  ]
+}

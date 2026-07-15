@@ -1,0 +1,50 @@
+Package: nextgenCrossDesign
+Type: Package
+Title: Next Generation Cross Prediction and Mate Allocation
+Version: 0.4.0
+Authors@R: c(
+    person("Sikiru", "Atanda", email = "pulsesmartlab@gmail.com", role = c("aut", "cre"))
+    )
+Author: Sikiru Atanda [aut, cre]
+Maintainer: Sikiru Atanda <pulsesmartlab@gmail.com>
+Description: Breeding-program backend for genomic cross prediction, mate
+    allocation, multi-trait selection, calibration, external baseline
+    comparison, and crop/ploidy validation workflows. The package provides
+    diploid DH/RIL scoring and allocation as the primary validated path, native
+    var_complex, SimpleMating-, and AlphaMate-style components without hard
+    dependencies on those tools, optional exact external comparison wrappers,
+    and explicit experimental modules for
+    autotetraploid and allopolyploid model families.
+License: MIT + file LICENSE
+URL: https://github.com/pulsesmartlab-innovations/nextgenCrossDesignR
+BugReports: https://github.com/pulsesmartlab-innovations/nextgenCrossDesignR/issues
+Encoding: UTF-8
+Depends:
+    R (>= 4.1.0)
+Imports:
+    stats,
+    utils,
+    grDevices,
+    graphics,
+    jsonlite,
+    lpSolve,
+    Rcpp
+LinkingTo:
+    Rcpp
+Suggests:
+    AlphaSimR,
+    openxlsx,
+    RhpcBLASctl,
+    Matrix,
+    sommer,
+    ggplot2,
+    patchwork,
+    scales,
+    mvtnorm,
+    knitr,
+    rmarkdown
+Enhances:
+    PopVar,
+    SimpleMating,
+    genomicMateSelectR
+VignetteBuilder: knitr

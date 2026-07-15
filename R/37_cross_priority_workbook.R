@@ -1,0 +1,361 @@
+ng_cpw_clean_sheet_name <- function(x) {
+  x <- gsub("[^A-Za-z0-9_]", "_", as.character(x))
+  x <- gsub("_+", "_", x)
+  substr(x, 1L, 31L)
+}
+
+ng_cpw_first_col <- function(data, candidates) {
+  hit <- match(tolower(candidates), tolower(names(data)), nomatch = 0L)
+  hit <- hit[hit > 0L]
+  if (length(hit)) names(data)[hit[[1L]]] else NULL
+}
+
+ng_cpw_tier_sheet_name <- function(tier) {
+  key <- tolower(trimws(as.character(tier)))
+  if (identical(key, "highly_priority")) return("Highly_Priority")
+  if (identical(key, "priority")) return("Priority")
+  if (identical(key, "medium_priority")) return("Medium_Priority")
+  if (identical(key, "low_priority")) return("Low_Priority")
+  ng_cpw_clean_sheet_name(tier)
+}
+
+ng_cpw_numeric <- function(x) {
+  suppressWarnings(as.numeric(x))
+}
+
+ng_cpw_format_value <- function(x) {
+  x <- suppressWarnings(as.numeric(x))
+  out <- ifelse(is.finite(x), format(round(x, 4L), trim = TRUE, scientific = FALSE), "")
+  out
+}
+
+ng_cpw_trait_table <- function(trait_directions, data) {
+  if (is.null(trait_directions)) return(data.frame())
+  trait_directions <- as.data.frame(trait_directions, stringsAsFactors = FALSE, check.names = FALSE)
+  if (!nrow(trait_directions)) return(data.frame())
+  trait_col <- ng_cpw_first_col(trait_directions, c("trait", "name"))
+  column_col <- ng_cpw_first_col(trait_directions, c("column", "score_col", "trait_column"))
+  direction_col <- ng_cpw_first_col(trait_directions, c("direction", "selection_directionn", "selection_direction"))
+  weight_col <- ng_cpw_first_col(trait_directions, c("weight", "economic_weight"))
+  if (is.null(trait_col)) trait_col <- names(trait_directions)[[1L]]
+  trait <- as.character(trait_directions[[trait_col]])
+  column <- if (!is.null(column_col)) as.character(trait_directions[[column_col]]) else trait
+  column <- ifelse(column %in% names(data), column, paste0("pred_", trait))
+  direction <- if (!is.null(direction_col)) as.character(trait_directions[[direction_col]]) else "maximize"
+  direction <- ifelse(tolower(direction) %in% c("min", "minimize", "minimise", "low", "lower", "decrease", "-"),
+                      "minimize", "maximize")
+  weight <- if (!is.null(weight_col)) ng_cpw_numeric(trait_directions[[weight_col]]) else rep(1, length(trait))
+  weight[!is.finite(weight)] <- 1
+  out <- data.frame(
+    trait = trait,
+    column = column,
+    direction = direction,
+    weight = weight,
+    available = column %in% names(data),
+    stringsAsFactors = FALSE
+  )
+  out[nzchar(out$trait), , drop = FALSE]
+}
+
+ng_cpw_trait_evidence <- function(crosses, trait_info, n_traits = 3L) {
+  empty <- rep("", nrow(crosses))
+  if (!nrow(crosses) || is.null(trait_info) || !nrow(trait_info)) {
+    return(list(favorable = empty, risk = empty))
+  }
+  trait_info <- trait_info[trait_info$available, , drop = FALSE]
+  if (!nrow(trait_info)) return(list(favorable = empty, risk = empty))
+  components <- matrix(0, nrow = nrow(crosses), ncol = nrow(trait_info))
+  raw_values <- matrix(NA_real_, nrow = nrow(crosses), ncol = nrow(trait_info))
+  for (i in seq_len(nrow(trait_info))) {
+    x <- ng_cpw_numeric(crosses[[trait_info$column[[i]]]])
+    raw_values[, i] <- x
+    components[, i] <- ng_rank_normalize(x, bigger_is_better = identical(trait_info$direction[[i]], "maximize"))
+  }
+  favorable <- character(nrow(crosses))
+  risk <- character(nrow(crosses))
+  for (r in seq_len(nrow(crosses))) {
+    ok <- is.finite(raw_values[r, ]) & is.finite(components[r, ])
+    if (!any(ok)) {
+      favorable[[r]] <- ""
+      risk[[r]] <- ""
+    } else {
+      ord_fav <- order(components[r, ], decreasing = TRUE, na.last = NA)
+      ord_risk <- order(components[r, ], decreasing = FALSE, na.last = NA)
+      ord_fav <- ord_fav[seq_len(min(length(ord_fav), as.integer(n_traits)))]
+      ord_risk <- ord_risk[seq_len(min(length(ord_risk), as.integer(n_traits)))]
+      favorable[[r]] <- paste(
+        paste0(trait_info$trait[ord_fav], "=", ng_cpw_format_value(raw_values[r, ord_fav])),
+        collapse = "; "
+      )
+      risk[[r]] <- paste(
+        paste0(trait_info$trait[ord_risk], "=", ng_cpw_format_value(raw_values[r, ord_risk])),
+        collapse = "; "
+      )
+    }
+  }
+  list(favorable = favorable, risk = risk)
+}
+
+ng_cpw_duplicate_parent_set <- function(duplicate_pairs) {
+  if (is.null(duplicate_pairs)) return(character())
+  duplicate_pairs <- as.data.frame(duplicate_pairs, stringsAsFactors = FALSE)
+  p1 <- ng_cpw_first_col(duplicate_pairs, c("parent1", "sample1", "id1", "line1"))
+  p2 <- ng_cpw_first_col(duplicate_pairs, c("parent2", "sample2", "id2", "line2"))
+  if (is.null(p1) || is.null(p2) || !nrow(duplicate_pairs)) return(character())
+  unique(c(as.character(duplicate_pairs[[p1]]), as.character(duplicate_pairs[[p2]])))
+}
+
+ng_cpw_parent_use_flag <- function(crosses, parent_use) {
+  out <- rep("OK", nrow(crosses))
+  if (is.null(parent_use) || !nrow(crosses)) return(out)
+  parent_use <- as.data.frame(parent_use, stringsAsFactors = FALSE)
+  parent_col <- ng_cpw_first_col(parent_use, c("parent", "line", "id", "NAME"))
+  count_col <- ng_cpw_first_col(parent_use, c("crosses_selected", "Actual_Participation", "count", "uses"))
+  if (is.null(parent_col) || is.null(count_col)) return(out)
+  counts <- ng_cpw_numeric(parent_use[[count_col]])
+  names(counts) <- as.character(parent_use[[parent_col]])
+  threshold <- stats::quantile(counts[is.finite(counts)], probs = 0.90, na.rm = TRUE, names = FALSE, type = 1)
+  if (!is.finite(threshold)) return(out)
+  p1 <- as.character(crosses$parent1)
+  p2 <- as.character(crosses$parent2)
+  max_use <- pmax(counts[p1], counts[p2], na.rm = TRUE)
+  out[is.finite(max_use) & max_use >= threshold & max_use > 1] <- "High parent use"
+  out
+}
+
+ng_cpw_make_selected <- function(crosses, trait_info, parent_use, duplicate_pairs, block_size) {
+  crosses <- as.data.frame(crosses, stringsAsFactors = FALSE, check.names = FALSE)
+  if (!("priority_rank" %in% names(crosses)) || !("priority_tier" %in% names(crosses))) {
+    crosses <- ng_rank_cross_priority(crosses)
+  }
+  crosses <- crosses[order(crosses$priority_rank), , drop = FALSE]
+  block_size <- as.integer(block_size[[1L]])
+  if (!is.finite(block_size) || block_size < 1L) block_size <- 10L
+  evidence <- ng_cpw_trait_evidence(crosses, trait_info)
+  duplicate_parents <- ng_cpw_duplicate_parent_set(duplicate_pairs)
+  dup_flag <- ifelse(crosses$parent1 %in% duplicate_parents | crosses$parent2 %in% duplicate_parents,
+                     "Parent in putative duplicate pair", "OK")
+  threshold_violation <- if ("multi_trait_threshold_violation" %in% names(crosses)) {
+    ng_cpw_numeric(crosses$multi_trait_threshold_violation)
+  } else {
+    rep(NA_real_, nrow(crosses))
+  }
+  out <- data.frame(
+    Cross_Rank = seq_len(nrow(crosses)),
+    Cross_ID = sprintf("C%03d", seq_len(nrow(crosses))),
+    Cross_Block = sprintf("Block_%02d", ceiling(seq_len(nrow(crosses)) / block_size)),
+    Block_Position = ((seq_len(nrow(crosses)) - 1L) %% block_size) + 1L,
+    Parent_1 = as.character(crosses$parent1),
+    Parent_2 = as.character(crosses$parent2),
+    priority_rank = as.integer(crosses$priority_rank),
+    priority_tier = as.character(crosses$priority_tier),
+    priority_index = if ("priority_index" %in% names(crosses)) ng_cpw_numeric(crosses$priority_index) else NA_real_,
+    multi_trait_score = if ("multi_trait_score" %in% names(crosses)) ng_cpw_numeric(crosses$multi_trait_score) else NA_real_,
+    pair_kinship = if ("pair_kinship" %in% names(crosses)) ng_cpw_numeric(crosses$pair_kinship) else NA_real_,
+    threshold_violation = threshold_violation,
+    top_favorable_traits = evidence$favorable,
+    top_risk_traits = evidence$risk,
+    parent_use_flag = ng_cpw_parent_use_flag(crosses, parent_use),
+    duplicate_qc_flag = dup_flag,
+    package_evidence_note = ifelse(
+      is.finite(threshold_violation) & threshold_violation > 0,
+      "Ranked with soft threshold penalty; review risk traits and breeder notes",
+      "Ranked from supplied trait directions, weights, kinship, and parent-use constraints"
+    ),
+    Breeder_Rationale = "",
+    Breeder_Notes = "",
+    Final_Decision = "",
+    Crossing_Status = "",
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  trait_cols <- trait_info$column[trait_info$available]
+  trait_cols <- trait_cols[trait_cols %in% names(crosses)]
+  for (col in trait_cols) out[[col]] <- crosses[[col]]
+  out
+}
+
+ng_cpw_candidate_table <- function(scored, selected) {
+  if (is.null(scored)) return(data.frame())
+  scored <- as.data.frame(scored, stringsAsFactors = FALSE, check.names = FALSE)
+  if (!nrow(scored)) return(data.frame())
+  score_col <- if ("multi_trait_score" %in% names(scored)) "multi_trait_score" else ng_cpw_first_col(scored, c("priority_index", "uc_dh_gebv"))
+  if (!is.null(score_col)) {
+    ord <- order(-ng_cpw_numeric(scored[[score_col]]), scored$parent1, scored$parent2, na.last = TRUE)
+    scored <- scored[ord, , drop = FALSE]
+  }
+  key <- paste(selected$Parent_1, selected$Parent_2, sep = "\r")
+  cand_key <- paste(scored$parent1, scored$parent2, sep = "\r")
+  out <- data.frame(
+    Candidate_Rank = seq_len(nrow(scored)),
+    Selected_in_plan = ifelse(cand_key %in% key, "Yes", "No"),
+    Selection_Status = ifelse(cand_key %in% key, selected$priority_tier[match(cand_key, key)], "Not selected"),
+    Parent_1 = as.character(scored$parent1),
+    Parent_2 = as.character(scored$parent2),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  keep <- c("multi_trait_score", "pair_kinship", "multi_trait_threshold_violation", "priority_rank", "priority_tier")
+  pred_cols <- grep("^pred_", names(scored), value = TRUE)
+  keep <- unique(c(keep, pred_cols))
+  keep <- keep[keep %in% names(scored)]
+  cbind(out, scored[, keep, drop = FALSE])
+}
+
+ng_cpw_dashboard <- function(selected, scored, trait_info, parent_use, duplicate_pairs, n_crosses_requested) {
+  tier_counts <- table(selected$priority_tier)
+  tier_text <- paste(paste(names(tier_counts), as.integer(tier_counts), sep = "="), collapse = "; ")
+  data.frame(
+    Item = c(
+      "Requested crosses",
+      "Selected crosses",
+      "Candidate crosses",
+      "Priority tiers",
+      "Traits included",
+      "Parents used",
+      "Putative duplicate pairs",
+      "Breeder rationale"
+    ),
+    Value = c(
+      if (is.null(n_crosses_requested)) nrow(selected) else as.integer(n_crosses_requested[[1L]]),
+      nrow(selected),
+      if (is.null(scored)) NA_integer_ else nrow(as.data.frame(scored)),
+      tier_text,
+      nrow(trait_info[trait_info$available, , drop = FALSE]),
+      length(unique(c(selected$Parent_1, selected$Parent_2))),
+      if (is.null(duplicate_pairs)) 0L else nrow(as.data.frame(duplicate_pairs)),
+      "Editable by user"
+    ),
+    Notes = c(
+      "User-requested crossing capacity.",
+      "Rows included in the final selected crossing plan.",
+      "Candidate parent pairs scored before final selection.",
+      "Priority tiers are assigned after optimization for practical execution.",
+      "Only available trait columns are used in evidence summaries.",
+      "Unique parents represented in selected crosses.",
+      "Pairs identified during putative duplicate genotype QC.",
+      "Breeder_Rationale, Breeder_Notes, Final_Decision, and Crossing_Status are intentionally blank."
+    ),
+    stringsAsFactors = FALSE
+  )
+}
+
+ng_cpw_scoring_method <- function() {
+  data.frame(
+    Section = c(
+      "Selection engine",
+      "Priority tiering",
+      "Evidence columns",
+      "Editable breeder columns",
+      "Breeder rationale policy",
+      "Duplicate and parent-use QC"
+    ),
+    Details = c(
+      "Crosses are ranked from supplied trait directions, trait weights, kinship, threshold penalties, and parent-use constraints.",
+      "Priority tiers divide the selected plan into practical execution groups; users can change tier breaks and crossing capacity.",
+      "top_favorable_traits and top_risk_traits summarize objective trait evidence from the selected cross table.",
+      "Breeder_Rationale, Breeder_Notes, Final_Decision, and Crossing_Status are editable fields for program-specific decisions.",
+      "The package does not write one-size-fits-all breeding rationale text because rationale differs by breeder, market, nursery, and cycle.",
+      "parent_use_flag and duplicate_qc_flag surface review points without replacing breeder judgment."
+    ),
+    stringsAsFactors = FALSE
+  )
+}
+
+ng_cross_priority_workbook_tables <- function(crosses,
+                                              scored = NULL,
+                                              trait_directions = NULL,
+                                              parent_use = NULL,
+                                              duplicate_pairs = NULL,
+                                              figures = NULL,
+                                              n_crosses_requested = NULL,
+                                              block_size = 10L) {
+  crosses <- as.data.frame(crosses, stringsAsFactors = FALSE, check.names = FALSE)
+  if (!nrow(crosses)) ng_stop("crosses must contain at least one selected cross")
+  if (!all(c("parent1", "parent2") %in% names(crosses))) {
+    ng_stop("crosses must contain parent1 and parent2 columns")
+  }
+  trait_info <- ng_cpw_trait_table(trait_directions, crosses)
+  selected <- ng_cpw_make_selected(crosses, trait_info, parent_use, duplicate_pairs, block_size)
+  out <- list(
+    Dashboard = ng_cpw_dashboard(selected, scored, trait_info, parent_use, duplicate_pairs, n_crosses_requested),
+    Scoring_Method = ng_cpw_scoring_method(),
+    Trait_Directions = trait_info,
+    Selected_All = selected
+  )
+  tier_order <- c("highly_priority", "priority", "medium_priority", "low_priority")
+  for (tier in tier_order) {
+    sheet <- ng_cpw_tier_sheet_name(tier)
+    idx <- tolower(selected$priority_tier) == tier
+    out[[sheet]] <- selected[idx, , drop = FALSE]
+  }
+  out$Candidate_Crosses <- ng_cpw_candidate_table(scored, selected)
+  out$Parent_Use_QC <- if (is.null(parent_use)) data.frame() else as.data.frame(parent_use, stringsAsFactors = FALSE)
+  out$Duplicate_QC <- if (is.null(duplicate_pairs)) data.frame() else as.data.frame(duplicate_pairs, stringsAsFactors = FALSE)
+  if (!is.null(figures)) out$Figure_Index <- as.data.frame(figures, stringsAsFactors = FALSE)
+  out
+}
+
+ng_cpw_write_sheet <- function(wb, sheet, data) {
+  openxlsx::addWorksheet(wb, sheet, gridLines = FALSE)
+  title_style <- openxlsx::createStyle(fontSize = 13, textDecoration = "bold", fontColour = "#1F4E78")
+  header_style <- openxlsx::createStyle(textDecoration = "bold", fontColour = "#FFFFFF", fgFill = "#1F4E78")
+  openxlsx::writeData(wb, sheet, gsub("_", " ", sheet), startRow = 1L, startCol = 1L)
+  openxlsx::addStyle(wb, sheet, title_style, rows = 1L, cols = 1L, stack = TRUE)
+  data <- as.data.frame(data, stringsAsFactors = FALSE, check.names = FALSE)
+  if (!nrow(data)) {
+    openxlsx::writeData(wb, sheet, "No rows available", startRow = 3L, startCol = 1L)
+    return(invisible(FALSE))
+  }
+  openxlsx::writeDataTable(
+    wb, sheet, data, startRow = 3L, startCol = 1L,
+    tableStyle = "TableStyleMedium2", withFilter = TRUE
+  )
+  openxlsx::addStyle(wb, sheet, header_style, rows = 3L, cols = seq_len(ncol(data)), gridExpand = TRUE, stack = TRUE)
+  openxlsx::freezePane(wb, sheet, firstActiveRow = 4L)
+  openxlsx::setColWidths(wb, sheet, cols = seq_len(ncol(data)), widths = "auto")
+  editable <- which(names(data) %in% c("Breeder_Rationale", "Breeder_Notes", "Final_Decision", "Crossing_Status"))
+  if (length(editable)) {
+    editable_style <- openxlsx::createStyle(fgFill = "#FFF2CC")
+    openxlsx::addStyle(
+      wb, sheet, editable_style,
+      rows = seq.int(4L, 3L + nrow(data)), cols = editable,
+      gridExpand = TRUE, stack = TRUE
+    )
+  }
+  invisible(TRUE)
+}
+
+ng_write_cross_priority_workbook <- function(output_path,
+                                             crosses,
+                                             scored = NULL,
+                                             trait_directions = NULL,
+                                             parent_use = NULL,
+                                             duplicate_pairs = NULL,
+                                             figures = NULL,
+                                             n_crosses_requested = NULL,
+                                             block_size = 10L) {
+  if (!requireNamespace("openxlsx", quietly = TRUE)) {
+    ng_stop("openxlsx is required to write cross priority workbooks")
+  }
+  if (missing(output_path) || is.null(output_path) || !nzchar(as.character(output_path[[1L]]))) {
+    ng_stop("output_path is required")
+  }
+  tables <- ng_cross_priority_workbook_tables(
+    crosses = crosses,
+    scored = scored,
+    trait_directions = trait_directions,
+    parent_use = parent_use,
+    duplicate_pairs = duplicate_pairs,
+    figures = figures,
+    n_crosses_requested = n_crosses_requested,
+    block_size = block_size
+  )
+  wb <- openxlsx::createWorkbook(creator = "nextgenCrossDesign")
+  for (sheet in names(tables)) {
+    ng_cpw_write_sheet(wb, ng_cpw_clean_sheet_name(sheet), tables[[sheet]])
+  }
+  dir.create(dirname(output_path), recursive = TRUE, showWarnings = FALSE)
+  openxlsx::saveWorkbook(wb, output_path, overwrite = TRUE)
+  normalizePath(output_path, winslash = "/", mustWork = TRUE)
+}
