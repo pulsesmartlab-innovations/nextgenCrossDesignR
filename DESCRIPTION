@@ -43,8 +43,7 @@ Suggests:
     mvtnorm,
     knitr,
     rmarkdown,
-    testthat (>= 3.0.0)
-Enhances:
+    testthat (>= 3.0.0),
     PopVar,
     SimpleMating,
     genomicMateSelectR

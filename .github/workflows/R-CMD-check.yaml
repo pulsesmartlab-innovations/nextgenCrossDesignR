@@ -45,16 +45,25 @@ jobs:
           r-version: ${{ matrix.config.r }}
           use-public-rspm: true
 
+      # Install only hard dependencies plus what the check itself needs. The
+      # external comparators (PopVar, SimpleMating, genomicMateSelectR) are
+      # Suggests used solely for benchmarking, guarded by requireNamespace, and
+      # two of them are GitHub-only; installing them here is unnecessary and
+      # would just add non-CRAN resolution to every platform. R CMD check treats
+      # the resulting "suggested but not available" as a NOTE, not an error.
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
-          extra-packages: any::rcmdcheck
-          needs: check
+          dependencies: '"hard"'
+          extra-packages: |
+            any::rcmdcheck
+            any::testthat
+            any::knitr
+            any::rmarkdown
 
       - uses: r-lib/actions/check-r-package@v2
         with:
           upload-snapshots: true
-          # Vignettes need pandoc; the tests are the point of this job.
-          args: 'c("--no-manual", "--no-build-vignettes")'
+          args: 'c("--no-manual")'
 
   harness:
     runs-on: ubuntu-latest
@@ -72,12 +81,28 @@ jobs:
           r-version: 'release'
           use-public-rspm: true
 
+      # The harness needs the CRAN science stack (AlphaSimR drives many scripts)
+      # but not the GitHub-only comparators; scripts that use those skip when the
+      # package is absent, exactly as they do without them installed locally.
+      # PopVar is on CRAN, so its comparison paths do run here.
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
-          needs: check
+          dependencies: '"hard"'
+          extra-packages: |
+            any::testthat
+            any::AlphaSimR
+            any::sommer
+            any::Matrix
+            any::mvtnorm
+            any::openxlsx
+            any::RhpcBLASctl
+            any::ggplot2
+            any::scales
+            any::patchwork
+            any::PopVar
 
       - name: Install the package
-        run: R CMD INSTALL .
+        run: R CMD INSTALL --no-build-vignettes .
         shell: bash
 
       - name: Run both tiers
