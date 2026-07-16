@@ -21,7 +21,7 @@ Set-DefaultEnv "NG_ALPHAMATE_EVOL_ITERATIONS" "300"
 Set-DefaultEnv "NG_ALPHAMATE_EVOL_STOP" "120"
 Set-DefaultEnv "NG_ALPHAMATE_THREADS" "1"
 
-Rscript nextgen_cross_design\tools\run_crop_genome_scenarios.R
+Rscript tools\run_crop_genome_scenarios.R
 if ($LASTEXITCODE -ne 0) {
   throw "Crop-genome AlphaMate grid failed with exit code $LASTEXITCODE"
 }

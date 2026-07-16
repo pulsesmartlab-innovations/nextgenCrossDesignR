@@ -17,4 +17,4 @@ $env:NG_EXTERNAL_GRID_METHODS = if ($env:NG_EXTERNAL_GRID_METHODS) {
   "var_simple_topn,var_simple_ocs10_lps1,var_simple_select4,ng_pmv_blend_cal_topn,ng_ocs_mip10_lps1,ng_hybrid_select4,popvar_musp_topn,popvar_musp_ocs10_lps1,popvar_musp_select4,simple_usefa_topn,simple_usefa_ocs10_lps1,simple_usefa_select4"
 }
 
-powershell -ExecutionPolicy Bypass -File nextgen_cross_design\tools\run_external_parent_size_grid.ps1
+powershell -ExecutionPolicy Bypass -File tools\run_external_parent_size_grid.ps1

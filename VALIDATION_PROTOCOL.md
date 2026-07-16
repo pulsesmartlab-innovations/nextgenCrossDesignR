@@ -26,7 +26,7 @@ parent-size grids, not only in one tuned run.
 Use the wrapper from the repository root:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File nextgen_cross_design\tools\run_framework_validation.ps1
+powershell -ExecutionPolicy Bypass -File tools\run_framework_validation.ps1
 ```
 
 By default it runs only smoke checks. Heavy phases are selected with
@@ -47,7 +47,7 @@ $env:NG_VALIDATION_REPS = "3"
 $env:NG_VALIDATION_PARENT_SIZES = "20,30,40,50,60,70,80"
 $env:NG_VALIDATION_EFFECT_TRAINING_N = "400"
 $env:NG_VALIDATION_PHASE = "all"
-powershell -ExecutionPolicy Bypass -File nextgen_cross_design\tools\run_framework_validation.ps1
+powershell -ExecutionPolicy Bypass -File tools\run_framework_validation.ps1
 ```
 
 ## Phases
@@ -124,7 +124,7 @@ not under `external/AlphaMate/binaries/AlphaMate.exe`. On Windows, also set
 The standard replicated 5K screen is:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File nextgen_cross_design\tools\run_alphamate_external_grid_5k.ps1
+powershell -ExecutionPolicy Bypass -File tools\run_alphamate_external_grid_5k.ps1
 ```
 
 Primary reads:
@@ -148,7 +148,7 @@ budget.
 Use the CI-friendly style-proxy runner first:
 
 ```powershell
-Rscript nextgen_cross_design\tools\run_head_to_head_benchmark.R
+Rscript tools\run_head_to_head_benchmark.R
 ```
 
 Primary reads:
@@ -215,10 +215,10 @@ not call `makeDH()` and must report `used_dh = 0` in selection summaries.
 Minimum smoke validation:
 
 ```powershell
-Rscript nextgen_cross_design\tests\poly4x_dosage.R
-Rscript nextgen_cross_design\tests\poly4x_simulation.R
-Rscript nextgen_cross_design\tests\poly4x_scoring.R
-Rscript nextgen_cross_design\tests\poly4x_runner_smoke.R
+Rscript tests\poly4x_dosage.R
+Rscript tests\poly4x_simulation.R
+Rscript tests\poly4x_scoring.R
+Rscript tests\poly4x_runner_smoke.R
 ```
 
 Minimum scenario screen:
@@ -228,7 +228,7 @@ $env:NG_POLY4X_GRID_SCENARIOS = "potato_autotetraploid_4x,cassava_autotetraploid
 $env:NG_POLY4X_GRID_PARENT_SIZES = "20,40"
 $env:NG_POLY4X_REPS = "1"
 $env:NG_POLY4X_CYCLES = "1"
-powershell -ExecutionPolicy Bypass -File nextgen_cross_design\tools\run_poly4x_grid.ps1
+powershell -ExecutionPolicy Bypass -File tools\run_poly4x_grid.ps1
 ```
 
 Promotion requires sampled-progeny predictions to rank independent realized 4x

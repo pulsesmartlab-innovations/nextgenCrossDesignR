@@ -72,7 +72,7 @@ foreach ($nParents in $parentSizes) {
   $env:NG_FAMILY_SELECTED_TOP_N = [string]$nParents
 
   Write-Host "Running parent-size scenario: parents=$nParents top_crosses=$topCrosses effect_training_n=$effectTrainingN"
-  Rscript nextgen_cross_design\tools\run_alphasimr_benchmark.R
+  Rscript tools\run_alphasimr_benchmark.R
   if ($LASTEXITCODE -ne 0) {
     throw "AlphaSimR benchmark failed for parents=$nParents with exit code $LASTEXITCODE"
   }
@@ -80,7 +80,7 @@ foreach ($nParents in $parentSizes) {
 
 $env:NG_GRID_PREFIX = $gridPrefix
 $env:NG_GRID_PARENT_SIZES = ($parentSizes -join ",")
-Rscript nextgen_cross_design\tools\summarize_parent_size_grid.R
+Rscript tools\summarize_parent_size_grid.R
 if ($LASTEXITCODE -ne 0) {
   throw "Parent-size grid summary failed with exit code $LASTEXITCODE"
 }

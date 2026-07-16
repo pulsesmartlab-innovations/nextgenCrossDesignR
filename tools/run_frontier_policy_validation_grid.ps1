@@ -16,7 +16,7 @@ Set-DefaultEnv "NG_GRID_PREFIX" "frontier_policy_parent_grid_5k"
 Set-DefaultEnv "NG_GRID_EXTERNAL_SHORTLIST_MULTIPLIER" "20"
 Set-DefaultEnv "NG_ALPHASIMR_THREADS" "1"
 
-powershell -ExecutionPolicy Bypass -File nextgen_cross_design\tools\run_framework_validation.ps1
+powershell -ExecutionPolicy Bypass -File tools\run_framework_validation.ps1
 if ($LASTEXITCODE -ne 0) {
   throw "frontier policy validation grid failed with exit code $LASTEXITCODE"
 }

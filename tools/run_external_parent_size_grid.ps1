@@ -67,9 +67,9 @@ foreach ($nParents in $parentSizes) {
   $env:NG_OUTPUT_PREFIX = "${gridPrefix}_${nParents}p"
 
   Write-Host "Running exact external parent-size scenario: parents=$nParents top_crosses=$topCrosses effect_training_n=$effectTrainingN"
-  Rscript nextgen_cross_design\tools\run_alphasimr_benchmark.R
+  Rscript tools\run_alphasimr_benchmark.R
 }
 
 $env:NG_GRID_PREFIX = $gridPrefix
 $env:NG_GRID_PARENT_SIZES = ($parentSizes -join ",")
-Rscript nextgen_cross_design\tools\summarize_parent_size_grid.R
+Rscript tools\summarize_parent_size_grid.R

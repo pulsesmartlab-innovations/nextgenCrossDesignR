@@ -31,7 +31,7 @@ Set-DefaultEnv "NG_ALPHAMATE_THREADS" "1"
 Set-DefaultEnv "NG_ALPHASIMR_THREADS" "1"
 Set-DefaultEnv "NG_SHARED_SCORING" "1"
 
-powershell -ExecutionPolicy Bypass -File nextgen_cross_design\tools\run_parent_size_grid.ps1
+powershell -ExecutionPolicy Bypass -File tools\run_parent_size_grid.ps1
 if ($LASTEXITCODE -ne 0) {
   throw "AlphaMate external 5K grid failed with exit code $LASTEXITCODE"
 }

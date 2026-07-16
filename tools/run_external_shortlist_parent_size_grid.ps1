@@ -11,4 +11,4 @@ $env:NG_EXTERNAL_GRID_SHORTLIST_MULTIPLIER = if ($env:NG_EXTERNAL_GRID_SHORTLIST
 $env:NG_EXTERNAL_GRID_SHORTLIST_SCORE_COL = if ($env:NG_EXTERNAL_GRID_SHORTLIST_SCORE_COL) { $env:NG_EXTERNAL_GRID_SHORTLIST_SCORE_COL } else { "etk_dh_pmv_var_blend_cal,uc_dh_blend,var_simple,mpv" }
 $env:NG_EXTERNAL_GRID_USE_CPP = if ($env:NG_EXTERNAL_GRID_USE_CPP) { $env:NG_EXTERNAL_GRID_USE_CPP } else { "0" }
 
-powershell -ExecutionPolicy Bypass -File nextgen_cross_design\tools\run_external_parent_size_grid.ps1
+powershell -ExecutionPolicy Bypass -File tools\run_external_parent_size_grid.ps1

@@ -1,7 +1,7 @@
 local({ .h <- file.path("tools", "ng_project_libpath.R"); if (file.exists(.h)) { source(.h); ng_prepend_project_lib(".Rlib") } else .libPaths(c(normalizePath(".Rlib", mustWork = FALSE), .libPaths())) })
 
 source("R/load.R")
-ng_load("nextgen_cross_design", use_cpp = Sys.getenv("NG_USE_CPP", "0") != "0")
+ng_load(use_cpp = Sys.getenv("NG_USE_CPP", "0") != "0")
 
 if (!requireNamespace("AlphaSimR", quietly = TRUE)) {
   stop("AlphaSimR is required for this diagnostic.", call. = FALSE)
