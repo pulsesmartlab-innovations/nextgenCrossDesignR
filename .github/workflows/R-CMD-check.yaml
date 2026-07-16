@@ -1,0 +1,85 @@
+# The gate for every push and pull request.
+#
+# Two jobs, because the package has two tiers of tests that check different
+# things (see tools/run_tests.R):
+#
+#   check   - R CMD check on Windows, macOS and Linux. Runs tests/testthat
+#             against the installed package. The package is meant to behave
+#             identically on all three, so a single-platform gate would not
+#             show that; the matrix is the point, not redundancy.
+#   harness - the deep tests/*.R science suite. Linux only and slower, so it
+#             does not need to fan out across platforms to be useful.
+name: R-CMD-check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ${{ matrix.config.os }}
+    name: check (${{ matrix.config.os }}, R ${{ matrix.config.r }})
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - {os: ubuntu-latest,  r: 'release'}
+          - {os: macos-latest,   r: 'release'}
+          - {os: windows-latest, r: 'release'}
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      R_KEEP_PKG_SOURCE: yes
+      # Compile and cross-check the C++ kernel against the pure-R path rather
+      # than skipping it; the kernel is the part most likely to break per-platform.
+      NG_TEST_CPP: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: ${{ matrix.config.r }}
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: any::rcmdcheck
+          needs: check
+
+      - uses: r-lib/actions/check-r-package@v2
+        with:
+          upload-snapshots: true
+          # Vignettes need pandoc; the tests are the point of this job.
+          args: 'c("--no-manual", "--no-build-vignettes")'
+
+  harness:
+    runs-on: ubuntu-latest
+    name: deep harness (tests/*.R)
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      # AlphaSimR's default thread count perturbs realized QTL/recombination
+      # outcomes under the same seed, which would make runs non-reproducible.
+      NG_ALPHASIMR_THREADS: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: 'release'
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          needs: check
+
+      - name: Install the package
+        run: R CMD INSTALL .
+        shell: bash
+
+      - name: Run both tiers
+        run: Rscript tools/run_tests.R
+        shell: bash

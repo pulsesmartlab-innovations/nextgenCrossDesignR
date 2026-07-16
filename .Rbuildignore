@@ -7,7 +7,7 @@
 ^results($|/)
 ^inst/fixtures($|/)
 ^docs($|/)
-^tests($|/)
+^tests/(?!testthat)
 ^tools($|/)
 ^BENCHMARK_NOTES[.]md$
 ^VALIDATED_STATE[.]md$
