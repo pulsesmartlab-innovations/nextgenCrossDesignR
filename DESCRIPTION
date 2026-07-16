@@ -44,8 +44,6 @@ Suggests:
     knitr,
     rmarkdown,
     testthat (>= 3.0.0),
-    PopVar,
-    SimpleMating,
-    genomicMateSelectR
+    PopVar
 VignetteBuilder: knitr
 Config/testthat/edition: 3

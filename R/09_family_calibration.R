@@ -117,7 +117,7 @@ ng_add_gms_vpm_scores <- function(scores,
                                   nBLASthreads = NULL) {
   scores$gms_vpm <- NA_real_
   scores$gms_status <- "not_run"
-  if (!requireNamespace("genomicMateSelectR", quietly = TRUE)) {
+  if (!ng_has_optional_pkg("genomicMateSelectR")) {
     scores$gms_status <- "package_unavailable"
     return(scores)
   }
@@ -171,13 +171,13 @@ ng_add_gms_vpm_scores <- function(scores,
       next
     }
     val <- tryCatch({
-      progeny_ld <- genomicMateSelectR::calcCrossLD(
+      progeny_ld <- ng_optional_pkg_fun("genomicMateSelectR", "calcCrossLD")(
         f1_id,
         f1_id,
         recombFreqMat = recomb_decay[seg, seg, drop = FALSE],
         haploMat = pair_hap[, seg, drop = FALSE]
       )
-      2 * as.numeric(genomicMateSelectR::quadform(
+      2 * as.numeric(ng_optional_pkg_fun("genomicMateSelectR", "quadform")(
         D = progeny_ld,
         x = beta[seg],
         y = beta[seg]

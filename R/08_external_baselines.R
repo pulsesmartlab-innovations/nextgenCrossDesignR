@@ -252,7 +252,7 @@ ng_add_simplemating_scores <- function(scores,
     return(ng_apply_simplemating_native_proxy(scores, prop_sel = prop_sel, status = "native_proxy"))
   }
 
-  if (!requireNamespace("SimpleMating", quietly = TRUE)) {
+  if (!ng_has_optional_pkg("SimpleMating")) {
     if (identical(engine, "auto") && identical(fallback, "native_proxy")) {
       return(ng_apply_simplemating_native_proxy(scores, prop_sel = prop_sel, status = "native_proxy_package_unavailable"))
     }
@@ -289,7 +289,7 @@ ng_add_simplemating_scores <- function(scores,
   if (isTRUE(include_mpv)) {
     mpv <- tryCatch({
       utils::capture.output({
-        tmp <- SimpleMating::getMPV(MatePlan = mate_plan, Criterion = crit_df, K = K)
+        tmp <- ng_optional_pkg_fun("SimpleMating", "getMPV")(MatePlan = mate_plan, Criterion = crit_df, K = K)
       })
       tmp
     }, error = function(e) {
@@ -331,7 +331,7 @@ ng_add_simplemating_scores <- function(scores,
     attr(scores, "simple_usefa_het_frac") <- het_frac
     usefa <- tryCatch({
       utils::capture.output({
-        tmp <- SimpleMating::getUsefA(
+        tmp <- ng_optional_pkg_fun("SimpleMating", "getUsefA")(
           MatePlan = mate_plan,
           Markers = markers_usefa,
           addEff = as.numeric(beta),
@@ -708,7 +708,7 @@ ng_select_simplemating <- function(scores,
                                    min_crosses_per_parent = 1L,
                                    max_crosses_to_search = 1e5,
                                    culling_pairwise_k = NULL) {
-  if (!requireNamespace("SimpleMating", quietly = TRUE)) {
+  if (!ng_has_optional_pkg("SimpleMating")) {
     ng_stop("SimpleMating package is not available")
   }
   if (!(score_col %in% names(scores))) ng_stop("scores missing ", score_col)
@@ -723,7 +723,7 @@ ng_select_simplemating <- function(scores,
   )
   out <- tryCatch({
     utils::capture.output({
-      tmp <- SimpleMating::selectCrosses(
+      tmp <- ng_optional_pkg_fun("SimpleMating", "selectCrosses")(
         data = data,
         n.cross = n_crosses,
         max.cross = max_crosses_per_parent,

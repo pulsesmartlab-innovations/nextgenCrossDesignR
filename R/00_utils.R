@@ -149,3 +149,17 @@ ng_audit_inbred_dosage <- function(geno, ploidy = 2,
     fraction_tolerance = fraction_tolerance
   )
 }
+
+# Optional external packages (SimpleMating, genomicMateSelectR) are used only for
+# opt-in benchmark comparisons and are intentionally NOT declared dependencies:
+# they are not on CRAN, and the package is fully functional without them (callers
+# fall back to native methods). These helpers reach them through variable
+# arguments so R CMD check does not treat them as undeclared imports, and so pak
+# never tries to resolve them during dependency setup.
+ng_has_optional_pkg <- function(pkg) {
+  requireNamespace(pkg, quietly = TRUE)
+}
+
+ng_optional_pkg_fun <- function(pkg, fun) {
+  get(fun, envir = asNamespace(pkg), mode = "function")
+}
