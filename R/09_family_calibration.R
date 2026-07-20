@@ -117,7 +117,7 @@ ng_add_gms_vpm_scores <- function(scores,
                                   n_blas_threads = NULL) {
   scores$gms_vpm <- NA_real_
   scores$gms_status <- "not_run"
-  if (!requireNamespace("genomicMateSelectR", quietly = TRUE)) {
+  if (!ng_has_optional_pkg("genomicMateSelectR")) {
     scores$gms_status <- "package_unavailable"
     return(scores)
   }
@@ -171,13 +171,13 @@ ng_add_gms_vpm_scores <- function(scores,
       next
     }
     val <- tryCatch({
-      progeny_ld <- genomicMateSelectR::calcCrossLD(
+      progeny_ld <- ng_optional_pkg_fun("genomicMateSelectR", "calcCrossLD")(
         f1_id,
         f1_id,
         recombFreqMat = recomb_decay[seg, seg, drop = FALSE],
         haploMat = pair_hap[, seg, drop = FALSE]
       )
-      2 * as.numeric(genomicMateSelectR::quadform(
+      2 * as.numeric(ng_optional_pkg_fun("genomicMateSelectR", "quadform")(
         D = progeny_ld,
         x = beta[seg],
         y = beta[seg]
@@ -203,7 +203,7 @@ ng_family_metric_registry <- function(scores) {
   )
   variance_cols <- c(
     "parent_distance", "vpm", "pmv",
-    "parent_distance_cal", "vpm_cal", "pmv_cal",
+    "var_simple_cal", "vpm_cal", "pmv_cal",
     "ng_portfolio_var", "popvar_varG", "simple_usefa_var", "gms_vpm"
   )
   usefulness_cols <- c(
@@ -211,10 +211,10 @@ ng_family_metric_registry <- function(scores) {
     "usefulness_vpm_gebv", "usefulness_pmv_gebv",
     "usefulness_vpm_adj", "usefulness_pmv_adj",
     "usefulness_vpm_blend", "usefulness_pmv_blend",
-    "etk_parent_distance_cal", "etk_vpm_cal", "etk_pmv_cal",
-    "etk_parent_distance_gebv_cal", "etk_vpm_gebv_cal", "etk_pmv_gebv_cal",
-    "etk_parent_distance_adj_cal", "etk_vpm_adj_cal", "etk_pmv_adj_cal",
-    "etk_parent_distance_blend_cal", "etk_vpm_blend_cal", "etk_pmv_blend_cal",
+    "etk_var_simple_cal", "etk_vpm_cal", "etk_pmv_cal",
+    "etk_var_simple_gebv_cal", "etk_vpm_gebv_cal", "etk_pmv_gebv_cal",
+    "etk_var_simple_adj_cal", "etk_vpm_adj_cal", "etk_pmv_adj_cal",
+    "etk_var_simple_blend_cal", "etk_vpm_blend_cal", "etk_pmv_blend_cal",
     "ng_portfolio_score",
     "popvar_uc", "popvar_musp_high", "simple_usefa"
   )

@@ -349,7 +349,7 @@ ng_simplemating_style_select <- function(scores,
   s$simplemating_score_col <- score_col
   s$simplemating_culling_pairwise_k <- max_pair_kinship
   s$style_proxy <- TRUE
-  s$style_proxy_note <- "Lambda-penalized OCS approximation of SimpleMating::selectCrosses; not the exact SimpleMating algorithm."
+  s$style_proxy_note <- "Lambda-penalized OCS approximation of SimpleMating selectCrosses; not the exact SimpleMating algorithm."
   attr(plan, "summary") <- s
   attr(plan, "style_proxy") <- TRUE
   plan
