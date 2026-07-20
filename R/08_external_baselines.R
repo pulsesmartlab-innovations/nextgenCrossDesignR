@@ -132,7 +132,7 @@ ng_add_popvar_scores <- function(scores,
     return(ng_apply_popvar_native_proxy(scores, tail_p = tail_p, status = "native_proxy"))
   }
 
-  if (!requireNamespace("PopVar", quietly = TRUE)) {
+  if (!ng_has_optional_pkg("PopVar")) {
     if (identical(engine, "auto") && identical(fallback, "native_proxy")) {
       return(ng_apply_popvar_native_proxy(scores, tail_p = tail_p, status = "native_proxy_package_unavailable"))
     }
