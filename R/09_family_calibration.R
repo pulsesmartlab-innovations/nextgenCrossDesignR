@@ -43,13 +43,13 @@ ng_cheap_cross_screen <- function(geno,
   out$mean_source <- mean_source$source
   out$effect_reliability <- mean_source$reliability
   out$cross_mean <- 0.5 * (mean_source$value[p1] + mean_source$value[p2])
-  out$mpv <- 0.5 * (gebv[p1] + gebv[p2])
-  out$var_simple <- rel_var$var_simple
+  out$mid_parent_value <- 0.5 * (gebv[p1] + gebv[p2])
+  out$parent_distance <- rel_var$parent_distance
   out$pair_kinship <- rel_var$pair_kinship
-  out$uc_var_simple <- out$cross_mean + i * sqrt(pmax(out$var_simple, 0))
+  out$usefulness_le <- out$cross_mean + i * sqrt(pmax(out$parent_distance, 0))
   if (!is.null(adjusted_pheno)) {
     adj <- ng_match_vector(adjusted_pheno, ids, "adjusted_pheno")
-    out$cross_mean_adjusted_pheno <- 0.5 * (adj[p1] + adj[p2])
+    out$cross_mean_adj <- 0.5 * (adj[p1] + adj[p2])
   }
   out
 }
@@ -59,7 +59,7 @@ ng_select_calibration_pair_rows <- function(cheap_scores,
                                             random_n = NULL,
                                             top_per_metric = 5L,
                                             bottom_per_metric = 2L,
-                                            metric_cols = c("cross_mean", "mpv", "var_simple", "uc_var_simple"),
+                                            metric_cols = c("cross_mean", "mid_parent_value", "parent_distance", "usefulness_le"),
                                             seed = NULL) {
   cheap_scores <- as.data.frame(cheap_scores, stringsAsFactors = FALSE)
   n <- nrow(cheap_scores)
@@ -70,7 +70,7 @@ ng_select_calibration_pair_rows <- function(cheap_scores,
   top_per_metric <- max(0L, as.integer(top_per_metric))
   bottom_per_metric <- max(0L, as.integer(bottom_per_metric))
   metric_cols <- intersect(metric_cols, names(cheap_scores))
-  if (!length(metric_cols)) metric_cols <- "uc_var_simple"
+  if (!length(metric_cols)) metric_cols <- "usefulness_le"
 
   old_seed <- if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) .Random.seed else NULL
   if (!is.null(seed)) set.seed(seed)
@@ -113,11 +113,11 @@ ng_add_gms_vpm_scores <- function(scores,
                                   marker_map,
                                   row_index = NULL,
                                   max_markers = Inf,
-                                  ncores = 1L,
-                                  nBLASthreads = NULL) {
+                                  n_threads = 1L,
+                                  n_blas_threads = NULL) {
   scores$gms_vpm <- NA_real_
   scores$gms_status <- "not_run"
-  if (!ng_has_optional_pkg("genomicMateSelectR")) {
+  if (!requireNamespace("genomicMateSelectR", quietly = TRUE)) {
     scores$gms_status <- "package_unavailable"
     return(scores)
   }
@@ -151,8 +151,8 @@ ng_add_gms_vpm_scores <- function(scores,
   haplo_mat[seq(1L, nrow(haplo_mat), by = 2L), ] <- hap
   haplo_mat[seq(2L, nrow(haplo_mat), by = 2L), ] <- hap
 
-  if (!is.null(nBLASthreads) && requireNamespace("RhpcBLASctl", quietly = TRUE)) {
-    RhpcBLASctl::blas_set_num_threads(nBLASthreads)
+  if (!is.null(n_blas_threads) && requireNamespace("RhpcBLASctl", quietly = TRUE)) {
+    RhpcBLASctl::blas_set_num_threads(n_blas_threads)
   }
   for (idx in row_index) {
     sire <- as.character(scores$parent1[idx])
@@ -171,13 +171,13 @@ ng_add_gms_vpm_scores <- function(scores,
       next
     }
     val <- tryCatch({
-      progeny_ld <- ng_optional_pkg_fun("genomicMateSelectR", "calcCrossLD")(
+      progeny_ld <- genomicMateSelectR::calcCrossLD(
         f1_id,
         f1_id,
         recombFreqMat = recomb_decay[seg, seg, drop = FALSE],
         haploMat = pair_hap[, seg, drop = FALSE]
       )
-      2 * as.numeric(ng_optional_pkg_fun("genomicMateSelectR", "quadform")(
+      2 * as.numeric(genomicMateSelectR::quadform(
         D = progeny_ld,
         x = beta[seg],
         y = beta[seg]
@@ -198,23 +198,23 @@ ng_add_gms_vpm_scores <- function(scores,
 
 ng_family_metric_registry <- function(scores) {
   mean_cols <- c(
-    "cross_mean", "cross_mean_gebv", "cross_mean_adjusted_pheno", "cross_mean_blend", "mpv",
+    "cross_mean", "cross_mean_gebv", "cross_mean_adj", "cross_mean_blend", "mid_parent_value",
     "popvar_mu", "simple_mpv", "simple_usefa_mean"
   )
   variance_cols <- c(
-    "var_simple", "dh_recomb_var", "dh_pmv_var",
-    "var_simple_cal", "dh_recomb_var_cal", "dh_pmv_var_cal",
+    "parent_distance", "vpm", "pmv",
+    "parent_distance_cal", "vpm_cal", "pmv_cal",
     "ng_portfolio_var", "popvar_varG", "simple_usefa_var", "gms_vpm"
   )
   usefulness_cols <- c(
-    "uc_recomb", "uc_dh",
-    "uc_recomb_gebv", "uc_dh_gebv",
-    "uc_recomb_adj", "uc_dh_adj",
-    "uc_recomb_blend", "uc_dh_blend",
-    "etk_var_simple_cal", "etk_dh_recomb_var_cal", "etk_dh_pmv_var_cal",
-    "etk_var_simple_gebv_cal", "etk_dh_recomb_var_gebv_cal", "etk_dh_pmv_var_gebv_cal",
-    "etk_var_simple_adj_cal", "etk_dh_recomb_var_adj_cal", "etk_dh_pmv_var_adj_cal",
-    "etk_var_simple_blend_cal", "etk_dh_recomb_var_blend_cal", "etk_dh_pmv_var_blend_cal",
+    "usefulness_vpm", "usefulness_pmv",
+    "usefulness_vpm_gebv", "usefulness_pmv_gebv",
+    "usefulness_vpm_adj", "usefulness_pmv_adj",
+    "usefulness_vpm_blend", "usefulness_pmv_blend",
+    "etk_parent_distance_cal", "etk_vpm_cal", "etk_pmv_cal",
+    "etk_parent_distance_gebv_cal", "etk_vpm_gebv_cal", "etk_pmv_gebv_cal",
+    "etk_parent_distance_adj_cal", "etk_vpm_adj_cal", "etk_pmv_adj_cal",
+    "etk_parent_distance_blend_cal", "etk_vpm_blend_cal", "etk_pmv_blend_cal",
     "ng_portfolio_score",
     "popvar_uc", "popvar_musp_high", "simple_usefa"
   )

@@ -1,0 +1,14 @@
+"rank","arm","metric","optimizer","allocation","gain_cycle25","expected_heterozygosity","var_index_gv","prop_polymorphic_markers","mean_maf","mean_parent_relationship"
+1,"var_simple_ocs","var_simple","evolution","ocs",7.6771,0.036,0.0059,0.098,0.0274,-0.0675
+2,"strategy_balanced","var_complex","evolution","ocs",7.4782,0.0284,0.0029,0.0804,0.0213,-0.0676
+3,"pmv_ocs","pmv","evolution","ocs",7.1954,0.0121,0.0014,0.0374,0.0087,-0.0671
+4,"uc_pmv_ocs","uc","evolution","ocs",7.1954,0.0121,0.0014,0.0374,0.0087,-0.0671
+5,"var_complex_ocs","var_complex","evolution","ocs",7.1954,0.0121,0.0014,0.0374,0.0087,-0.0671
+6,"var_complex_alphamate","var_complex","evolution","alphamate_style",7.1563,0.0293,0.0035,0.084,0.0219,-0.0674
+7,"random","-","-","-",7.0968,0.0286,0.0096,0.0849,0.0215,-0.0678
+8,"uc_pmv_mip","uc","mip","ocs",7.0681,0.0188,0.0022,0.052,0.0143,-0.0674
+9,"uc_pmv_greedy","uc","greedy_local","ocs",6.7803,0.014,0.0029,0.0382,0.0108,-0.0676
+10,"mean_ocs","mean","evolution","ocs",6.5156,0.0111,0.0025,0.0306,0.0083,-0.0682
+11,"uc_vpm_ocs","uc","evolution","ocs",6.4048,0.0126,9e-04,0.0325,0.0099,-0.0676
+12,"vpm_ocs","vpm","evolution","ocs",6.4048,0.0126,9e-04,0.0325,0.0099,-0.0676
+13,"simple_usefa_select","-","-","-",5.7006,0.0062,0.0018,0.0152,0.0049,-0.0672

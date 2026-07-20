@@ -48,7 +48,7 @@ stopifnot(identical(lr$lethal_risk_loci, c(1L, 0L, 0L, 0L)))
 
 # --- 3. convenience wrapper: columns added, carrier x carrier dropped ---
 scores <- pairs
-scores$uc_dh_gebv <- c(10, 9, 8, 7)
+scores$usefulness_pmv_gebv <- c(10, 9, 8, 7)
 scores$pair_kinship <- 0
 aug <- ng_apply_marker_management(scores, geno,
                                   marker_target_spec = spec_inc,

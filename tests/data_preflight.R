@@ -42,7 +42,7 @@ marker_map <- data.frame(
   pos_cm = c(0, 1, 2),
   stringsAsFactors = FALSE
 )
-parent_K <- matrix(
+parent_kinship <- matrix(
   diag(3),
   nrow = 3,
   dimnames = list(c("P01", "P01", "P03"), c("P01", "P02", "P03"))
@@ -54,7 +54,7 @@ result <- ng_preflight_input_tables(
   candidate_pairs = candidate_pairs,
   trait_spec = trait_spec,
   marker_map = marker_map,
-  parent_K = parent_K,
+  parent_kinship = parent_kinship,
   ploidy = 2L,
   generated_at = as.POSIXct("2026-05-07 00:00:00", tz = "UTC")
 )
@@ -114,7 +114,7 @@ remove_dup <- ng_preflight_input_tables(
   phenotype = data.frame(parent = c("P01", "P02", "P03"), trait = c("yield", "yield", "yield"), value = c(10, 11, 12)),
   candidate_pairs = data.frame(parent1 = c("P01", "P01", "P02"), parent2 = c("P02", "P03", "P03")),
   marker_map = data.frame(marker = c("M1", "M2", "M3", "M4"), chr = c(1, 1, 1, 1), pos_cm = 0:3),
-  parent_K = matrix(
+  parent_kinship = matrix(
     diag(3),
     nrow = 3,
     dimnames = list(c("P01", "P02", "P03"), c("P01", "P02", "P03"))
@@ -136,8 +136,8 @@ stopifnot(identical(remove_dup$cleaned_tables$phenotype$parent, c("P01", "P03"))
 stopifnot(nrow(remove_dup$cleaned_tables$candidate_pairs) == 1L)
 stopifnot(identical(remove_dup$cleaned_tables$candidate_pairs$parent1, "P01"))
 stopifnot(identical(remove_dup$cleaned_tables$candidate_pairs$parent2, "P03"))
-stopifnot(identical(rownames(remove_dup$cleaned_tables$parent_K), c("P01", "P03")))
-stopifnot(identical(colnames(remove_dup$cleaned_tables$parent_K), c("P01", "P03")))
+stopifnot(identical(rownames(remove_dup$cleaned_tables$parent_kinship), c("P01", "P03")))
+stopifnot(identical(colnames(remove_dup$cleaned_tables$parent_kinship), c("P01", "P03")))
 stopifnot(remove_dup$cleaning$putative_duplicates$rows_removed$rows_removed[
   remove_dup$cleaning$putative_duplicates$rows_removed$table == "geno"
 ] == 1L)

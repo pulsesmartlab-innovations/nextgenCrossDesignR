@@ -13,8 +13,8 @@ scores <- data.frame(
   pair_kinship = 0,
   stringsAsFactors = FALSE
 )
-scores$var_simple <- seq_len(nrow(scores))
-parent_K <- matrix(
+scores$parent_distance <- seq_len(nrow(scores))
+parent_kinship <- matrix(
   c(
     1.0, 0.9, 0.0, 0.0,
     0.9, 1.0, 0.0, 0.0,
@@ -54,7 +54,7 @@ plan <- ng_select_alphamate(
   scores = scores,
   criterion_col = "cross_mean",
   n_crosses = 4L,
-  parent_K = parent_K,
+  parent_kinship = parent_kinship,
   executable = exe,
   runtime_path = "C:/Python/Lib/site-packages/torch/lib",
   target_degree = 45,
@@ -82,14 +82,14 @@ names(long_ids) <- ids
 long_scores <- scores
 long_scores$parent1 <- unname(long_ids[long_scores$parent1])
 long_scores$parent2 <- unname(long_ids[long_scores$parent2])
-long_parent_K <- parent_K
+long_parent_K <- parent_kinship
 rownames(long_parent_K) <- colnames(long_parent_K) <- unname(long_ids[ids])
 
 long_plan <- ng_select_alphamate(
   scores = long_scores,
   criterion_col = "cross_mean",
   n_crosses = 4L,
-  parent_K = long_parent_K,
+  parent_kinship = long_parent_K,
   executable = exe,
   runtime_path = "C:/Python/Lib/site-packages/torch/lib",
   target_degree = 60,

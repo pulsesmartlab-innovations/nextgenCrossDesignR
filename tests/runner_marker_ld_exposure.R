@@ -29,8 +29,8 @@ run <- function(...) ng_run_cross_prediction(
   trait_direction = direction, id_col = "NAME",
   map_marker_col = "SNP_code", map_chr_col = "Chromosome",
   map_pos_col = "Position_BP", map_pos_cm_divisor = 1e6,
-  prediction_mode = "trait_by_trait", trait_value_metric = "uc",
-  duplicate_action = "none", n_crosses = 8L, max_uses_per_parent = 4L,
+  prediction_mode = "trait_by_trait", trait_value_metric = "usefulness",
+  duplicate_action = "none", n_crosses = 8L, max_crosses_per_parent = 4L,
   use_ocs = TRUE, write_outputs = FALSE, write_figures = FALSE, seed = 5L, ...)
 
 # --- 1. LD pruning reaches the runner and removes the redundant copy markers ---

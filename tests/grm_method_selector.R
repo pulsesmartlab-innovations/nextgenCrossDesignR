@@ -1,6 +1,6 @@
 # The GRM-method selector (vanraden default / yang) must flow through the additive/diploid
 # entry points ng_design_crosses() and ng_run_cross_prediction(), mirroring the polyploid API
-# (ng_design_crosses_poly(grm_method=)). Switching the GRM must change the parent kinship the
+# (ng_polyploid_design_crosses(grm_method=)). Switching the GRM must change the parent kinship the
 # allocator sees (pair_kinship), and the default must stay VanRaden (backward compatible).
 ng_test_use_cpp <- FALSE
 helper <- c(file.path("tests", "helper_load.R"), "helper_load.R",
@@ -52,8 +52,8 @@ run <- function(...) ng_run_cross_prediction(
   trait_direction = direction, id_col = "NAME",
   map_marker_col = "SNP_code", map_chr_col = "Chromosome",
   map_pos_col = "Position_BP", map_pos_cm_divisor = 1e6,
-  prediction_mode = "trait_by_trait", trait_value_metric = "uc",
-  duplicate_action = "none", n_crosses = 8L, max_uses_per_parent = 4L,
+  prediction_mode = "trait_by_trait", trait_value_metric = "usefulness",
+  duplicate_action = "none", n_crosses = 8L, max_crosses_per_parent = 4L,
   use_ocs = TRUE, write_outputs = FALSE, write_figures = FALSE, seed = 5L, ...)
 r_v <- run(grm_method = "vanraden")
 r_y <- run(grm_method = "yang")

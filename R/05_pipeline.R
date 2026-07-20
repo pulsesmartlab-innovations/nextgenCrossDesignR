@@ -12,7 +12,7 @@ ng_design_crosses <- function(geno,
                               selection_prop = 0.10,
                               min_effect_reliability = 0.35,
                               window_cm = Inf,
-                              gain_col = "uc_dh_gebv",
+                              gain_col = "usefulness_pmv_gebv",
                               method = "auto",
                               lambda_group = 0,
                               lambda_mating = 0,
@@ -91,7 +91,7 @@ ng_design_crosses <- function(geno,
   if (isTRUE(n_crosses_was_missing)) {
     n_crosses <- min(n_crosses, max(1L, nrow(scores)))
   }
-  parent_K <- ng_parent_kinship(geno, method = grm_method)
+  parent_kinship <- ng_parent_kinship(geno, method = grm_method)
   # gain_col, method, and ... are forwarded so the documented pipeline can reach every
   # allocator (including method = "evolution") and every optimizer option added in the
   # mate-selection modules: strategy / diversity_emphasis, lambda_progeny_inbreeding,
@@ -101,7 +101,7 @@ ng_design_crosses <- function(geno,
     scores = scores,
     n_crosses = n_crosses,
     gain_col = gain_col,
-    parent_K = parent_K,
+    parent_kinship = parent_kinship,
     max_crosses_per_parent = max_crosses_per_parent,
     lambda_group = lambda_group,
     lambda_mating = lambda_mating,

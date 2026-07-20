@@ -16,7 +16,7 @@
 ng_evolutionary_mate_allocation <- function(scores,
                                             n_crosses,
                                             parents,
-                                            parent_K,
+                                            parent_kinship,
                                             max_crosses_per_parent,
                                             min_unique_parents = NULL,
                                             lambda_group = 0,
@@ -39,7 +39,7 @@ ng_evolutionary_mate_allocation <- function(scores,
     np <- length(parents)
     p1i <- match(as.character(scores$parent1), parents)
     p2i <- match(as.character(scores$parent2), parents)
-    Kmat <- as.matrix(parent_K[parents, parents, drop = FALSE]); storage.mode(Kmat) <- "double"
+    Kmat <- as.matrix(parent_kinship[parents, parents, drop = FALSE]); storage.mode(Kmat) <- "double"
     total_slots <- 2 * n_crosses
     softmax_sample <- function(pool, k) {
       k <- min(k, length(pool)); if (k <= 0) return(integer(0))
@@ -65,7 +65,7 @@ ng_evolutionary_mate_allocation <- function(scores,
     }
     local_improve <- function(idx) {
       if (local_iter <= 0) return(idx)
-      ng_local_swap(scores, idx, parents, parent_K, max_crosses_per_parent, lambda_group, local_iter,
+      ng_local_swap(scores, idx, parents, parent_kinship, max_crosses_per_parent, lambda_group, local_iter,
                     lambda_parent_use = lambda_parent_use)
     }
     ord <- order(g, decreasing = TRUE)
@@ -74,7 +74,7 @@ ng_evolutionary_mate_allocation <- function(scores,
     N <- max(4L, as.integer(evol_solutions))
     pop <- vector("list", N)
     pop[[1]] <- if (isTRUE(warm_start)) {
-      ng_greedy_local(scores, n_crosses, parents, parent_K, max_crosses_per_parent,
+      ng_greedy_local(scores, n_crosses, parents, parent_kinship, max_crosses_per_parent,
                       min_unique_parents, lambda_group, local_iter, lambda_parent_use = lambda_parent_use)
     } else repair(ord[seq_len(n_crosses)])
     pop[[2]] <- repair(ord[seq_len(n_crosses)])

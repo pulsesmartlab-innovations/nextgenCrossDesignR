@@ -36,7 +36,7 @@ run <- function(optimizer, ...) ng_run_cross_prediction(
   trait_direction = direction, id_col = "NAME",
   map_marker_col = "SNP", map_chr_col = "Chr", map_pos_cm_col = "PosCM", map_position_unit = "cM",
   prediction_mode = "trait_by_trait", trait_value_metric = "var_complex",
-  n_crosses = 8L, max_uses_per_parent = 4L, use_ocs = TRUE,
+  n_crosses = 8L, max_crosses_per_parent = 4L, use_ocs = TRUE,
   lambda_group = 0.05, lambda_mating = 0.02, optimizer = optimizer,
   duplicate_action = "none", write_outputs = FALSE, write_figures = FALSE, seed = 1L, ...)
 

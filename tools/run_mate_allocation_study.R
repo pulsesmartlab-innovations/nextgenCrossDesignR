@@ -117,7 +117,7 @@ score_crosses <- function(parent_pop, SP, ploidy, cfg, seed) {
                            pair_kinship = K_coanc[a, b], stringsAsFactors = FALSE)
   }
   scores <- do.call(rbind, out)
-  attr(scores, "parent_K") <- K_coanc
+  attr(scores, "parent_kinship") <- K_coanc
   attr(scores, "parent_G") <- G
   scores
 }
@@ -148,7 +148,7 @@ run_ploidy <- function(ploidy, cfg, seed) {
   setup <- sim_setup(ploidy, cfg, seed)
   parents <- make_parents(setup, cfg$n_parents)
   scores <- score_crosses(parents, setup$SP, ploidy, cfg, seed)
-  K <- attr(scores, "parent_K")
+  K <- attr(scores, "parent_kinship")
   cat(sprintf("candidate crosses: %d | cross mean range [%.2f, %.2f] | heterosis mean %.3f (range [%.3f, %.3f])\n",
       nrow(scores), min(scores$cross_mean), max(scores$cross_mean),
       mean(scores$heterosis), min(scores$heterosis), max(scores$heterosis)))
@@ -156,11 +156,11 @@ run_ploidy <- function(ploidy, cfg, seed) {
   plans <- list()
   # our usefulness allocation (variance-aware) at a coancestry target = dF
   plans$ng_useful <- tryCatch(ng_optimize_mating_plan(scores, cfg$n_crosses, gain_col = "cross_usefulness",
-      parent_K = K, max_crosses_per_parent = cfg$max_use, target_coancestry = cfg$dF, method = "greedy_local"),
+      parent_kinship = K, max_crosses_per_parent = cfg$max_use, target_coancestry = cfg$dF, method = "greedy_local"),
       error = function(e) { cat("ng_useful ERR:", conditionMessage(e), "\n"); NULL })
   # our mean-only allocation (control) at the same coancestry target
   plans$ng_mean <- tryCatch(ng_optimize_mating_plan(scores, cfg$n_crosses, gain_col = "cross_mean",
-      parent_K = K, max_crosses_per_parent = cfg$max_use, target_coancestry = cfg$dF, method = "greedy_local"),
+      parent_kinship = K, max_crosses_per_parent = cfg$max_use, target_coancestry = cfg$dF, method = "greedy_local"),
       error = function(e) { cat("ng_mean ERR:", conditionMessage(e), "\n"); NULL })
 
   rows <- list()
@@ -220,7 +220,7 @@ score_crosses_pred <- function(parent_pop, SP, ploidy, fit, cfg, seed) {
   K <- genomic_G(pdos) / ploidy
   intensity <- ng_selection_intensity(cfg$selection_prop)
   m <- ncol(pdos); ba <- fit$beta[seq_len(m)]; bd <- fit$beta[(m + 1L):(2L * m)]
-  mt <- ng_poly_progeny_moment_table(ploidy)
+  mt <- ng_polyploid_progeny_moment_table(ploidy)
   prs <- t(utils::combn(length(ids), 2L))
   i1 <- as.integer(prs[, 1] - 1L); i2 <- as.integer(prs[, 2] - 1L); zero <- numeric(m)
   if (exists("ng_poly_dominance_scores_cpp", mode = "function", inherits = TRUE)) {
@@ -240,7 +240,7 @@ score_crosses_pred <- function(parent_pop, SP, ploidy, fit, cfg, seed) {
   scores <- data.frame(parent1 = a, parent2 = b, pred_mean = pred_mean, pred_var = pred_var,
                        pred_usefulness = pred_mean + intensity * sqrt(pred_var),
                        pair_kinship = K[cbind(a, b)], stringsAsFactors = FALSE)
-  attr(scores, "parent_K") <- K; scores
+  attr(scores, "parent_kinship") <- K; scores
 }
 
 # Native allocators (ng_mean / ng_useful = greedy allocation on predicted mean / usefulness).
@@ -250,7 +250,7 @@ score_crosses_pred <- function(parent_pop, SP, ploidy, fit, cfg, seed) {
 allocate_plan <- function(method, scores, K, cfg, ploidy) {
   var_mode <- identical(cfg$family_mode, "variable")
   gain_col <- if (method == "ng_useful") "pred_usefulness" else "pred_mean"
-  plan <- ng_optimize_mating_plan(scores, cfg$n_crosses, gain_col = gain_col, parent_K = K,
+  plan <- ng_optimize_mating_plan(scores, cfg$n_crosses, gain_col = gain_col, parent_kinship = K,
                                   max_crosses_per_parent = cfg$max_use, target_coancestry = cfg$dF,
                                   method = "greedy_local")
   if (var_mode) {
@@ -279,7 +279,7 @@ recurrent_lineage <- function(method, setup, ploidy, cfg, rep_id, rep_seed) {
     parents <- pop[order(gebv, decreasing = TRUE)[seq_len(cfg$n_parents)]]
     parents@id <- sprintf("P%03d", seq_len(cfg$n_parents))
     scores <- score_crosses_pred(parents, SP, ploidy, fit, cfg, as.integer(rep_seed %% 20011L) * 13L + cyc)
-    K <- attr(scores, "parent_K")
+    K <- attr(scores, "parent_kinship")
     plan <- tryCatch(allocate_plan(method, scores, K, cfg, ploidy),
                      error = function(e) { cat(sprintf("  [%s p%d rep%d cyc%d] alloc ERR: %s\n", method, ploidy, rep_id, cyc, conditionMessage(e))); NULL })
     if (is.null(plan) || nrow(plan) < 1L) return(if (length(rows)) do.call(rbind, rows) else NULL)

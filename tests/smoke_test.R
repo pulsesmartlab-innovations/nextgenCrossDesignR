@@ -22,16 +22,16 @@ scores <- ng_score_crosses(geno, fit, marker_map = marker_map, ids = ids,
                            adjusted_pheno = y, selection_prop = 0.10,
                            use_cpp = FALSE)
 stopifnot(nrow(scores) == n * (n - 1) / 2)
-stopifnot(all(is.finite(scores$uc_dh_gebv)))
-stopifnot(all(scores$dh_pmv_var >= -1e-8))
-stopifnot(all(scores$dh_pmv_var + 1e-12 >= scores$dh_recomb_var))  # PMV >= VPM
-scores$var_simple_cal <- scores$var_simple
-scores$dh_recomb_var_cal <- scores$dh_recomb_var
-scores$dh_pmv_var_cal <- scores$dh_pmv_var
-scores$etk_var_simple_cal <- scores$cross_mean + ng_selection_intensity(0.10) * sqrt(pmax(scores$var_simple_cal, 0))
-scores$etk_dh_recomb_var_gebv_cal <- scores$cross_mean_gebv + ng_selection_intensity(0.10) * sqrt(pmax(scores$dh_recomb_var_cal, 0))
-scores$etk_dh_recomb_var_blend_cal <- scores$cross_mean_blend + ng_selection_intensity(0.10) * sqrt(pmax(scores$dh_recomb_var_cal, 0))
-scores$etk_dh_pmv_var_blend_cal <- scores$cross_mean_blend + ng_selection_intensity(0.10) * sqrt(pmax(scores$dh_pmv_var_cal, 0))
+stopifnot(all(is.finite(scores$usefulness_pmv_gebv)))
+stopifnot(all(scores$pmv >= -1e-8))
+stopifnot(all(scores$pmv + 1e-12 >= scores$vpm))  # PMV >= VPM
+scores$parent_distance_cal <- scores$parent_distance
+scores$vpm_cal <- scores$vpm
+scores$pmv_cal <- scores$pmv
+scores$etk_parent_distance_cal <- scores$cross_mean + ng_selection_intensity(0.10) * sqrt(pmax(scores$parent_distance_cal, 0))
+scores$etk_vpm_gebv_cal <- scores$cross_mean_gebv + ng_selection_intensity(0.10) * sqrt(pmax(scores$vpm_cal, 0))
+scores$etk_vpm_blend_cal <- scores$cross_mean_blend + ng_selection_intensity(0.10) * sqrt(pmax(scores$vpm_cal, 0))
+scores$etk_pmv_blend_cal <- scores$cross_mean_blend + ng_selection_intensity(0.10) * sqrt(pmax(scores$pmv_cal, 0))
 scores <- ng_add_adaptive_stack_scores(scores, n_parents = n, n_crosses = 12)
 stopifnot(all(is.finite(scores$ng_adaptive_score)))
 stopifnot(all(is.finite(scores$ng_adaptive_score_raw)))
@@ -48,7 +48,7 @@ stopifnot(all(nzchar(scores$ng_meta_leader_col)))
 stopifnot(is.finite(scores$ng_meta_parent_use_input[1]))
 
 K <- ng_parent_kinship(geno)
-plan <- ng_optimize_mating_plan(scores, n_crosses = 12, parent_K = K,
+plan <- ng_optimize_mating_plan(scores, n_crosses = 12, parent_kinship = K,
                                 max_crosses_per_parent = 3,
                                 lambda_group = 1,
                                 method = "greedy_local")
@@ -57,8 +57,8 @@ stopifnot(nrow(plan) == 12)
 stopifnot(s$max_parent_use <= 3)
 print(s[c("mean_gain", "group_coancestry", "unique_parents", "max_parent_use")])
 
-ocs <- ng_optimize_mating_plan(scores, n_crosses = 12, parent_K = K,
-                               gain_col = "uc_dh_gebv",
+ocs <- ng_optimize_mating_plan(scores, n_crosses = 12, parent_kinship = K,
+                               gain_col = "usefulness_pmv_gebv",
                                max_crosses_per_parent = 5,
                                lambda_group = 2,
                                lambda_parent_use = 2,
@@ -74,7 +74,7 @@ stopifnot(is.finite(ocs_s$score_scale))
 ocs_fam <- ng_allocate_family_sizes(ocs, total_progeny = 120,
                                     min_progeny = 4,
                                     max_progeny = 20,
-                                    value_col = "uc_dh_gebv")
+                                    value_col = "usefulness_pmv_gebv")
 stopifnot(sum(ocs_fam$n_progeny) == 120)
 stopifnot(min(ocs_fam$n_progeny) >= 4)
 stopifnot(max(ocs_fam$n_progeny) <= 20)
@@ -83,14 +83,14 @@ marg_fam <- ng_allocate_family_sizes(ocs, total_progeny = 120,
                                      max_progeny = 20,
                                      method = "marginal_topk",
                                      mean_col = "cross_mean",
-                                     var_col = "dh_pmv_var",
+                                     var_col = "pmv",
                                      selected_top_n = 20)
 stopifnot(sum(marg_fam$n_progeny) == 120)
 stopifnot(min(marg_fam$n_progeny) >= 4)
 stopifnot(max(marg_fam$n_progeny) <= 20)
 print(ocs_s[c("mean_gain", "group_coancestry", "parent_use_sq", "unique_parents", "max_parent_use")])
 
-adaptive <- ng_optimize_mating_plan(scores, n_crosses = 12, parent_K = K,
+adaptive <- ng_optimize_mating_plan(scores, n_crosses = 12, parent_kinship = K,
                                     gain_col = "ng_adaptive_score",
                                     max_crosses_per_parent = 5,
                                     lambda_group = 1,
@@ -104,7 +104,7 @@ stopifnot(adaptive_s$max_parent_use <= 5)
 stopifnot(is.finite(adaptive_s$score_scale))
 print(adaptive_s[c("mean_gain", "group_coancestry", "parent_use_sq", "unique_parents", "max_parent_use")])
 
-meta <- ng_optimize_mating_plan(scores, n_crosses = 12, parent_K = K,
+meta <- ng_optimize_mating_plan(scores, n_crosses = 12, parent_kinship = K,
                                 gain_col = "ng_meta_score",
                                 max_crosses_per_parent = 5,
                                 lambda_group = 1,
@@ -119,9 +119,9 @@ stopifnot(is.finite(meta_s$score_scale))
 print(meta_s[c("mean_gain", "group_coancestry", "parent_use_sq", "unique_parents", "max_parent_use")])
 
 balanced <- ng_optimize_balanced_usefulness(scores, n_crosses = 12,
-                                            gain_col = "uc_recomb_gebv",
-                                            diversity_col = "var_simple_cal",
-                                            parent_K = K,
+                                            gain_col = "usefulness_vpm_gebv",
+                                            diversity_col = "parent_distance_cal",
+                                            parent_kinship = K,
                                             max_crosses_per_parent = 5,
                                             lambda_group = 1,
                                             lambda_parent_use = 2,
@@ -131,8 +131,8 @@ balanced <- ng_optimize_balanced_usefulness(scores, n_crosses = 12,
 balanced_s <- attr(balanced, "summary")
 stopifnot(nrow(balanced) == 12)
 stopifnot(balanced_s$max_parent_use <= 5)
-stopifnot(balanced_s$balanced_gain_col == "uc_recomb_gebv")
-stopifnot(balanced_s$balanced_diversity_col == "var_simple_cal")
+stopifnot(balanced_s$balanced_gain_col == "usefulness_vpm_gebv")
+stopifnot(balanced_s$balanced_diversity_col == "parent_distance_cal")
 stopifnot(is.na(balanced_s$balanced_min_unique_used))
 stopifnot(all(is.finite(balanced$.balanced_usefulness_gain)))
 print(balanced_s[c("mean_gain", "group_coancestry", "parent_use_sq", "unique_parents", "max_parent_use")])

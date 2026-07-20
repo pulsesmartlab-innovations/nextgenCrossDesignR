@@ -17,7 +17,7 @@
   "duplicate_action": "none",
 
   "n_crosses": 10,
-  "max_uses_per_parent": 4,
+  "max_crosses_per_parent": 4,
   "optimizer": "evolution",
   "allocation_method": "ocs",
   "use_ocs": true,

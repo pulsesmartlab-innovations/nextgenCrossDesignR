@@ -44,7 +44,7 @@ result <- ng_run_cross_prediction(
   map_position_unit = "cM", prediction_mode = "trait_by_trait",
   trait_value_metric = "var_complex",                 # GAIN metric
   progeny = "DH", optimizer = "evolution",            # recommended optimizer
-  n_crosses = 12L, max_uses_per_parent = 4L,
+  n_crosses = 12L, max_crosses_per_parent = 4L,
   strategy = "balanced",                              # STRATEGY dial
   cross_cost = cross_cost, cost_col = "cost", budget = 30,   # COST + budget
   min_crosses_per_parent = 2L,                        # MANAGEMENT: batch economics

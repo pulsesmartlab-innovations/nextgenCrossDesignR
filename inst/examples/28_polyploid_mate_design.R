@@ -1,4 +1,4 @@
-# Any-ploidy polyploid mate design in one call: ng_design_crosses_poly().
+# Any-ploidy polyploid mate design in one call: ng_polyploid_design_crosses().
 #
 # The package separates scoring from allocation, and the allocator is ploidy-agnostic, so a
 # polyploid breeder gets the FULL native control suite (strategy dial, target_coancestry,
@@ -13,8 +13,8 @@
 
 library(nextgenCrossDesign)
 
-if (!"ng_design_crosses_poly" %in% getNamespaceExports("nextgenCrossDesign")) {
-  stop("This example needs a build with ng_design_crosses_poly(). Reinstall the current tarball.",
+if (!"ng_polyploid_design_crosses" %in% getNamespaceExports("nextgenCrossDesign")) {
+  stop("This example needs a build with ng_polyploid_design_crosses(). Reinstall the current tarball.",
        call. = FALSE)
 }
 
@@ -31,7 +31,7 @@ names(phenotype) <- ids
 
 # One call: QC -> estimate effects -> score (mean + ploidy GRM) -> native OCS allocation with a
 # diversity-aware strategy and a committed mating.
-plan <- ng_design_crosses_poly(
+plan <- ng_polyploid_design_crosses(
   dosage = dosage, n_crosses = 15L, ploidy = ploidy,
   phenotype = phenotype,
   max_crosses_per_parent = 4L,

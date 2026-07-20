@@ -267,7 +267,7 @@ ng_add_p_superior_progeny <- function(scores,
                                       tau_superior,
                                       k_progeny = 100L,
                                       mean_col = "cross_mean_blend",
-                                      var_col = "dh_pmv_var",
+                                      var_col = "pmv",
                                       out_col = "p_superior_progeny") {
   scores <- as.data.frame(scores, stringsAsFactors = FALSE)
   if (!(mean_col %in% names(scores))) ng_stop("scores missing mean_col: ", mean_col)
@@ -290,8 +290,8 @@ ng_add_p_superior_progeny <- function(scores,
 # draw. Returns the point-estimate score table from ng_score_crosses() plus
 # the following extra columns (all guarded with NA when not computable):
 #
-#   - dh_pmv_var_post_mean, _lower, _upper   posterior CI on PMV
-#   - uc_dh_gebv_post_mean, _lower, _upper   posterior CI on usefulness
+#   - pmv_post_mean, _lower, _upper   posterior CI on PMV
+#   - usefulness_pmv_gebv_post_mean, _lower, _upper   posterior CI on usefulness
 #   - p_superior_progeny_post_mean, _lower, _upper
 #                                            posterior CI on P(max progeny >= tau)
 #   - posterior_topn_prob_<N>                fraction of draws in which the
@@ -319,8 +319,8 @@ ng_posterior_cross_predict <- function(geno,
                                        use_cpp = TRUE,
                                        assume_inbred = TRUE,
                                        ci_level = 0.95,
-                                       gain_col = "uc_dh_gebv",
-                                       var_col = "dh_pmv_var",
+                                       gain_col = "usefulness_pmv_gebv",
+                                       var_col = "pmv",
                                        tau_superior = NULL,
                                        k_progeny = 100L,
                                        top_n_targets = c(10L, 20L, 50L)) {
@@ -416,9 +416,9 @@ ng_posterior_cross_predict <- function(geno,
       unname(stats::quantile(finite_row, probs = q, names = FALSE))
     })
   }
-  base$dh_pmv_var_post_mean  <- rowMeans(pmv_mat, na.rm = TRUE)
-  base$dh_pmv_var_post_lower <- row_quantile(pmv_mat, q_lower)
-  base$dh_pmv_var_post_upper <- row_quantile(pmv_mat, q_upper)
+  base$pmv_post_mean  <- rowMeans(pmv_mat, na.rm = TRUE)
+  base$pmv_post_lower <- row_quantile(pmv_mat, q_lower)
+  base$pmv_post_upper <- row_quantile(pmv_mat, q_upper)
   base[[paste0(gain_col, "_post_mean")]]  <- rowMeans(uc_mat, na.rm = TRUE)
   base[[paste0(gain_col, "_post_lower")]] <- row_quantile(uc_mat, q_lower)
   base[[paste0(gain_col, "_post_upper")]] <- row_quantile(uc_mat, q_upper)
@@ -472,8 +472,8 @@ ng_posterior_cross_predict <- function(geno,
 # the most posterior-stable plan.
 ng_optimize_robust_mating_plan <- function(posterior_scores,
                                            n_crosses,
-                                           parent_K = NULL,
-                                           gain_col = "uc_dh_gebv",
+                                           parent_kinship = NULL,
+                                           gain_col = "usefulness_pmv_gebv",
                                            robustness_quantile = 0.25,
                                            objective = c("posterior_quantile", "posterior_topn_prob"),
                                            top_n_target = NULL,
@@ -524,7 +524,7 @@ ng_optimize_robust_mating_plan <- function(posterior_scores,
   }
   plan <- ng_optimize_mating_plan(
     scores = posterior_scores, n_crosses = n_crosses,
-    gain_col = robust_col, parent_K = parent_K,
+    gain_col = robust_col, parent_kinship = parent_kinship,
     max_crosses_per_parent = max_crosses_per_parent,
     min_crosses_per_parent = min_crosses_per_parent,
     min_unique_parents = min_unique_parents,

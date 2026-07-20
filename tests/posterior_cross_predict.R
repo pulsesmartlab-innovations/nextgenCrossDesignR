@@ -104,8 +104,8 @@ post_scores <- ng_posterior_cross_predict(
   top_n_targets = c(5L, 10L)
 )
 expected_cols <- c(
-  "uc_dh_gebv_post_mean", "uc_dh_gebv_post_lower", "uc_dh_gebv_post_upper",
-  "dh_pmv_var_post_mean", "dh_pmv_var_post_lower", "dh_pmv_var_post_upper",
+  "usefulness_pmv_gebv_post_mean", "usefulness_pmv_gebv_post_lower", "usefulness_pmv_gebv_post_upper",
+  "pmv_post_mean", "pmv_post_lower", "pmv_post_upper",
   "p_superior_progeny_post_mean", "p_superior_progeny_post_lower", "p_superior_progeny_post_upper",
   "posterior_topn_prob_5", "posterior_topn_prob_10"
 )
@@ -125,10 +125,10 @@ for (N in c(5L, 10L)) {
 }
 
 # Sanity: posterior CI brackets the posterior mean.
-stopifnot(all(post_scores$uc_dh_gebv_post_lower <= post_scores$uc_dh_gebv_post_mean + 1e-6))
-stopifnot(all(post_scores$uc_dh_gebv_post_mean <= post_scores$uc_dh_gebv_post_upper + 1e-6))
-stopifnot(all(post_scores$dh_pmv_var_post_lower <= post_scores$dh_pmv_var_post_mean + 1e-6))
-stopifnot(all(post_scores$dh_pmv_var_post_mean <= post_scores$dh_pmv_var_post_upper + 1e-6))
+stopifnot(all(post_scores$usefulness_pmv_gebv_post_lower <= post_scores$usefulness_pmv_gebv_post_mean + 1e-6))
+stopifnot(all(post_scores$usefulness_pmv_gebv_post_mean <= post_scores$usefulness_pmv_gebv_post_upper + 1e-6))
+stopifnot(all(post_scores$pmv_post_lower <= post_scores$pmv_post_mean + 1e-6))
+stopifnot(all(post_scores$pmv_post_mean <= post_scores$pmv_post_upper + 1e-6))
 # Probability columns can have very-near-degenerate posteriors (p close to 0
 # or 1 for crosses far below/above the threshold). With small S the empirical
 # quantile of a few-outlier-in-many-zeros distribution can sit outside the
@@ -139,18 +139,18 @@ stopifnot(all(post_scores$p_superior_progeny_post_upper <= 1 + 1e-9))
 stopifnot(all(post_scores$p_superior_progeny_post_lower <= post_scores$p_superior_progeny_post_upper + 1e-9))
 
 # Sanity: posterior mean of usefulness should be close to the point estimate.
-point_uc <- post_scores$uc_dh_gebv
-mean_post_uc <- post_scores$uc_dh_gebv_post_mean
+point_uc <- post_scores$usefulness_pmv_gebv
+mean_post_uc <- post_scores$usefulness_pmv_gebv_post_mean
 gap <- max(abs(point_uc - mean_post_uc) / pmax(abs(point_uc), 1e-6))
 if (gap > 0.50) {
   stop(sprintf("Posterior mean of usefulness differs from point estimate by relative %.3f", gap))
 }
 
 # ---- Posterior-aware OCS reuses the new columns ----------------------------
-parent_K <- ng_parent_kinship(geno)
+parent_kinship <- ng_parent_kinship(geno)
 plan_robust <- ng_optimize_robust_mating_plan(
-  posterior_scores = post_scores, n_crosses = 6L, parent_K = parent_K,
-  gain_col = "uc_dh_gebv", robustness_quantile = (1 - 0.95) / 2,
+  posterior_scores = post_scores, n_crosses = 6L, parent_kinship = parent_kinship,
+  gain_col = "usefulness_pmv_gebv", robustness_quantile = (1 - 0.95) / 2,
   max_crosses_per_parent = 3L, lambda_group = 0, lambda_parent_use = 0,
   lambda_parent_use_mode = "absolute", method = "greedy_local"
 )
@@ -160,7 +160,7 @@ stopifnot(identical(s_robust$robust_objective, "posterior_quantile"))
 stopifnot(s_robust$max_parent_use <= 3L)
 
 plan_topn <- ng_optimize_robust_mating_plan(
-  posterior_scores = post_scores, n_crosses = 6L, parent_K = parent_K,
+  posterior_scores = post_scores, n_crosses = 6L, parent_kinship = parent_kinship,
   objective = "posterior_topn_prob", top_n_target = 10L,
   max_crosses_per_parent = 3L, method = "greedy_local"
 )

@@ -22,15 +22,15 @@
 \alias{ng_add_multitrait_score}
 \alias{ng_add_popvar_scores}
 \alias{ng_add_simplemating_scores}
-\alias{ng_poly_score_crosses}
-\alias{ng_design_crosses_poly}
+\alias{ng_polyploid_score_crosses}
+\alias{ng_polyploid_design_crosses}
 \alias{ng_polyploid_grm}
 \alias{ng_polyploid_dominance_grm}
 \alias{ng_polyploid_qc}
-\alias{ng_fit_polyploid_effects}
-\alias{ng_predict_polyploid_value}
-\alias{ng_score_crosses_poly_dominance}
-\alias{ng_poly_progeny_moment_table}
+\alias{ng_polyploid_fit_effects}
+\alias{ng_polyploid_predict_value}
+\alias{ng_polyploid_score_crosses_dominance}
+\alias{ng_polyploid_progeny_moment_table}
 \alias{ng_polyploid_allele_freq}
 \alias{ng_alphamate_style_select}
 \alias{ng_allocate_family_sizes}
@@ -96,22 +96,13 @@
 \alias{ng_posterior_cross_predict}
 \alias{ng_sample_ridge_posterior_bcm}
 \alias{ng_sample_ridge_posterior_mcmc}
-\alias{ng_poly4x_as_dosage_matrix}
-\alias{ng_poly4x_make_parent_pop}
-\alias{ng_poly4x_ocs}
-\alias{ng_poly4x_parent_relationship}
-\alias{ng_poly4x_policy}
-\alias{ng_poly4x_policy_modes}
-\alias{ng_poly4x_scenarios}
-\alias{ng_poly4x_score_crosses}
-\alias{ng_poly4x_select_scenario}
-\alias{ng_poly4x_select_topn}
-\alias{ng_poly_model_select}
-\alias{ng_poly_policy}
-\alias{ng_poly_policy_modes}
-\alias{ng_poly_subgenome_as_dosage_list}
-\alias{ng_poly_subgenome_parent_relationship}
-\alias{ng_poly_subgenome_score_crosses}
+\alias{ng_polyploid_as_dosage_matrix}
+\alias{ng_polyploid_model_select}
+\alias{ng_polyploid_policy}
+\alias{ng_polyploid_policy_modes}
+\alias{ng_polyploid_subgenome_as_dosage_list}
+\alias{ng_polyploid_subgenome_grm}
+\alias{ng_polyploid_subgenome_score_crosses}
 \alias{ng_predict_gebv}
 \alias{ng_preflight_input_tables}
 \alias{ng_prepare_marker_map}
@@ -170,7 +161,7 @@ AlphaMate.
 controls directly: \code{trait_value_metric}, \code{uc_variance_source},
 \code{method_varPMV = "fast"} or \code{"full_posterior"}, \code{ril_mode =
 "infinite"}, \code{run_posterior_prediction}, \code{posterior_method},
-\code{nIter}, \code{burnIn}, and \code{use_parallel}. When
+\code{n_iter}, \code{burn_in}, and \code{use_parallel}. When
 \code{method_varPMV = "full_posterior"}, the wrapper fits and uses the full
 marker-effect covariance in PMV scoring. When
 \code{run_posterior_prediction = TRUE}, posterior cross-prediction tables are

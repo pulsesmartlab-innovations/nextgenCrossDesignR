@@ -137,7 +137,7 @@ run_allocation <- function(row) {
 
     duplicate_action = "none",
     n_crosses = 5,
-    max_uses_per_parent = 3,
+    max_crosses_per_parent = 3,
     optimizer = row$optimizer,
     allocation_method = row$allocation_method,
     use_ocs = TRUE,

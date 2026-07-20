@@ -1,7 +1,7 @@
 local({ .h <- file.path("tools", "ng_project_libpath.R"); if (file.exists(.h)) { source(.h); ng_prepend_project_lib(".Rlib") } else .libPaths(c(normalizePath(".Rlib", mustWork = FALSE), .libPaths())) })
 
-source("R/load.R")
-ng_load(use_cpp = Sys.getenv("NG_USE_CPP", "0") != "0")
+source("nextgen_cross_design/R/load.R")
+ng_load("nextgen_cross_design", use_cpp = Sys.getenv("NG_USE_CPP", "0") != "0")
 
 if (!requireNamespace("AlphaSimR", quietly = TRUE)) {
   stop("AlphaSimR is required for this diagnostic.", call. = FALSE)
@@ -175,16 +175,16 @@ scores <- ng_add_external_baseline_scores(
 )
 
 comparisons <- do.call(rbind, list(
-  compare_pair(scores, "dh_recomb_var", "simple_usefa_var", cfg$top_n),
-  compare_pair(scores, "uc_recomb_gebv", "simple_usefa", cfg$top_n),
-  compare_pair(scores, "dh_recomb_var", "popvar_varG", cfg$top_n),
-  compare_pair(scores, "uc_recomb_gebv", "popvar_uc", cfg$top_n),
+  compare_pair(scores, "vpm", "simple_usefa_var", cfg$top_n),
+  compare_pair(scores, "usefulness_vpm_gebv", "simple_usefa", cfg$top_n),
+  compare_pair(scores, "vpm", "popvar_varG", cfg$top_n),
+  compare_pair(scores, "usefulness_vpm_gebv", "popvar_uc", cfg$top_n),
   compare_pair(scores, "cross_mean_gebv", "simple_usefa_mean", cfg$top_n),
   compare_pair(scores, "cross_mean_gebv", "popvar_mu", cfg$top_n)
 ))
 
 mean_delta <- scores$simple_usefa_mean - scores$cross_mean_gebv
-uc_delta <- scores$simple_usefa - scores$uc_recomb_gebv
+uc_delta <- scores$simple_usefa - scores$usefulness_vpm_gebv
 summary <- data.frame(
   n_parents = cfg$n_parents,
   n_markers = ncol(geno),

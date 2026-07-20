@@ -1,7 +1,7 @@
 ng_optimize_mating_plan <- function(scores,
                                     n_crosses,
-                                    gain_col = "uc_dh_gebv",
-                                    parent_K = NULL,
+                                    gain_col = "usefulness_pmv_gebv",
+                                    parent_kinship = NULL,
                                     max_crosses_per_parent = 4,
                                     min_crosses_per_parent = 0,
                                     min_unique_parents = NULL,
@@ -45,11 +45,11 @@ ng_optimize_mating_plan <- function(scores,
   scores <- ng_filter_group_permission(scores, parent_group, group_permission)
   if (nrow(scores) < n_crosses) ng_stop("Not enough feasible candidate crosses")
   parents <- sort(unique(c(scores$parent1, scores$parent2)))
-  if (is.null(parent_K)) {
-    parent_K <- diag(length(parents))
-    rownames(parent_K) <- colnames(parent_K) <- parents
+  if (is.null(parent_kinship)) {
+    parent_kinship <- diag(length(parents))
+    rownames(parent_kinship) <- colnames(parent_kinship) <- parents
   } else {
-    parent_K <- parent_K[parents, parents, drop = FALSE]
+    parent_kinship <- parent_kinship[parents, parents, drop = FALSE]
   }
   # Gain-diversity balancing dispatch: when the caller asks for a strategy label or a
   # diversity_emphasis instead of a raw lambda_group, hand off to the frontier-navigation
@@ -71,13 +71,13 @@ ng_optimize_mating_plan <- function(scores,
     lambda_parent_use_mode = lambda_parent_use_mode, local_iter = local_iter)
   if (!is.null(target_coancestry)) {
     return(do.call(ng_select_by_target_coancestry, c(list(
-      scores = scores, n_crosses = n_crosses, parent_K = parent_K, gain_col = gain_col,
+      scores = scores, n_crosses = n_crosses, parent_kinship = parent_kinship, gain_col = gain_col,
       target_coancestry = target_coancestry,
       method = if (identical(method, "auto")) "greedy_local" else method), frontier_forward)))
   }
   if (!is.null(strategy) || !is.null(diversity_emphasis)) {
     return(do.call(ng_select_by_strategy, c(list(
-      scores = scores, n_crosses = n_crosses, parent_K = parent_K, gain_col = gain_col,
+      scores = scores, n_crosses = n_crosses, parent_kinship = parent_kinship, gain_col = gain_col,
       strategy = strategy, diversity_emphasis = diversity_emphasis,
       method = if (identical(method, "auto")) "greedy_local" else method), frontier_forward)))
   }
@@ -160,7 +160,7 @@ ng_optimize_mating_plan <- function(scores,
   plan <- NULL
   if (method == "mip_contribution") {
     plan <- ng_mip_contribution(
-      scores = scores, n_crosses = n_crosses, parents = parents, parent_K = parent_K,
+      scores = scores, n_crosses = n_crosses, parents = parents, parent_kinship = parent_kinship,
       max_crosses_per_parent = max_crosses_per_parent, min_unique_parents = min_unique_parents,
       lambda_parent_use = lambda_parent_use, lambda_group = lambda_group, ocs_iter = ocs_iter,
       mip_time_limit = mip_time_limit, mip_max_binary_vars = mip_max_binary_vars
@@ -174,7 +174,7 @@ ng_optimize_mating_plan <- function(scores,
     plan <- if (min_unique_is_set) {
       # ng_mip_linear cannot express min_unique_parents; use the exact contribution MIP.
       ng_mip_contribution(
-        scores = scores, n_crosses = n_crosses, parents = parents, parent_K = parent_K,
+        scores = scores, n_crosses = n_crosses, parents = parents, parent_kinship = parent_kinship,
         max_crosses_per_parent = max_crosses_per_parent, min_unique_parents = min_unique_parents,
         lambda_parent_use = lambda_parent_use, lambda_group = lambda_group, ocs_iter = ocs_iter,
         mip_time_limit = mip_time_limit, mip_max_binary_vars = mip_max_binary_vars)
@@ -191,19 +191,19 @@ ng_optimize_mating_plan <- function(scores,
   if (is.null(plan)) {
     if (mip_fallback) warning(mip_fallback_reason, call. = FALSE)
     if (method == "repair_local") {
-      plan <- ng_repair_local(scores, n_crosses, parents, parent_K, max_crosses_per_parent,
+      plan <- ng_repair_local(scores, n_crosses, parents, parent_kinship, max_crosses_per_parent,
                               min_unique_parents, lambda_group, local_iter,
                               lambda_parent_use = lambda_parent_use)
     } else if (method == "evolution") {
       plan <- ng_evolutionary_mate_allocation(
-        scores, n_crosses, parents, parent_K, max_crosses_per_parent,
+        scores, n_crosses, parents, parent_kinship, max_crosses_per_parent,
         min_unique_parents = min_unique_parents, lambda_group = lambda_group,
         lambda_parent_use = lambda_parent_use,
         local_iter = min(as.integer(local_iter), 400L),
         evol_solutions = evol_solutions, evol_iterations = evol_iterations,
         evol_stop = evol_stop, seed = evol_seed)
     } else {
-      plan <- ng_greedy_local(scores, n_crosses, parents, parent_K, max_crosses_per_parent,
+      plan <- ng_greedy_local(scores, n_crosses, parents, parent_kinship, max_crosses_per_parent,
                               min_unique_parents, lambda_group, local_iter,
                               lambda_parent_use = lambda_parent_use)
     }
@@ -235,7 +235,7 @@ ng_optimize_mating_plan <- function(scores,
       "Breeder constraints (min-use / group quota / budget) reduced the plan to %d of %d crosses; relax the constraints or add candidates for a full-size plan.",
       length(plan), n_crosses), call. = FALSE)
   }
-  out <- ng_plan_summary(plan, scores, gain_col, parent_K, lambda_group, lambda_mating,
+  out <- ng_plan_summary(plan, scores, gain_col, parent_kinship, lambda_group, lambda_mating,
                          lambda_parent_use = lambda_parent_use,
                          lambda_parent_use_input = lambda_parent_use_input,
                          lambda_parent_use_mode = lambda_parent_use_mode,
@@ -304,8 +304,8 @@ ng_default_min_unique_parents <- function(scores, n_crosses) {
 }
 
 ng_add_balanced_usefulness_score <- function(scores,
-                                             gain_col = "uc_recomb_gebv",
-                                             diversity_col = "var_simple",
+                                             gain_col = "usefulness_vpm_gebv",
+                                             diversity_col = "parent_distance",
                                              pair_kinship_col = "pair_kinship",
                                              gain_weight = 1.0,
                                              diversity_weight = 0.30,
@@ -320,15 +320,15 @@ ng_add_balanced_usefulness_score <- function(scores,
     gain_col <- ng_first_available_col(
       scores,
       gain_col,
-      c("uc_recomb_gebv", "etk_dh_recomb_var_gebv_cal", "uc_recomb",
-        "etk_dh_recomb_var_cal", "popvar_uc", "simple_usefa")
+      c("usefulness_vpm_gebv", "etk_vpm_gebv_cal", "usefulness_vpm",
+        "etk_vpm_cal", "popvar_uc", "simple_usefa")
     )
   }
   if (is.null(gain_col)) ng_stop("No usable balanced-usefulness gain column found")
   diversity_col <- ng_first_available_col(
     scores,
     diversity_col,
-    c("var_simple_cal", "var_simple", "dh_recomb_var_cal", "dh_recomb_var")
+    c("parent_distance_cal", "parent_distance", "vpm_cal", "vpm")
   )
   if (is.null(diversity_col)) diversity_weight <- 0
   if (!(pair_kinship_col %in% names(scores))) pair_kinship_weight <- 0
@@ -365,9 +365,9 @@ ng_add_balanced_usefulness_score <- function(scores,
 
 ng_optimize_balanced_usefulness <- function(scores,
                                             n_crosses,
-                                            gain_col = "uc_recomb_gebv",
-                                            diversity_col = "var_simple",
-                                            parent_K = NULL,
+                                            gain_col = "usefulness_vpm_gebv",
+                                            diversity_col = "parent_distance",
+                                            parent_kinship = NULL,
                                             max_crosses_per_parent = 10L,
                                             min_unique_parents = NULL,
                                             max_pair_kinship = Inf,
@@ -427,7 +427,7 @@ ng_optimize_balanced_usefulness <- function(scores,
         scores = scores,
         n_crosses = n_crosses,
         gain_col = out_col,
-        parent_K = parent_K,
+        parent_kinship = parent_kinship,
         max_crosses_per_parent = max_crosses_per_parent,
         min_unique_parents = min_unique,
         max_pair_kinship = max_pair_kinship,
@@ -500,7 +500,7 @@ ng_mip_linear <- function(scores, n_crosses, parents, max_crosses_per_parent,
 ng_mip_contribution <- function(scores,
                                 n_crosses,
                                 parents,
-                                parent_K,
+                                parent_kinship,
                                 max_crosses_per_parent = n_crosses,
                                 min_unique_parents = NULL,
                                 lambda_parent_use = 0,
@@ -599,7 +599,7 @@ ng_mip_contribution <- function(scores,
     obj <- ng_plan_objective_contribution(
       scores = scores,
       selected = selected,
-      parent_K = parent_K,
+      parent_kinship = parent_kinship,
       lambda_group = lambda_group,
       lambda_parent_use = lambda_parent_use
     )
@@ -610,7 +610,7 @@ ng_mip_contribution <- function(scores,
     key <- paste(sort(selected), collapse = ",")
     counts <- ng_parent_counts(scores[selected, , drop = FALSE], parents)
     contribution <- counts / sum(counts)
-    kc <- as.numeric(parent_K[parents, parents, drop = FALSE] %*% contribution)
+    kc <- as.numeric(parent_kinship[parents, parents, drop = FALSE] %*% contribution)
     parent_weight <- setNames(lambda_group * 2 * kc / sum(counts), parents)
     if (identical(key, last_key) || lambda_group <= 0) break
     last_key <- key
@@ -669,7 +669,7 @@ ng_enforce_min_unique_parents <- function(scores, selected, parents,
 ng_greedy_local <- function(scores,
                             n_crosses,
                             parents,
-                            parent_K,
+                            parent_kinship,
                             max_crosses_per_parent,
                             min_unique_parents,
                             lambda_group,
@@ -687,7 +687,7 @@ ng_greedy_local <- function(scores,
   }
   if (length(selected) < n_crosses) ng_stop("Greedy allocator could not build a feasible plan")
   if (local_iter > 0) {
-    selected <- ng_local_swap(scores, selected, parents, parent_K, max_crosses_per_parent, lambda_group, local_iter, lambda_parent_use = lambda_parent_use)
+    selected <- ng_local_swap(scores, selected, parents, parent_kinship, max_crosses_per_parent, lambda_group, local_iter, lambda_parent_use = lambda_parent_use)
   }
   selected <- ng_enforce_min_unique_parents(scores, selected, parents, max_crosses_per_parent, min_unique_parents, n_crosses)
   if (!is.null(min_unique_parents)) {
@@ -702,7 +702,7 @@ ng_greedy_local <- function(scores,
 ng_repair_local <- function(scores,
                             n_crosses,
                             parents,
-                            parent_K,
+                            parent_kinship,
                             max_crosses_per_parent,
                             min_unique_parents,
                             lambda_group,
@@ -712,8 +712,8 @@ ng_repair_local <- function(scores,
   selected <- head(ord, n_crosses)
   selected <- ng_repair_capacity(scores, selected, parents, max_crosses_per_parent, n_crosses)
   if (local_iter > 0) {
-    selected <- ng_local_swap(scores, selected, parents, parent_K, max_crosses_per_parent, lambda_group, local_iter, lambda_parent_use = lambda_parent_use)
-    selected <- ng_upgrade_repair(scores, selected, parents, parent_K, max_crosses_per_parent, lambda_group, local_iter, lambda_parent_use = lambda_parent_use)
+    selected <- ng_local_swap(scores, selected, parents, parent_kinship, max_crosses_per_parent, lambda_group, local_iter, lambda_parent_use = lambda_parent_use)
+    selected <- ng_upgrade_repair(scores, selected, parents, parent_kinship, max_crosses_per_parent, lambda_group, local_iter, lambda_parent_use = lambda_parent_use)
   }
   selected <- ng_enforce_min_unique_parents(scores, selected, parents, max_crosses_per_parent, min_unique_parents, n_crosses)
   if (!is.null(min_unique_parents)) {
@@ -787,7 +787,7 @@ ng_fill_best <- function(scores, selected, parents, max_crosses_per_parent, n_cr
   selected
 }
 
-ng_local_swap <- function(scores, selected, parents, parent_K, max_crosses_per_parent, lambda_group, local_iter, use_cpp = TRUE, lambda_parent_use = 0) {
+ng_local_swap <- function(scores, selected, parents, parent_kinship, max_crosses_per_parent, lambda_group, local_iter, use_cpp = TRUE, lambda_parent_use = 0) {
   # The hot path: thousands of ng_plan_objective() calls per ng_optimize_mating_plan
   # invocation. The C++ kernel fuses the swap-search loop with the K-quadratic
   # form, eliminating the O(p^2) R-level matrix multiply overhead per candidate.
@@ -799,7 +799,7 @@ ng_local_swap <- function(scores, selected, parents, parent_K, max_crosses_per_p
   # unavailable (NGCD_SKIP_CPP / no Rcpp).
   if (isTRUE(use_cpp) &&
       exists("ng_local_swap_cpp", mode = "function", inherits = TRUE)) {
-    # Map character parent IDs to 0-based row indices of parent_K so the C++
+    # Map character parent IDs to 0-based row indices of parent_kinship so the C++
     # kernel can index the kinship matrix directly without character lookups.
     parent_idx <- setNames(seq_along(parents) - 1L, parents)
     p1_zero <- as.integer(parent_idx[scores$parent1])
@@ -807,13 +807,13 @@ ng_local_swap <- function(scores, selected, parents, parent_K, max_crosses_per_p
     if (anyNA(p1_zero) || anyNA(p2_zero)) {
       ng_stop("ng_local_swap: some parent IDs in scores are not in parents[]")
     }
-    K_mat <- as.matrix(parent_K[parents, parents, drop = FALSE])
+    K_mat <- as.matrix(parent_kinship[parents, parents, drop = FALSE])
     storage.mode(K_mat) <- "double"
     out <- ng_local_swap_cpp(
       linear_gain = as.numeric(scores$.linear_gain),
       pair_p1_zero = p1_zero,
       pair_p2_zero = p2_zero,
-      parent_K = K_mat,
+      parent_kinship = K_mat,
       selected_zero = as.integer(selected - 1L),
       max_per_parent = as.integer(max_crosses_per_parent),
       lambda_group = as.numeric(lambda_group),
@@ -826,7 +826,7 @@ ng_local_swap <- function(scores, selected, parents, parent_K, max_crosses_per_p
   selected_flag <- rep(FALSE, nrow(scores))
   selected_flag[selected] <- TRUE
   counts <- ng_parent_counts(scores[selected, , drop = FALSE], parents)
-  best_obj <- ng_plan_objective(scores, selected, parent_K, lambda_group, lambda_parent_use)
+  best_obj <- ng_plan_objective(scores, selected, parent_kinship, lambda_group, lambda_parent_use)
   for (iter in seq_len(local_iter)) {
     improved <- FALSE
     off <- which(!selected_flag)
@@ -841,7 +841,7 @@ ng_local_swap <- function(scores, selected, parents, parent_K, max_crosses_per_p
         add_p <- c(scores$parent1[add_idx], scores$parent2[add_idx])
         if (any(counts2[add_p] >= max_crosses_per_parent)) next
         candidate <- c(setdiff(selected, drop_idx), add_idx)
-        obj <- ng_plan_objective(scores, candidate, parent_K, lambda_group, lambda_parent_use)
+        obj <- ng_plan_objective(scores, candidate, parent_kinship, lambda_group, lambda_parent_use)
         if (obj > best_obj + 1e-10) {
           selected_flag[drop_idx] <- FALSE
           selected_flag[add_idx] <- TRUE
@@ -863,7 +863,7 @@ ng_local_swap <- function(scores, selected, parents, parent_K, max_crosses_per_p
 ng_upgrade_repair <- function(scores,
                               selected,
                               parents,
-                              parent_K,
+                              parent_kinship,
                               max_crosses_per_parent,
                               lambda_group,
                               local_iter = 2000,
@@ -873,7 +873,7 @@ ng_upgrade_repair <- function(scores,
   selected_flag <- rep(FALSE, nrow(scores))
   selected_flag[selected] <- TRUE
   counts <- ng_parent_counts(scores[selected, , drop = FALSE], parents)
-  best_obj <- ng_plan_objective(scores, selected, parent_K, lambda_group, lambda_parent_use)
+  best_obj <- ng_plan_objective(scores, selected, parent_kinship, lambda_group, lambda_parent_use)
   n_crosses <- length(selected)
   for (iter in seq_len(local_iter)) {
     improved <- FALSE
@@ -890,7 +890,7 @@ ng_upgrade_repair <- function(scores,
       if (!length(drop_set)) next
       candidate <- c(setdiff(selected, drop_set), add_idx)
       candidate <- ng_repair_capacity(scores, candidate, parents, max_crosses_per_parent, n_crosses)
-      obj <- ng_plan_objective(scores, candidate, parent_K, lambda_group, lambda_parent_use)
+      obj <- ng_plan_objective(scores, candidate, parent_kinship, lambda_group, lambda_parent_use)
       if (obj > best_obj + 1e-10) {
         selected <- candidate
         selected_flag <- rep(FALSE, nrow(scores))
@@ -940,26 +940,26 @@ ng_parent_counts <- function(plan, parents) {
 }
 
 # Group-coancestry term c'Kc of the parent contribution vector c (sums to 1). NOTE
-# on units: parent_K is typically a VanRaden genomic relationship matrix
+# on units: parent_kinship is typically a VanRaden genomic relationship matrix
 # (G ~ numerator relationship A ~ 2 x kinship coefficient), so this returns c'Gc ~
 # 2 x Meuwissen group coancestry (i.e. a mean group RELATIONSHIP, not a coancestry
 # coefficient in [0,1]). The optimizer ranking is unaffected (the 2x is absorbed into
 # lambda_group), but do not interpret the reported value as a coancestry/inbreeding
 # rate or compare it to a Delta-F target without dividing by 2.
-ng_group_coancestry <- function(counts, parent_K) {
+ng_group_coancestry <- function(counts, parent_kinship) {
   total <- sum(counts)
   if (total <= 0) return(NA_real_)
-  cvec <- counts[rownames(parent_K)] / total
-  as.numeric(crossprod(cvec, parent_K %*% cvec))
+  cvec <- counts[rownames(parent_kinship)] / total
+  as.numeric(crossprod(cvec, parent_kinship %*% cvec))
 }
 
-ng_plan_objective <- function(scores, selected, parent_K, lambda_group, lambda_parent_use = 0) {
+ng_plan_objective <- function(scores, selected, parent_kinship, lambda_group, lambda_parent_use = 0) {
   base <- sum(scores$.linear_gain[selected])
   if (lambda_group <= 0 && lambda_parent_use <= 0) return(base)
-  parents <- rownames(parent_K)
+  parents <- rownames(parent_kinship)
   counts <- ng_parent_counts(scores[selected, , drop = FALSE], parents)
   penalty <- 0
-  if (lambda_group > 0) penalty <- penalty + lambda_group * ng_group_coancestry(counts, parent_K)
+  if (lambda_group > 0) penalty <- penalty + lambda_group * ng_group_coancestry(counts, parent_kinship)
   if (lambda_parent_use > 0) {
     contribution <- counts / sum(counts)
     penalty <- penalty + lambda_parent_use * sum(contribution * contribution)
@@ -969,26 +969,26 @@ ng_plan_objective <- function(scores, selected, parent_K, lambda_group, lambda_p
 
 ng_plan_objective_contribution <- function(scores,
                                            selected,
-                                           parent_K,
+                                           parent_kinship,
                                            lambda_group = 0,
                                            lambda_parent_use = 0) {
   base <- sum(scores$.linear_gain[selected])
-  parents <- rownames(parent_K)
+  parents <- rownames(parent_kinship)
   counts <- ng_parent_counts(scores[selected, , drop = FALSE], parents)
   contribution <- counts / sum(counts)
   parent_use_sq <- sum(contribution * contribution)
-  group <- ng_group_coancestry(counts, parent_K)
+  group <- ng_group_coancestry(counts, parent_kinship)
   base - lambda_parent_use * parent_use_sq - lambda_group * group
 }
 
-ng_plan_summary <- function(selected, scores, gain_col, parent_K, lambda_group, lambda_mating,
+ng_plan_summary <- function(selected, scores, gain_col, parent_kinship, lambda_group, lambda_mating,
                             lambda_parent_use = 0,
                             lambda_parent_use_input = lambda_parent_use,
                             lambda_parent_use_mode = "absolute",
                             lambda_progeny_inbreeding = 0,
                             score_scale = NA_real_) {
   plan <- scores[selected, , drop = FALSE]
-  parents <- rownames(parent_K)
+  parents <- rownames(parent_kinship)
   counts <- ng_parent_counts(plan, parents)
   contribution <- counts / sum(counts)
   progeny_f <- if ("expected_progeny_inbreeding" %in% names(plan)) {
@@ -1005,7 +1005,7 @@ ng_plan_summary <- function(selected, scores, gain_col, parent_K, lambda_group, 
     mean_progeny_inbreeding = mean(progeny_f, na.rm = TRUE),
     max_progeny_inbreeding = suppressWarnings(max(progeny_f, na.rm = TRUE)),
     lambda_progeny_inbreeding = lambda_progeny_inbreeding,
-    group_coancestry = ng_group_coancestry(counts, parent_K),
+    group_coancestry = ng_group_coancestry(counts, parent_kinship),
     parent_use_sq = sum(contribution * contribution),
     unique_parents = sum(counts > 0),
     max_parent_use = max(counts),
@@ -1202,8 +1202,8 @@ ng_expected_excess_above_threshold <- function(mu, sd, threshold) {
 
 ng_pareto_mate_allocation <- function(scores,
                                       n_crosses,
-                                      gain_col = "uc_dh_gebv",
-                                      parent_K,
+                                      gain_col = "usefulness_pmv_gebv",
+                                      parent_kinship,
                                       lambdas = 10 ^ seq(-2, 3, length.out = 10),
                                       method = "greedy_local",
                                       ...) {
@@ -1213,7 +1213,7 @@ ng_pareto_mate_allocation <- function(scores,
       scores = scores,
       n_crosses = n_crosses,
       gain_col = gain_col,
-      parent_K = parent_K,
+      parent_kinship = parent_kinship,
       lambda_group = lambdas[i],
       method = method,
       ...

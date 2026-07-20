@@ -412,15 +412,15 @@ external_training_index <- function(trait_values, cfg) {
 # (var(gv); additive traits) INCLUDING LD (Bulmer), not the genic variance; it and
 # He/polymorphism/MAF decline as alleles fix, while mean parental RELATIONSHIP
 # (VanRaden G off-diagonal ~ 2 x coancestry coefficient) rises.
-population_diversity <- function(geno, index_gv, parent_K = NULL) {
+population_diversity <- function(geno, index_gv, parent_kinship = NULL) {
   geno <- as.matrix(geno)
   p <- colMeans(geno, na.rm = TRUE) / 2
   p <- p[is.finite(p)]
   He <- if (length(p)) mean(2 * p * (1 - p)) else NA_real_
   poly <- if (length(p)) mean(p > 1e-9 & p < 1 - 1e-9) else NA_real_
   maf <- if (length(p)) mean(pmin(p, 1 - p)) else NA_real_
-  if (is.null(parent_K)) parent_K <- ng_parent_kinship(geno)
-  offdiag <- parent_K[upper.tri(parent_K)]
+  if (is.null(parent_kinship)) parent_kinship <- ng_parent_kinship(geno)
+  offdiag <- parent_kinship[upper.tri(parent_kinship)]
   list(
     # Population additive genetic variance of the index INCLUDING linkage
     # disequilibrium (Bulmer effect) -- traits are purely additive so this is Va of
@@ -746,7 +746,7 @@ score_parent_crosses <- function(parent_pop, sim_param, marker_assets, cfg, rep,
   ids <- parent_pop@id
   parent_geno <- population_genotypes(parent_pop, sim_param, marker_assets$marker_names)
   # Kinship of the parents is trait-independent: compute the VanRaden G once and reuse
-  # it for every per-trait ng_score_crosses call and as the returned parent_K, instead
+  # it for every per-trait ng_score_crosses call and as the returned parent_kinship, instead
   # of recomputing the O(n^2 * m) matrix 3x (per trait) + 1x below.
   parent_K_cache <- ng_parent_kinship(parent_geno)
   training_pop <- make_auxiliary_ril_training_lines(
@@ -797,7 +797,7 @@ score_parent_crosses <- function(parent_pop, sim_param, marker_assets, cfg, rep,
       scored_trait <- tryCatch(
         ng_score_crosses(
           geno = parent_geno,
-          parent_K = parent_K_cache,
+          parent_kinship = parent_K_cache,
           effects = effects_i,
           marker_map = marker_assets$marker_map,
           ids = ids,
@@ -805,7 +805,7 @@ score_parent_crosses <- function(parent_pop, sim_param, marker_assets, cfg, rep,
           target = "RIL",
           selection_prop = cfg$selection_prop,
           min_effect_reliability = cfg$min_effect_reliability,
-          recomb_model = cfg$recombination_model,
+          recomb_model = cfg$recomb_model,
           use_cpp = cfg$use_cpp,
           assume_inbred = cfg$assume_inbred_for_scoring,
           posterior_cov_full = effects_i$beta_cov_full
@@ -815,7 +815,7 @@ score_parent_crosses <- function(parent_pop, sim_param, marker_assets, cfg, rep,
           warning(conditionMessage(e), call. = FALSE)
           ng_score_crosses(
             geno = parent_geno,
-            parent_K = parent_K_cache,
+            parent_kinship = parent_K_cache,
             effects = effects_i,
             marker_map = marker_assets$marker_map,
             ids = ids,
@@ -823,7 +823,7 @@ score_parent_crosses <- function(parent_pop, sim_param, marker_assets, cfg, rep,
             target = "RIL",
             selection_prop = cfg$selection_prop,
             min_effect_reliability = cfg$min_effect_reliability,
-            recomb_model = cfg$recombination_model,
+            recomb_model = cfg$recomb_model,
             use_cpp = cfg$use_cpp,
             assume_inbred = FALSE,
             posterior_cov_full = effects_i$beta_cov_full
@@ -843,8 +843,8 @@ score_parent_crosses <- function(parent_pop, sim_param, marker_assets, cfg, rep,
       }
       cross_table[[paste0(clean_trait, "_value")]] <- value
       cross_table[[paste0(clean_trait, "_mean")]] <- scored_trait$cross_mean_blend
-      cross_table[[paste0(clean_trait, "_pmv")]] <- scored_trait$dh_pmv_var
-      cross_table[[paste0(clean_trait, "_vpm")]] <- scored_trait$dh_recomb_var
+      cross_table[[paste0(clean_trait, "_pmv")]] <- scored_trait$pmv
+      cross_table[[paste0(clean_trait, "_vpm")]] <- scored_trait$vpm
       effects_list[[trait]] <- effects_i
       reliability[[i]] <- effects_i$reliability
     }
@@ -867,7 +867,7 @@ score_parent_crosses <- function(parent_pop, sim_param, marker_assets, cfg, rep,
     return(list(
       scores = scores,
       parent_geno = parent_geno,
-      parent_K = parent_K_cache,
+      parent_kinship = parent_K_cache,
       effects = effects_list,
       parent_pheno = selection_index_from_trait_values(parent_trait_pheno, cfg),
       parent_trait_pheno = parent_trait_pheno,   # per-trait phenotypes for the user-API method
@@ -904,7 +904,7 @@ score_parent_crosses <- function(parent_pop, sim_param, marker_assets, cfg, rep,
       target = "RIL",
       selection_prop = cfg$selection_prop,
       min_effect_reliability = cfg$min_effect_reliability,
-      recomb_model = cfg$recombination_model,
+      recomb_model = cfg$recomb_model,
       use_cpp = cfg$use_cpp,
       assume_inbred = cfg$assume_inbred_for_scoring,
       posterior_cov_full = effects$beta_cov_full
@@ -921,7 +921,7 @@ score_parent_crosses <- function(parent_pop, sim_param, marker_assets, cfg, rep,
         target = "RIL",
         selection_prop = cfg$selection_prop,
         min_effect_reliability = cfg$min_effect_reliability,
-        recomb_model = cfg$recombination_model,
+        recomb_model = cfg$recomb_model,
         use_cpp = cfg$use_cpp,
         assume_inbred = FALSE,
         posterior_cov_full = effects$beta_cov_full
@@ -932,7 +932,7 @@ score_parent_crosses <- function(parent_pop, sim_param, marker_assets, cfg, rep,
   list(
     scores = scores,
     parent_geno = parent_geno,
-    parent_K = ng_parent_kinship(parent_geno),
+    parent_kinship = ng_parent_kinship(parent_geno),
     effects = effects,
     parent_pheno = parent_pheno,
     effect_reliability = effects$reliability,
@@ -981,11 +981,11 @@ ril_benchmark_method_registry <- function() {
       "var_complex",
       "var_complex",
       "var_complex",
-      "uc",
-      "uc",
+      "usefulness",
+      "usefulness",
       "pmv",
       "vpm",
-      "var_simple",
+      "le",
       "mean",
       NA,
       NA,
@@ -1348,7 +1348,7 @@ select_crosses_for_method <- function(parent_pop, sim_param, marker_assets, cfg,
       scores = scores,
       n_crosses = cfg$n_crosses,
       gain_col = rule$score_col,
-      parent_K = scoring$parent_K,
+      parent_kinship = scoring$parent_kinship,
       max_crosses_per_parent = cfg$max_crosses_per_parent,
       max_pair_kinship = cfg$max_pair_kinship,
       lambda_group = cfg$lambda_group,
@@ -1364,7 +1364,7 @@ select_crosses_for_method <- function(parent_pop, sim_param, marker_assets, cfg,
       scores = scores,
       n_crosses = cfg$n_crosses,
       gain_col = rule$score_col,
-      parent_K = scoring$parent_K,
+      parent_kinship = scoring$parent_kinship,
       max_crosses_per_parent = cfg$max_crosses_per_parent,
       max_pair_kinship = cfg$max_pair_kinship,
       lambda_group = cfg$lambda_group,
@@ -1385,7 +1385,7 @@ select_crosses_for_method <- function(parent_pop, sim_param, marker_assets, cfg,
       scores = scores,
       n_crosses = cfg$n_crosses,
       gain_col = rule$score_col,
-      parent_K = scoring$parent_K,
+      parent_kinship = scoring$parent_kinship,
       max_crosses_per_parent = cfg$max_crosses_per_parent,
       max_pair_kinship = cfg$max_pair_kinship,
       lambda_mating = cfg$lambda_mating,
@@ -1417,7 +1417,7 @@ select_crosses_for_method <- function(parent_pop, sim_param, marker_assets, cfg,
       trait_value_metric = "var_complex", uc_variance_source = "pmv",
       multi_trait_method = cfg$multi_trait_method, trait_weights = cfg$trait_weights,
       progeny = "RIL", ril_mode = "infinite",
-      n_crosses = cfg$n_crosses, max_uses_per_parent = cfg$max_crosses_per_parent,
+      n_crosses = cfg$n_crosses, max_crosses_per_parent = cfg$max_crosses_per_parent,
       use_ocs = TRUE, lambda_group = cfg$lambda_group, lambda_mating = cfg$lambda_mating,
       lambda_parent_use = cfg$lambda_parent_use, optimizer = cfg$optimizer,
       # Recurrent RIL parents carry residual heterozygosity from finite selfing; a user
@@ -1438,7 +1438,7 @@ select_crosses_for_method <- function(parent_pop, sim_param, marker_assets, cfg,
       scores = scores,
       criterion_col = rule$score_col,
       n_crosses = cfg$n_crosses,
-      parent_K = scoring$parent_K,
+      parent_kinship = scoring$parent_kinship,
       mode = cfg$alphamate_mode,
       target_degree = cfg$alphamate_target_degree,
       max_contributions = cfg$alphamate_max_contributions,
@@ -1451,7 +1451,7 @@ select_crosses_for_method <- function(parent_pop, sim_param, marker_assets, cfg,
       scores = scores,
       score_col = rule$score_col,
       n_crosses = cfg$n_crosses,
-      parent_K = scoring$parent_K,
+      parent_kinship = scoring$parent_kinship,
       max_crosses_per_parent = cfg$max_crosses_per_parent,
       min_crosses_per_parent = cfg$simplemating_min_cross,
       culling_pairwise_k = if (is.finite(cfg$simplemating_culling_k)) cfg$simplemating_culling_k else NULL
@@ -1462,7 +1462,7 @@ select_crosses_for_method <- function(parent_pop, sim_param, marker_assets, cfg,
       scores = scores,
       criterion_col = rule$score_col,
       n_crosses = cfg$n_crosses,
-      parent_K = scoring$parent_K,
+      parent_kinship = scoring$parent_kinship,
       executable = cfg$alphamate_executable,
       runtime_path = cfg$alphamate_runtime_path,
       target_degree = cfg$alphamate_target_degree,
@@ -1548,8 +1548,8 @@ select_crosses_for_method <- function(parent_pop, sim_param, marker_assets, cfg,
 method_variance_col <- function(rule, score_names) {
   if (identical(rule$external_tool, "PopVar") && "popvar_varG" %in% score_names) return("popvar_varG")
   if (identical(rule$external_tool, "SimpleMating") && "simple_usefa_var" %in% score_names) return("simple_usefa_var")
-  if ("dh_pmv_var" %in% score_names) return("dh_pmv_var")
-  if ("dh_recomb_var" %in% score_names) return("dh_recomb_var")
+  if ("pmv" %in% score_names) return("pmv")
+  if ("vpm" %in% score_names) return("vpm")
   NA_character_
 }
 
@@ -1795,7 +1795,7 @@ ril_config_from_env <- function(root = find_project_root()) {
     parent_observed_h2 = env_num("NG_RIL_PARENT_OBSERVED_H2", 0.50),
     selection_prop = env_num("NG_RIL_SELECTION_PROP", 0.10),
     min_effect_reliability = env_num("NG_RIL_MIN_EFFECT_RELIABILITY", 0.20),
-    recombination_model = env_chr("NG_RIL_RECOMBINATION_MODEL", "haldane"),
+    recomb_model = env_chr("NG_RIL_RECOMBINATION_MODEL", "haldane"),
     use_cpp = env_bool("NG_RIL_USE_CPP", FALSE),
     alphasimr_threads = env_int("NG_RIL_ALPHASIMR_THREADS", 1L),
     assume_inbred_for_scoring = env_bool("NG_RIL_ASSUME_INBRED_FOR_SCORING", TRUE),
@@ -1854,7 +1854,7 @@ validate_ril_config <- function(cfg) {
   if (cfg$n_parents < 4L) stop("NG_RIL_N_PARENTS must be >= 4", call. = FALSE)
   if (cfg$n_crosses < 1L) stop("NG_RIL_N_CROSSES must be >= 1", call. = FALSE)
   if (cfg$f2_per_cross < 2L) stop("NG_RIL_F2_PER_CROSS must be >= 2", call. = FALSE)
-  if (!identical(cfg$recombination_model, "haldane") && !identical(cfg$recombination_model, "kosambi")) {
+  if (!identical(cfg$recomb_model, "haldane") && !identical(cfg$recomb_model, "kosambi")) {
     stop("NG_RIL_RECOMBINATION_MODEL must be haldane or kosambi", call. = FALSE)
   }
   cfg$r_lib <- normalizePath(cfg$r_lib, winslash = "/", mustWork = FALSE)

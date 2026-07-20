@@ -38,11 +38,11 @@ $useCpp = Get-EnvValue "NG_VALIDATION_USE_CPP" "1"
 Set-DefaultEnv "NG_ALPHASIMR_THREADS" "1"
 Set-DefaultEnv "NG_SHARED_SCORING" "1"
 
-Write-Host "nextgenCrossDesign validation phase: $phase"
+Write-Host "nextgen_cross_design validation phase: $phase"
 
 if ($phase -in @("smoke", "all")) {
-  Invoke-Rscript "tests\smoke_test.R"
-  Invoke-Rscript "tests\cpp_consistency.R"
+  Invoke-Rscript "nextgen_cross_design\tests\smoke_test.R"
+  Invoke-Rscript "nextgen_cross_design\tests\cpp_consistency.R"
 }
 
 if ($phase -in @("family", "all")) {
@@ -53,7 +53,7 @@ if ($phase -in @("family", "all")) {
   Set-DefaultEnv "NG_USE_CPP" $useCpp
   Set-DefaultEnv "NG_CAL_INCLUDE_EXTERNAL" "1"
   Set-DefaultEnv "NG_CAL_INCLUDE_GMS" "1"
-  Invoke-PowershellScript "tools\run_family_calibration_grid.ps1"
+  Invoke-PowershellScript "nextgen_cross_design\tools\run_family_calibration_grid.ps1"
 }
 
 if ($phase -in @("allocator", "all")) {
@@ -64,7 +64,7 @@ if ($phase -in @("allocator", "all")) {
   Set-DefaultEnv "NG_EXTERNAL_GRID_EFFECT_TRAINING_N" $effectTrainingN
   Set-DefaultEnv "NG_EXTERNAL_GRID_USE_CPP" $useCpp
   Set-DefaultEnv "NG_EXTERNAL_GRID_SHORTLIST_MULTIPLIER" "2"
-  Invoke-PowershellScript "tools\run_allocator_crosscheck_grid.ps1"
+  Invoke-PowershellScript "nextgen_cross_design\tools\run_allocator_crosscheck_grid.ps1"
 }
 
 if ($phase -in @("grid", "all")) {
@@ -76,7 +76,7 @@ if ($phase -in @("grid", "all")) {
   Set-DefaultEnv "NG_GRID_USE_CPP" $useCpp
   Set-DefaultEnv "NG_GRID_EXTERNAL_SHORTLIST_MULTIPLIER" "20"
   Set-DefaultEnv "NG_GRID_METHODS" "var_simple_topn,var_simple_ocs10_lps2,popvar_uc_ocs10_lps1,simple_usefa_ocs10_lps1,ng_recomb_gebv_ocs10_lps2,ng_pmv_blend_balanced_ocs10_lps2,ng_meta_portfolio_ocs10_lps2,ng_meta_selector_ocs10_lps2,ng_meta_router_ocs10_lps2,ng_frontier_policy_ocs10_lps2"
-  Invoke-PowershellScript "tools\run_parent_size_grid.ps1"
+  Invoke-PowershellScript "nextgen_cross_design\tools\run_parent_size_grid.ps1"
 }
 
 if (!($phase -in @("smoke", "family", "allocator", "grid", "all"))) {

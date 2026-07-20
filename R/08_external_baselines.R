@@ -22,7 +22,7 @@ ng_add_external_baseline_scores <- function(scores,
                                             n_crosses = NULL,
                                             shortlist_n = NULL,
                                             shortlist_multiplier = NULL,
-                                            shortlist_score_col = "etk_dh_pmv_var_cal",
+                                            shortlist_score_col = "etk_pmv_cal",
                                             popvar_engine = "auto",
                                             simplemating_engine = "auto") {
   need <- ng_external_methods_needed(methods)
@@ -68,7 +68,7 @@ ng_external_shortlist_indices <- function(scores,
                                           n_crosses = NULL,
                                           shortlist_n = NULL,
                                           shortlist_multiplier = NULL,
-                                          score_col = "etk_dh_pmv_var_cal") {
+                                          score_col = "etk_pmv_cal") {
   n <- nrow(scores)
   if (!is.null(shortlist_n) && is.finite(shortlist_n) && shortlist_n > 0) {
     k <- min(n, as.integer(shortlist_n))
@@ -82,7 +82,7 @@ ng_external_shortlist_indices <- function(scores,
   score_cols <- ng_external_shortlist_score_cols(score_col)
   valid_cols <- score_cols[score_cols %in% names(scores)]
   if (!length(valid_cols)) {
-    fallback <- c("uc_dh_gebv", "uc_dh", "uc_recomb_gebv", "uc_recomb")
+    fallback <- c("usefulness_pmv_gebv", "usefulness_pmv", "usefulness_vpm_gebv", "usefulness_vpm")
     valid_cols <- fallback[fallback %in% names(scores)]
   }
   if (!length(valid_cols)) return(seq_len(k))
@@ -252,7 +252,7 @@ ng_add_simplemating_scores <- function(scores,
     return(ng_apply_simplemating_native_proxy(scores, prop_sel = prop_sel, status = "native_proxy"))
   }
 
-  if (!ng_has_optional_pkg("SimpleMating")) {
+  if (!requireNamespace("SimpleMating", quietly = TRUE)) {
     if (identical(engine, "auto") && identical(fallback, "native_proxy")) {
       return(ng_apply_simplemating_native_proxy(scores, prop_sel = prop_sel, status = "native_proxy_package_unavailable"))
     }
@@ -287,19 +287,19 @@ ng_add_simplemating_scores <- function(scores,
   mpv_error <- NULL
   usefa_error <- NULL
   if (isTRUE(include_mpv)) {
-    mpv <- tryCatch({
+    mid_parent_value <- tryCatch({
       utils::capture.output({
-        tmp <- ng_optional_pkg_fun("SimpleMating", "getMPV")(MatePlan = mate_plan, Criterion = crit_df, K = K)
+        tmp <- SimpleMating::getMPV(MatePlan = mate_plan, Criterion = crit_df, K = K)
       })
       tmp
     }, error = function(e) {
       mpv_error <<- conditionMessage(e)
       NULL
     })
-    if (!is.null(mpv) && nrow(mpv)) {
-      idx <- match(ng_pair_key(scores$parent1, scores$parent2), ng_pair_key(mpv$Parent1, mpv$Parent2))
+    if (!is.null(mid_parent_value) && nrow(mid_parent_value)) {
+      idx <- match(ng_pair_key(scores$parent1, scores$parent2), ng_pair_key(mid_parent_value$Parent1, mid_parent_value$Parent2))
       hit <- !is.na(idx)
-      scores$simple_mpv[hit] <- mpv$Y[idx[hit]]
+      scores$simple_mpv[hit] <- mid_parent_value$Y[idx[hit]]
     }
   }
 
@@ -331,7 +331,7 @@ ng_add_simplemating_scores <- function(scores,
     attr(scores, "simple_usefa_het_frac") <- het_frac
     usefa <- tryCatch({
       utils::capture.output({
-        tmp <- ng_optional_pkg_fun("SimpleMating", "getUsefA")(
+        tmp <- SimpleMating::getUsefA(
           MatePlan = mate_plan,
           Markers = markers_usefa,
           addEff = as.numeric(beta),
@@ -596,7 +596,7 @@ ng_match_alphamate_plan <- function(scores, am_plan, n_crosses) {
 ng_select_alphamate <- function(scores,
                                 criterion_col = "cross_mean",
                                 n_crosses,
-                                parent_K,
+                                parent_kinship,
                                 executable = ng_alphamate_default_executable(),
                                 runtime_path = Sys.getenv("NG_ALPHAMATE_RUNTIME_PATH", unset = ""),
                                 target_degree = 45,
@@ -612,9 +612,9 @@ ng_select_alphamate <- function(scores,
                                 mode = "ModeOptTarget1") {
   scores <- as.data.frame(scores, stringsAsFactors = FALSE)
   if (!file.exists(executable)) ng_stop("AlphaMate executable not found: ", executable)
-  if (is.null(parent_K)) ng_stop("AlphaMate selection requires parent_K")
+  if (is.null(parent_kinship)) ng_stop("AlphaMate selection requires parent_kinship")
   parents <- sort(unique(c(as.character(scores$parent1), as.character(scores$parent2))))
-  parent_K <- parent_K[parents, parents, drop = FALSE]
+  parent_kinship <- parent_kinship[parents, parents, drop = FALSE]
   criterion <- ng_parent_criterion_from_cross_mean(scores, criterion_col)
   criterion <- criterion[parents]
   aliases <- sprintf("AM%06d", seq_along(parents))
@@ -626,7 +626,7 @@ ng_select_alphamate <- function(scores,
   if (anyNA(scores_for_am$parent1) || anyNA(scores_for_am$parent2)) {
     ng_stop("Could not alias AlphaMate score parent IDs")
   }
-  parent_K_for_am <- parent_K
+  parent_K_for_am <- parent_kinship
   rownames(parent_K_for_am) <- colnames(parent_K_for_am) <- aliases[parents]
   criterion_for_am <- criterion
   names(criterion_for_am) <- aliases[names(criterion_for_am)]
@@ -672,7 +672,7 @@ ng_select_alphamate <- function(scores,
     selected = idx,
     scores = scores_for_am,
     gain_col = criterion_col,
-    parent_K = parent_K_for_am,
+    parent_kinship = parent_K_for_am,
     lambda_group = 0,
     lambda_mating = 0,
     lambda_parent_use = 0,
@@ -703,12 +703,12 @@ ng_select_alphamate <- function(scores,
 ng_select_simplemating <- function(scores,
                                    score_col,
                                    n_crosses,
-                                   parent_K,
+                                   parent_kinship,
                                    max_crosses_per_parent = 4L,
                                    min_crosses_per_parent = 1L,
                                    max_crosses_to_search = 1e5,
                                    culling_pairwise_k = NULL) {
-  if (!ng_has_optional_pkg("SimpleMating")) {
+  if (!requireNamespace("SimpleMating", quietly = TRUE)) {
     ng_stop("SimpleMating package is not available")
   }
   if (!(score_col %in% names(scores))) ng_stop("scores missing ", score_col)
@@ -723,7 +723,7 @@ ng_select_simplemating <- function(scores,
   )
   out <- tryCatch({
     utils::capture.output({
-      tmp <- ng_optional_pkg_fun("SimpleMating", "selectCrosses")(
+      tmp <- SimpleMating::selectCrosses(
         data = data,
         n.cross = n_crosses,
         max.cross = max_crosses_per_parent,
@@ -743,7 +743,7 @@ ng_select_simplemating <- function(scores,
     scores = scores,
     selected = idx[seq_len(n_crosses)],
     gain_col = score_col,
-    parent_K = parent_K,
+    parent_kinship = parent_kinship,
     lambda_group = 0,
     lambda_mating = 0,
     lambda_parent_use = 0,

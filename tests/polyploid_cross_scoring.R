@@ -43,7 +43,7 @@ for (ploidy in c(2L, 4L)) {
                         markers = colnames(dosage), ploidy = ploidy, model = "additive_dominance"),
                    class = "ng_polyploid_effects")
 
-  sc <- ng_score_crosses_poly_dominance(fit, dosage, selection_prop = 0.10)
+  sc <- ng_polyploid_score_crosses_dominance(fit, dosage, selection_prop = 0.10)
   stopifnot(all(c("cross_mean", "heterosis", "add_var", "dom_var", "cross_var") %in% names(sc)))
   stopifnot(isTRUE(attr(sc, "has_dominance")))
 
@@ -61,7 +61,7 @@ for (ploidy in c(2L, 4L)) {
   # heterosis is nonzero with dominance; additive-only fit gives zero dominance terms
   stopifnot(any(abs(sc$heterosis) > 1e-8), all(sc$dom_var >= 0))
   fit_a <- fit; fit_a$beta_dom <- NULL; fit_a$model <- "additive"
-  sc_a <- ng_score_crosses_poly_dominance(fit_a, dosage)
+  sc_a <- ng_polyploid_score_crosses_dominance(fit_a, dosage)
   stopifnot(all(sc_a$dom_var == 0), all(abs(sc_a$heterosis) < 1e-12),
             max(abs(sc_a$cross_mean - sc_a$mid_parent_bv)) < 1e-12)
   cat(sprintf("ploidy %d: analytic cross mean/var match simulation; heterosis captured\n", ploidy))
@@ -78,7 +78,7 @@ fit4 <- structure(list(beta_add = ba, beta_dom = bd, intercept = 0, allele_freq 
                        markers = colnames(dosage), ploidy = 4L, model = "additive_dominance"),
                   class = "ng_polyploid_effects")
 dr <- 0.12
-sc_dr <- ng_score_crosses_poly_dominance(fit4, dosage, double_reduction = dr)
+sc_dr <- ng_polyploid_score_crosses_dominance(fit4, dosage, double_reduction = dr)
 a <- sc_dr$parent1[1]; b <- sc_dr$parent2[1]
 Xd <- sim_progeny_dosage(dosage[a, ], dosage[b, ], 4L, 40000L, dr = dr)
 Hd <- Xd * (4 - Xd)
@@ -86,15 +86,15 @@ gvd <- as.numeric(sweep(Xd, 2, 4 * p) %*% ba) + as.numeric(sweep(Hd, 2, hbar) %*
 stopifnot(abs(mean(gvd) - sc_dr$cross_mean[1]) < 0.15 * (abs(sc_dr$cross_mean[1]) + 1))
 stopifnot(abs(stats::var(gvd) - sc_dr$cross_var[1]) < 0.12 * (sc_dr$cross_var[1] + 1))
 # DR lowers total expected progeny heterozygosity across crosses
-mt0 <- ng_poly_progeny_moment_table(4L, double_reduction = 0)
-mtd <- ng_poly_progeny_moment_table(4L, double_reduction = dr)
+mt0 <- ng_polyploid_progeny_moment_table(4L, double_reduction = 0)
+mtd <- ng_polyploid_progeny_moment_table(4L, double_reduction = dr)
 stopifnot(sum(mtd$EH) < sum(mt0$EH))
 cat(sprintf("double reduction (dr=%.2f): analytic matches DR simulation; heterozygosity reduced\n", dr))
 
 # --- C++ kernel (when compiled) must match the R path to machine precision ---
 if (exists("ng_poly_dominance_scores_cpp", mode = "function", inherits = TRUE)) {
-  sc_cpp <- ng_score_crosses_poly_dominance(fit4, dosage, double_reduction = dr, use_cpp = TRUE)
-  sc_r   <- ng_score_crosses_poly_dominance(fit4, dosage, double_reduction = dr, use_cpp = FALSE)
+  sc_cpp <- ng_polyploid_score_crosses_dominance(fit4, dosage, double_reduction = dr, use_cpp = TRUE)
+  sc_r   <- ng_polyploid_score_crosses_dominance(fit4, dosage, double_reduction = dr, use_cpp = FALSE)
   stopifnot(max(abs(sc_cpp$cross_mean - sc_r$cross_mean)) < 1e-8,
             max(abs(sc_cpp$cross_var - sc_r$cross_var)) < 1e-8,
             max(abs(sc_cpp$heterosis - sc_r$heterosis)) < 1e-8)

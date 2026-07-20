@@ -21,9 +21,9 @@ K <- ng_parent_kinship(geno)
 # previously only warned), reaching the target while staying feasible.
 min_unique <- 15L
 for (meth in c("greedy_local", "repair_local")) {
-  p_free <- ng_optimize_mating_plan(sc, n_crosses = 10, parent_K = K,
+  p_free <- ng_optimize_mating_plan(sc, n_crosses = 10, parent_kinship = K,
                                     max_crosses_per_parent = 10, lambda_group = 0, method = meth)
-  p_con <- ng_optimize_mating_plan(sc, n_crosses = 10, parent_K = K,
+  p_con <- ng_optimize_mating_plan(sc, n_crosses = 10, parent_kinship = K,
                                    max_crosses_per_parent = 10, lambda_group = 0,
                                    min_unique_parents = min_unique, method = meth)
   s_free <- attr(p_free, "summary"); s_con <- attr(p_con, "summary")

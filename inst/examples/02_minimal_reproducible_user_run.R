@@ -4,13 +4,9 @@
 # trait-direction files, then runs the package directly. Use it first to confirm
 # the package is installed and the main workflow works on your machine.
 #
-# Install the package first if needed:
-# remotes::install_github("pulsesmartlab-innovations/nextgenCrossDesignR")
-#
-# Or from a local source tarball (needs a C++ toolchain:
-# Rtools on Windows, Xcode CLT on macOS, build-essential on Linux):
+# Install from a local tarball first if needed:
 # install.packages(
-#   "nextgenCrossDesign_0.4.0.tar.gz",
+#   "C:/Users/Sikiru/Documents/cross_prediction/nextgen_cross_design/dist/nextgenCrossDesign_0.3.13.tar.gz",
 #   repos = NULL,
 #   type = "source"
 # )
@@ -25,8 +21,8 @@ required_args <- c(
   "ril_mode",
   "run_posterior_prediction",
   "posterior_method",
-  "nIter",
-  "burnIn",
+  "n_iter",
+  "burn_in",
   "use_parallel"
 )
 missing_args <- setdiff(required_args, names(formals(nextgenCrossDesign::ng_run_cross_prediction)))
@@ -100,8 +96,8 @@ method_varPMV <- "fast"
 ril_mode <- "infinite"
 run_posterior_prediction <- FALSE
 posterior_method <- "mcmc"
-nIter <- 5000
-burnIn <- 500
+n_iter <- 5000
+burn_in <- 500
 use_parallel <- FALSE
 
 # Use these only when you want to call an installed AlphaMate executable:
@@ -137,17 +133,17 @@ result <- ng_run_cross_prediction(
   ril_mode = ril_mode,
   run_posterior_prediction = run_posterior_prediction,
   posterior_method = posterior_method,
-  nIter = nIter,
-  burnIn = burnIn,
+  n_iter = n_iter,
+  burn_in = burn_in,
   use_parallel = use_parallel,
 
   progeny = "DH",
-  recombination_model = "haldane",
+  recomb_model = "haldane",
   assume_inbred = TRUE,
 
   duplicate_action = "none",
   n_crosses = 5,
-  max_uses_per_parent = 3,
+  max_crosses_per_parent = 3,
   optimizer = "greedy_local",
   allocation_method = allocation_method,
   use_ocs = TRUE,

@@ -15,13 +15,13 @@
 # Analytic, no-simulation, any-ploidy ADDITIVE cross scorer. Emits parent1/parent2 with the
 # mid-parent breeding value (poly_mean), the within-family additive segregation variance
 # (poly_var, from the progeny-moment table), the usefulness (poly_usefulness = mean + i*SD),
-# and pair_kinship, plus a parent_K (polyploid GRM) attribute. This is the standard candidate-cross
+# and pair_kinship, plus a parent_kinship (polyploid GRM) attribute. This is the standard candidate-cross
 # contract the allocator consumes; select on poly_mean (gain) or poly_usefulness (variance-aware).
-ng_poly_score_crosses <- function(dosage, effects, ploidy = 2L, pairs = NULL,
+ng_polyploid_score_crosses <- function(dosage, effects, ploidy = 2L, pairs = NULL,
                                   grm_method = c("vanraden", "yang"),
                                   selection_prop = 0.10, double_reduction = 0) {
   grm_method <- match.arg(grm_method)
-  geno <- ng_poly4x_as_dosage_matrix(dosage, ploidy = ploidy, name = "dosage")
+  geno <- ng_polyploid_as_dosage_matrix(dosage, ploidy = ploidy, name = "dosage")
   ids <- rownames(geno)
   if (is.null(ids) || anyNA(ids) || any(!nzchar(trimws(ids)))) ng_stop("dosage must have parent row names")
   if (anyDuplicated(ids)) ng_stop("dosage parent row names must be unique")
@@ -32,7 +32,7 @@ ng_poly_score_crosses <- function(dosage, effects, ploidy = 2L, pairs = NULL,
   gebv <- as.numeric(geno %*% eff); names(gebv) <- ids
   # Correct allele-frequency-based polyploid GRM (VanRaden/Yang generalized to ploidy), not the
   # ploidy-midpoint shortcut. See ng_polyploid_grm (R/47).
-  parent_K <- ng_polyploid_grm(geno, ploidy = ploidy, method = grm_method)
+  parent_kinship <- ng_polyploid_grm(geno, ploidy = ploidy, method = grm_method)
 
   if (is.null(pairs)) pairs <- ng_make_pairs(ids, include_self = FALSE)
   pairs <- as.data.frame(pairs, stringsAsFactors = FALSE)
@@ -43,7 +43,7 @@ ng_poly_score_crosses <- function(dosage, effects, ploidy = 2L, pairs = NULL,
   if (any(p1 == p2)) ng_stop("pairs must not contain self-crosses")
 
   # within-family additive segregation variance from the progeny-moment table: Var = sum_k a_k^2 Var(X_k)
-  mt <- ng_poly_progeny_moment_table(ploidy, double_reduction = double_reduction)
+  mt <- ng_polyploid_progeny_moment_table(ploidy, double_reduction = double_reduction)
   Mi <- geno; storage.mode(Mi) <- "integer"
   poly_var <- vapply(seq_along(p1), function(i) {
     ij <- cbind(Mi[p1[i], ] + 1L, Mi[p2[i], ] + 1L)
@@ -57,11 +57,11 @@ ng_poly_score_crosses <- function(dosage, effects, ploidy = 2L, pairs = NULL,
     poly_var = poly_var,
     poly_usefulness = (gebv[p1] + gebv[p2]) / 2 + intensity * sqrt(pmax(poly_var, 0)),
     poly_parent1_gebv = gebv[p1], poly_parent2_gebv = gebv[p2],
-    pair_kinship = ng_poly4x_pair_coancestry(parent_K, pairs),
+    pair_kinship = ng_poly4x_pair_coancestry(parent_kinship, pairs),
     stringsAsFactors = FALSE
   )
   rownames(out) <- NULL
-  attr(out, "parent_K") <- parent_K
+  attr(out, "parent_kinship") <- parent_kinship
   attr(out, "parent_gebv") <- gebv
   attr(out, "ploidy") <- as.integer(ploidy)
   out
@@ -70,7 +70,7 @@ ng_poly_score_crosses <- function(dosage, effects, ploidy = 2L, pairs = NULL,
 # One-call any-ploidy mate design: score (mean + kinship) -> native allocator with the full
 # control suite (passed via ...) and ploidy-aware QC. Supply per-marker `effects`, or per-parent
 # Supply per-marker `effects`, or per-parent `phenotype` to estimate additive effects (ridge).
-ng_design_crosses_poly <- function(dosage,
+ng_polyploid_design_crosses <- function(dosage,
                                    n_crosses,
                                    ploidy = 2L,
                                    effects = NULL,
@@ -98,7 +98,7 @@ ng_design_crosses_poly <- function(dosage,
       effects <- as.numeric(effects)[kept]
     }
   }
-  geno <- ng_poly4x_as_dosage_matrix(dosage, ploidy = ploidy, name = "dosage")
+  geno <- ng_polyploid_as_dosage_matrix(dosage, ploidy = ploidy, name = "dosage")
 
   if (isTRUE(dominance)) {
     # OPTIONAL additive + dominance path (clonal / heterosis crops): estimate both marker-effect
@@ -107,9 +107,9 @@ ng_design_crosses_poly <- function(dosage,
     if (is.null(phenotype)) ng_stop("dominance = TRUE needs a phenotype to estimate dominance effects")
     y <- suppressWarnings(as.numeric(phenotype))
     names(y) <- if (!is.null(names(phenotype))) names(phenotype) else rownames(geno)
-    fit <- ng_fit_polyploid_effects(geno, y[rownames(geno)], ploidy = ploidy,
+    fit <- ng_polyploid_fit_effects(geno, y[rownames(geno)], ploidy = ploidy,
                                     model = "additive_dominance", seed = ridge_seed)
-    scores <- ng_score_crosses_poly_dominance(fit, geno, pairs = pairs, selection_prop = selection_prop,
+    scores <- ng_polyploid_score_crosses_dominance(fit, geno, pairs = pairs, selection_prop = selection_prop,
                                               double_reduction = double_reduction, grm_method = grm_method)
     gain_col <- if (identical(gain, "usefulness")) "cross_usefulness" else "cross_mean"
   } else {
@@ -120,16 +120,16 @@ ng_design_crosses_poly <- function(dosage,
       y <- y[rownames(geno)]                     # align phenotype to (possibly QC-filtered) samples
       effects <- ng_fit_ridge_effects(geno, y, seed = ridge_seed)$beta
     }
-    scores <- ng_poly_score_crosses(geno, effects, ploidy = ploidy, pairs = pairs, grm_method = grm_method,
+    scores <- ng_polyploid_score_crosses(geno, effects, ploidy = ploidy, pairs = pairs, grm_method = grm_method,
                                     selection_prop = selection_prop, double_reduction = double_reduction)
     gain_col <- if (identical(gain, "usefulness")) "poly_usefulness" else "poly_mean"
   }
-  parent_K <- attr(scores, "parent_K")
+  parent_kinship <- attr(scores, "parent_kinship")
 
   # Native allocation with all forwarded controls (strategy, target_coancestry, committed_crosses,
   # group_permission/quota, cost/budget/logistics, method = "evolution", ...).
   plan <- ng_optimize_mating_plan(scores, n_crosses = n_crosses, gain_col = gain_col,
-                                  parent_K = parent_K, max_crosses_per_parent = max_crosses_per_parent, ...)
+                                  parent_kinship = parent_kinship, max_crosses_per_parent = max_crosses_per_parent, ...)
   s <- attr(plan, "summary")
   s$ploidy <- as.integer(ploidy); s$poly_gain_col <- gain_col; s$dominance <- isTRUE(dominance)
   attr(plan, "summary") <- s

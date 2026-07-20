@@ -27,14 +27,14 @@ for (ploidy in c(2L, 4L)) {
 
   train <- 1:150; test <- 151:200
   # additive-only vs additive+dominance
-  fit_a <- ng_fit_polyploid_effects(dosage[train, ], pheno[train], ploidy = ploidy, model = "additive")
-  fit_ad <- ng_fit_polyploid_effects(dosage[train, ], pheno[train], ploidy = ploidy, model = "additive_dominance")
+  fit_a <- ng_polyploid_fit_effects(dosage[train, ], pheno[train], ploidy = ploidy, model = "additive")
+  fit_ad <- ng_polyploid_fit_effects(dosage[train, ], pheno[train], ploidy = ploidy, model = "additive_dominance")
   stopifnot(is.null(fit_a$beta_dom), !is.null(fit_ad$beta_dom))
 
   # predict genotypic value on held-out clones
-  gv_a <- ng_predict_polyploid_value(fit_a, dosage[test, ], type = "genotypic")   # falls back to BV
-  gv_ad <- ng_predict_polyploid_value(fit_ad, dosage[test, ], type = "genotypic")
-  bv_ad <- ng_predict_polyploid_value(fit_ad, dosage[test, ], type = "breeding")
+  gv_a <- ng_polyploid_predict_value(fit_a, dosage[test, ], type = "genotypic")   # falls back to BV
+  gv_ad <- ng_polyploid_predict_value(fit_ad, dosage[test, ], type = "genotypic")
+  bv_ad <- ng_polyploid_predict_value(fit_ad, dosage[test, ], type = "breeding")
 
   acc_a <- cor(gv_a, true_gv[test])
   acc_ad <- cor(gv_ad, true_gv[test])

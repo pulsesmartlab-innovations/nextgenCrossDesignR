@@ -122,14 +122,14 @@ ng_preflight_filter_pairs_by_ids <- function(candidate_pairs, keep_ids) {
   out[p1 %in% keep_ids & p2 %in% keep_ids, , drop = FALSE]
 }
 
-ng_preflight_subset_parent_K <- function(parent_K, keep_ids) {
-  if (is.null(parent_K)) return(NULL)
-  rn <- rownames(parent_K)
-  cn <- colnames(parent_K)
-  if (is.null(rn) || is.null(cn)) return(parent_K)
+ng_preflight_subset_parent_K <- function(parent_kinship, keep_ids) {
+  if (is.null(parent_kinship)) return(NULL)
+  rn <- rownames(parent_kinship)
+  cn <- colnames(parent_kinship)
+  if (is.null(rn) || is.null(cn)) return(parent_kinship)
   keep_ids <- trimws(as.character(keep_ids))
   keep <- intersect(keep_ids, intersect(trimws(as.character(rn)), trimws(as.character(cn))))
-  parent_K[keep, keep, drop = FALSE]
+  parent_kinship[keep, keep, drop = FALSE]
 }
 
 ng_preflight_nrow <- function(x) {
@@ -217,7 +217,7 @@ ng_preflight_remove_putative_duplicate_tables <- function(geno,
                                                           candidate_pairs,
                                                           trait_spec,
                                                           marker_map,
-                                                          parent_K,
+                                                          parent_kinship,
                                                           geno_ids,
                                                           dosage,
                                                           putative_duplicates) {
@@ -229,13 +229,13 @@ ng_preflight_remove_putative_duplicate_tables <- function(geno,
     candidate_pairs = ng_preflight_filter_pairs_by_ids(candidate_pairs, keep_ids),
     trait_spec = trait_spec,
     marker_map = marker_map,
-    parent_K = ng_preflight_subset_parent_K(parent_K, keep_ids)
+    parent_kinship = ng_preflight_subset_parent_K(parent_kinship, keep_ids)
   )
   rows_removed <- do.call(rbind, list(
     ng_preflight_rows_removed(geno, cleaned_tables$geno, "geno"),
     ng_preflight_rows_removed(phenotype, cleaned_tables$phenotype, "phenotype"),
     ng_preflight_rows_removed(candidate_pairs, cleaned_tables$candidate_pairs, "candidate_pairs"),
-    ng_preflight_rows_removed(parent_K, cleaned_tables$parent_K, "parent_K")
+    ng_preflight_rows_removed(parent_kinship, cleaned_tables$parent_kinship, "parent_kinship")
   ))
   list(
     cleaned_tables = cleaned_tables,
@@ -253,7 +253,7 @@ ng_preflight_input_tables <- function(geno = NULL,
                                       candidate_pairs = NULL,
                                       trait_spec = NULL,
                                       marker_map = NULL,
-                                      parent_K = NULL,
+                                      parent_kinship = NULL,
                                       ploidy = NULL,
                                       putative_duplicate_check = FALSE,
                                       duplicate_threshold = 0.995,
@@ -276,7 +276,7 @@ ng_preflight_input_tables <- function(geno = NULL,
     ng_preflight_table_summary("candidate_pairs", candidate_pairs),
     ng_preflight_table_summary("trait_spec", trait_spec),
     ng_preflight_table_summary("marker_map", marker_map),
-    ng_preflight_table_summary("parent_K", parent_K)
+    ng_preflight_table_summary("parent_kinship", parent_kinship)
   ))
 
   geno_ids <- ng_preflight_table_ids(geno)
@@ -347,7 +347,7 @@ ng_preflight_input_tables <- function(geno = NULL,
             candidate_pairs = candidate_pairs,
             trait_spec = trait_spec,
             marker_map = marker_map,
-            parent_K = parent_K,
+            parent_kinship = parent_kinship,
             geno_ids = geno_ids,
             dosage = dosage,
             putative_duplicates = putative_duplicates
@@ -357,7 +357,7 @@ ng_preflight_input_tables <- function(geno = NULL,
           geno <- cleaned_tables$geno
           phenotype <- cleaned_tables$phenotype
           candidate_pairs <- cleaned_tables$candidate_pairs
-          parent_K <- cleaned_tables$parent_K
+          parent_kinship <- cleaned_tables$parent_kinship
           geno_ids <- ng_preflight_table_ids(geno)
           marker_cols <- ng_preflight_marker_columns(geno)
           n_removed <- nrow(cleanup$cleaning$removed_parents)
@@ -401,14 +401,14 @@ ng_preflight_input_tables <- function(geno = NULL,
           candidate_pairs = candidate_pairs,
           trait_spec = trait_spec,
           marker_map = marker_map,
-          parent_K = parent_K
+          parent_kinship = parent_kinship
         )
         cleaning <- list(
           putative_duplicates = list(
             action = "remove",
             kept_parents = data.frame(cluster_id = character(), kept_parent = character(), cluster_size = integer(), stringsAsFactors = FALSE),
             removed_parents = data.frame(cluster_id = character(), kept_parent = character(), removed_parent = character(), kept_missing_prop = numeric(), removed_missing_prop = numeric(), reason = character(), stringsAsFactors = FALSE),
-            rows_removed = data.frame(table = c("geno", "phenotype", "candidate_pairs", "parent_K"), rows_removed = 0L, stringsAsFactors = FALSE)
+            rows_removed = data.frame(table = c("geno", "phenotype", "candidate_pairs", "parent_kinship"), rows_removed = 0L, stringsAsFactors = FALSE)
           )
         )
       }
@@ -535,15 +535,15 @@ ng_preflight_input_tables <- function(geno = NULL,
     }
   }
 
-  if (!is.null(parent_K)) {
-    rn <- rownames(parent_K)
-    cn <- colnames(parent_K)
+  if (!is.null(parent_kinship)) {
+    rn <- rownames(parent_kinship)
+    cn <- colnames(parent_kinship)
     dup <- unique(c(ng_preflight_duplicate_values(rn), ng_preflight_duplicate_values(cn)))
     if (length(dup)) {
-      issues <- ng_preflight_add_issue(issues, "parent_relationship_duplicate_ids", "blocker", "parent_K", "rownames,colnames", paste("Parent relationship matrix has duplicate IDs:", paste(dup, collapse = ", ")), length(dup))
+      issues <- ng_preflight_add_issue(issues, "parent_relationship_duplicate_ids", "blocker", "parent_kinship", "rownames,colnames", paste("Parent relationship matrix has duplicate IDs:", paste(dup, collapse = ", ")), length(dup))
     }
     if (length(geno_ids) && (!setequal(geno_ids, rn) || !setequal(geno_ids, cn))) {
-      issues <- ng_preflight_add_issue(issues, "parent_relationship_id_mismatch", "blocker", "parent_K", "rownames,colnames", "Parent relationship matrix IDs must match genotype parent IDs", 1L)
+      issues <- ng_preflight_add_issue(issues, "parent_relationship_id_mismatch", "blocker", "parent_kinship", "rownames,colnames", "Parent relationship matrix IDs must match genotype parent IDs", 1L)
     }
   }
 
@@ -573,7 +573,7 @@ ng_preflight_input_tables <- function(geno = NULL,
       ng_preflight_table_summary("candidate_pairs", cleaned_tables$candidate_pairs),
       ng_preflight_table_summary("trait_spec", cleaned_tables$trait_spec),
       ng_preflight_table_summary("marker_map", cleaned_tables$marker_map),
-      ng_preflight_table_summary("parent_K", cleaned_tables$parent_K)
+      ng_preflight_table_summary("parent_kinship", cleaned_tables$parent_kinship)
     ))
     rownames(out$cleaned_tables_summary) <- NULL
   }
@@ -587,7 +587,7 @@ ng_write_data_preflight_json <- function(output_path,
                                          candidate_pairs = NULL,
                                          trait_spec = NULL,
                                          marker_map = NULL,
-                                         parent_K = NULL,
+                                         parent_kinship = NULL,
                                          ploidy = NULL,
                                          putative_duplicate_check = FALSE,
                                          duplicate_threshold = 0.995,
@@ -606,7 +606,7 @@ ng_write_data_preflight_json <- function(output_path,
     candidate_pairs = candidate_pairs,
     trait_spec = trait_spec,
     marker_map = marker_map,
-    parent_K = parent_K,
+    parent_kinship = parent_kinship,
     ploidy = ploidy,
     putative_duplicate_check = putative_duplicate_check,
     duplicate_threshold = duplicate_threshold,

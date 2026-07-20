@@ -77,8 +77,8 @@ scores_b <- ng_score_crosses(geno = geno, effects = fit, marker_map = mk, ids = 
                              adjusted_pheno = setNames(rnorm(n), ids),
                              selection_prop = 0.10, recomb_model = "haldane",
                              target = "DH", use_cpp = TRUE)
-scores_b$.linear_gain <- scores_b$uc_dh_gebv
-parent_K <- ng_parent_kinship(geno)
+scores_b$.linear_gain <- scores_b$usefulness_pmv_gebv
+parent_kinship <- ng_parent_kinship(geno)
 ord_x <- order(scores_b$.linear_gain, decreasing = TRUE)
 sel_init <- integer(0); counts0 <- setNames(integer(n), ids)
 for (idx in ord_x) {
@@ -89,11 +89,11 @@ for (idx in ord_x) {
 }
 bench("local_swap (n_crosses=20, iter=2000)",
       function() ng_local_swap(scores = scores_b, selected = sel_init,
-                               parents = ids, parent_K = parent_K,
+                               parents = ids, parent_kinship = parent_kinship,
                                max_crosses_per_parent = 4L, lambda_group = 1,
                                local_iter = 2000L, use_cpp = TRUE),
       function() ng_local_swap(scores = scores_b, selected = sel_init,
-                               parents = ids, parent_K = parent_K,
+                               parents = ids, parent_kinship = parent_kinship,
                                max_crosses_per_parent = 4L, lambda_group = 1,
                                local_iter = 2000L, use_cpp = FALSE))
 

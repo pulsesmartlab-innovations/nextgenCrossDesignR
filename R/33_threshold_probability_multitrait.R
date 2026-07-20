@@ -68,7 +68,7 @@ ng_p_superior_progeny_multitrait <- function(mu, Sigma_c, tau_lower, tau_upper,
 
 # Build a cross-level trait covariance Sigma_c from per-trait within-family
 # variances and an optional t x t genetic correlation matrix G_hat.
-#   - per_trait_var: length-t vector, typically the per-trait dh_pmv_var
+#   - per_trait_var: length-t vector, typically the per-trait pmv
 #     for the cross.
 #   - G_hat: optional t x t matrix. May be a covariance or correlation
 #     matrix; we coerce to correlation form via cov2cor() so the user can
@@ -113,7 +113,7 @@ ng_build_cross_trait_covariance <- function(per_trait_var, G_hat = NULL) {
 # generalization of the single-trait DH/RIL variance a'Ra,
 #   Cov(trait_t, trait_s | cross i x j) = a_t' R a_s,  a_{t,k} = 0.5*(x_ik - x_jk) * beta_{t,k},
 # with R the progeny-target recombination-decay matrix (same kernel ng_score_crosses uses for the
-# per-trait variance). The diagonal (t == s) reproduces dh_recomb_var exactly. Use this instead of
+# per-trait variance). The diagonal (t == s) reproduces vpm exactly. Use this instead of
 # the POPULATION genetic correlation (ng_build_cross_trait_covariance with G_hat) when the true
 # within-family cross-trait covariance is wanted for the multi-trait threshold probability.
 #
@@ -222,7 +222,7 @@ ng_multitrait_exact_sigma_list <- function(scores, trait_order, cross_trait_cov)
 # trait_specs is a data.frame with columns:
 #   trait     - trait label
 #   mean_col  - score-table column with per-trait predicted mean
-#   var_col   - score-table column with per-trait variance (dh_pmv_var-like)
+#   var_col   - score-table column with per-trait variance (pmv-like)
 #
 # Order of rows in trait_specs determines the order of tau_lower / tau_upper
 # and (if supplied) of G_hat.

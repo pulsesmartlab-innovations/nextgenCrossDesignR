@@ -346,17 +346,17 @@ summarized here; the full decision tables live in `docs/BACKEND_USER_GUIDE.md`.
 trait_value_metric = "var_complex"  native PopVar-style usefulness (default): mean +/- i * within-family SD
 trait_value_metric = "pmv"          usefulness using PMV as the within-family variance
 trait_value_metric = "vpm"          usefulness using recombination variance (VPM)
-trait_value_metric = "uc"           usefulness criterion; pair with uc_variance_source
-trait_value_metric = "var_simple"   relationship-distance diversity proxy (screening only)
+trait_value_metric = "usefulness"           usefulness criterion; pair with uc_variance_source
+trait_value_metric = "le"   relationship-distance diversity proxy (screening only)
 trait_value_metric = "mean"         cross mean only, no within-family variance
 ```
 
-When `trait_value_metric = "uc"`, `uc_variance_source` picks the variance column:
+When `trait_value_metric = "usefulness"`, `uc_variance_source` picks the variance column:
 
 ```text
-uc_variance_source = "pmv"        -> dh_pmv_var
-uc_variance_source = "vpm"        -> dh_recomb_var
-uc_variance_source = "var_simple" -> var_simple
+uc_variance_source = "pmv"        -> pmv
+uc_variance_source = "vpm"        -> vpm
+uc_variance_source = "le"        -> parent_distance
 ```
 
 ```{r}
@@ -369,7 +369,7 @@ result <- ng_run_cross_prediction(
 
 `var_complex` is implemented natively — it does **not** call PopVar. It uses the usefulness idea
 breeders expect (oriented cross mean plus or minus selection intensity times within-family SD),
-preferring PMV variance when available and falling back to recombination variance or `var_simple`.
+preferring PMV variance when available and falling back to recombination variance or `parent_distance`.
 
 **Key evidence — single-round ranking is not long-term gain.** For a **single** selection round,
 `var_complex`/`pmv`/`vpm` rank crosses almost identically, and `mean` is competitive only for
@@ -377,11 +377,11 @@ highly polygenic or small/low-heritability training. But over many recycling cyc
 usefulness metrics exhaust genetic variance and plateau. For a **recurrent program**, keep a good
 merit metric *and* manage diversity explicitly (Part 3) rather than chasing pure usefulness. This
 is the central finding of `tools/run_method_optimizer_metric_study.R` (10 reps x 25 cycles).
-`var_simple` is a diversity proxy, **not** a merit metric.
+`parent_distance` is a diversity proxy, **not** a merit metric.
 
 ## Enlarging the marker-effect training set
 
-Every metric except `var_simple` is driven by estimated **marker effects**, and those effects are
+Every metric except `parent_distance` is driven by estimated **marker effects**, and those effects are
 sharper when they are trained on more genotyped + phenotyped individuals. You can enlarge the
 training set with extra individuals ("others") that are **not** crossing candidates — they inform
 the ridge fit only and never appear in the crossing plan.
@@ -410,8 +410,8 @@ result$effect_summary$marker_effect_reliability # sharper effects -> higher reli
 Notes: the training individuals must carry the **same markers** (matching column names) and a
 phenotype for each modelled trait; any that share an ID with a parent are dropped (parents win).
 They do **not** need to be inbred — only the parents that get crossed must satisfy the DH/RIL
-inbred check. Because `var_simple` uses relatedness, not effects, supplying a training set with
-`trait_value_metric = "var_simple"` warns and changes nothing.
+inbred check. Because `parent_distance` uses relatedness, not effects, supplying a training set with
+`trait_value_metric = "le"` warns and changes nothing.
 
 ## The relationship matrix (grm_method)
 
@@ -876,7 +876,7 @@ priority_summary
 
 **Add a decision-ready probability.** `ng_add_p_superior_progeny()` appends the probability that a
 cross throws at least one progeny above a target — a number breeders can act on directly. It reads
-`cross_mean_blend` and `dh_pmv_var` by default:
+`cross_mean_blend` and `pmv` by default:
 
 ```{r}
 plan_priority <- ng_add_p_superior_progeny(
@@ -1043,13 +1043,13 @@ head(yield_scores)
 ```
 
 Important score columns include the cross means (`cross_mean`, `cross_mean_gebv`,
-`cross_mean_blend`), the variance/usefulness columns (`var_simple`, `dh_recomb_var`, `dh_pmv_var`,
-`uc_recomb`, `uc_dh`, `uc_dh_gebv`), and `pair_kinship`. The metrics stay separate on purpose:
+`cross_mean_blend`), the variance/usefulness columns (`parent_distance`, `vpm`, `pmv`,
+`usefulness_vpm`, `usefulness_pmv`, `usefulness_pmv_gebv`), and `pair_kinship`. The metrics stay separate on purpose:
 
 ```r
-yield_scores$var_simple      # relationship-distance diversity proxy
-yield_scores$dh_recomb_var   # recombination variance, also called VPM
-yield_scores$dh_pmv_var      # PMV with diagonal marker-effect uncertainty
+yield_scores$parent_distance      # relationship-distance diversity proxy
+yield_scores$vpm   # recombination variance, also called VPM
+yield_scores$pmv      # PMV with diagonal marker-effect uncertainty
 yield_scores$pair_kinship    # pair relatedness
 ```
 
@@ -1067,7 +1067,7 @@ scores_full_pmv <- ng_score_crosses(
   geno = geno_matrix, effects = effects_full, marker_map = marker_map, ids = ids, pairs = pairs,
   posterior_cov_full = effects_full$beta_cov_full, target = "DH", assume_inbred = FALSE
 )
-scores_full_pmv$dh_pmv_var_full_posterior
+scores_full_pmv$pmv_full_posterior
 ```
 
 ### Build the objective and allocate
@@ -1091,12 +1091,12 @@ for (i in seq_len(nrow(trait_direction_low))) {
                             ids = ids, pairs = pairs, adjusted_pheno = yy, target = "DH",
                             selection_prop = 0.10, recomb_model = "haldane", assume_inbred = FALSE)
 
-  sd_i  <- sqrt(pmax(sc_i$dh_pmv_var, 0))
+  sd_i  <- sqrt(pmax(sc_i$pmv, 0))
   pred  <- if (dir_i == "minimize") sc_i$cross_mean_blend - intensity * sd_i
            else                     sc_i$cross_mean_blend + intensity * sd_i
 
   if (is.null(cross_table))
-    cross_table <- sc_i[, c("parent1", "parent2", "pair_kinship", "var_simple")]
+    cross_table <- sc_i[, c("parent1", "parent2", "pair_kinship", "parent_distance")]
   cross_table[[paste0("pred_", trait)]] <- pred
 }
 
@@ -1146,7 +1146,7 @@ The scores-level marker-management helper (the equivalent of the runner's `marke
 ```{r}
 mspec <- ng_marker_target_spec("SNP_001", direction = "increase", weight = 1)
 aug <- ng_apply_marker_management(scored, geno = geno_matrix, marker_target_spec = mspec,
-                                  gain_col = "uc_dh_gebv", lambda_marker = 0.5)
+                                  gain_col = "usefulness_pmv_gebv", lambda_marker = 0.5)
 plan_marker <- ng_optimize_mating_plan(aug, n_crosses = 100, parent_K = parent_K,
                                        gain_col = "marker_adjusted_gain")
 ```
@@ -1155,8 +1155,8 @@ plan_marker <- ng_optimize_mating_plan(aug, n_crosses = 100, parent_K = parent_K
 
 ```{r}
 balanced_plan <- ng_optimize_balanced_usefulness(
-  scores = yield_scores, n_crosses = 100, gain_col = "uc_dh_gebv",
-  diversity_col = "var_simple", parent_K = parent_K,
+  scores = yield_scores, n_crosses = 100, gain_col = "usefulness_pmv_gebv",
+  diversity_col = "parent_distance", parent_K = parent_K,
   max_crosses_per_parent = 20, min_unique_parents = "auto",
   lambda_group = 1.0, lambda_parent_use = 2.0, method = "evolution"
 )
@@ -1230,7 +1230,7 @@ Probability that progeny exceed a threshold, and expected excess above it (note 
 `mu`, `sigma`/`sd`, `tau`, `k_progeny`):
 
 ```{r}
-sigma <- sqrt(pmax(scored$dh_pmv_var, 0))
+sigma <- sqrt(pmax(scored$pmv, 0))
 
 p_superior <- ng_p_superior_progeny(
   mu = scored$cross_mean_blend, sigma = sigma, tau = 70, k_progeny = 100
@@ -1257,7 +1257,7 @@ scored_prob <- ng_add_p_superior_progeny_multitrait(
   trait_specs = data.frame(
     trait = c("yield", "disease"),
     mean_col = c("pred_yield", "pred_disease"),
-    var_col = c("dh_pmv_var", "dh_pmv_var")
+    var_col = c("pmv", "pmv")
   ),
   tau_lower = c(65, -Inf),
   tau_upper = c(Inf, 3),
@@ -1268,7 +1268,7 @@ scored_prob <- ng_add_p_superior_progeny_multitrait(
 `G_hat` above supplies the cross-trait correlation as a **population** proxy. For the exact,
 recombination-aware **within-family** cross-trait covariance, `ng_cross_trait_within_family_cov()`
 computes `a_t' R a_s` per cross (the two-trait generalization of the single-trait `a'Ra`; its
-diagonal reproduces `dh_recomb_var`). Pass its result via `cross_trait_cov =` to build an exact
+diagonal reproduces `vpm`). Pass its result via `cross_trait_cov =` to build an exact
 `Sigma_c` (it overrides the `G_hat` proxy and the `var_col` diagonal, matched by parent pair):
 
 ```{r}
@@ -1284,7 +1284,7 @@ scored_exact <- ng_add_p_superior_progeny_multitrait(
   scores = scored,
   trait_specs = data.frame(trait = c("yield", "disease"),
                            mean_col = c("pred_yield", "pred_disease"),
-                           var_col  = c("dh_pmv_var", "dh_pmv_var")),
+                           var_col  = c("pmv", "pmv")),
   tau_lower = c(65, -Inf), tau_upper = c(Inf, 3),
   cross_trait_cov = cross_cov     # exact within-family covariance
 )
@@ -1315,13 +1315,13 @@ and `historical_crosses` tables):
 ```{r}
 cal <- ng_validate_metric_calibration(
   scores = scored, realized = realized_families,
-  pred_cols = c("var_simple", "dh_recomb_var", "dh_pmv_var"),
+  pred_cols = c("parent_distance", "vpm", "pmv"),
   realized_var_col = "realized_family_variance"
 )
 
 calibrators <- ng_fit_family_variance_calibrators(
   history = historical_crosses,
-  score_cols = c("var_simple", "dh_pmv_var"),
+  score_cols = c("parent_distance", "pmv"),
   realized_col = "realized_family_variance"
 )
 scored_cal <- ng_apply_family_variance_calibrators(scores = scored, calibrators = calibrators)
@@ -1337,7 +1337,7 @@ adding hard dependencies. All operate on the Part-6 `yield_scores`/`scored`/`eff
 ```{r}
 # PopVar-style usefulness (var_complex is the native wrapper metric; see Part 2)
 popvar_scores <- ng_popvar_style_scores(
-  scores = yield_scores, mean_col = "cross_mean_gebv", var_col = "dh_recomb_var",
+  scores = yield_scores, mean_col = "cross_mean_gebv", var_col = "vpm",
   selection_prop = 0.10, out_col = "popvar_uc"
 )
 

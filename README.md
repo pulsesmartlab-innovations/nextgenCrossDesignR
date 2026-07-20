@@ -1,8 +1,8 @@
-# nextgenCrossDesign
+# nextgen_cross_design
 
-Genomic cross prediction and mate allocation for breeding programs.
+Fresh implementation track for cross prediction and mate allocation.
 
-Version 0.4.0.
+Current package version: `nextgenCrossDesign` 0.4.0.
 
 Shareable backend source tarball for outside-repo developers:
 
@@ -11,8 +11,9 @@ dist/nextgenCrossDesign_0.4.0.tar.gz
 ```
 
 The tarball is backend-only. It contains the R package source, compiled-kernel
-source, help files, and backend README. For an outside frontend developer, share
-the tarball together with:
+source, help files, and backend README. It does not contain the separate
+frontend handoff prototype. For an outside frontend developer, share the
+tarball together with:
 
 - [`docs/frontend/FRONTEND_DEVELOPER_TEMPLATE.md`](docs/frontend/FRONTEND_DEVELOPER_TEMPLATE.md)
 - [`docs/BACKEND_USER_GUIDE.md`](docs/BACKEND_USER_GUIDE.md)
@@ -46,10 +47,9 @@ research workflows.
 
 For the frontend developer handoff, use
 [`docs/frontend/FRONTEND_DEVELOPER_TEMPLATE.md`](docs/frontend/FRONTEND_DEVELOPER_TEMPLATE.md)
-as the main product/UX specification, and
-[`docs/frontend/contracts/`](docs/frontend/contracts/) as the machine-readable
-run contract. This repository is the backend only; the frontend is the separate
-`nextgenCrossWorkbench` Shiny package.
+as the main product/UX specification. The current package-readiness pass is
+backend-focused; do not treat a frontend prototype as part of the 0.3.13 testing
+artifact.
 
 The design is intentionally separated into four layers:
 
@@ -57,6 +57,118 @@ The design is intentionally separated into four layers:
 2. cross-level mean, variance, usefulness, and uncertainty metrics;
 3. candidate screening;
 4. constrained mate allocation and parent contribution optimization.
+
+## v0.4.0 Polyploid, Dominance, and COMA Removal
+
+Version 0.4.0 rebuilds the polyploid path correctly (ploidy-general, additive by
+default, dominance optional) and removes the COMA integration (benchmarked, never
+beat the native allocator; a third-party package the backend no longer depends on).
+Highlights: correct allele-frequency polyploid GRM (`ng_polyploid_grm`, VanRaden or
+Yang) plus a digenic dominance GRM and ploidy-aware QC; additive+dominance marker
+effects and genotypic-value prediction for clonal crops; dominance-aware cross
+scoring (heterosis + within-family variance, double reduction, C++-accelerated); and
+a one-call `ng_design_crosses_poly(dominance =, gain =, double_reduction =, grm_method =)`.
+See `inst/examples/29_polyploid_qc_and_grm.R` through `31_polyploid_dominance_crossing.R`
+and the vignette "Polyploid and dominance-aware design" section.
+
+## v0.3.13 User-Workflow Additions
+
+Version 0.3.13 adds the remaining practical examples users need before
+independent testing: duplicate QC reporting/removal, exact input matching and
+map units, cross-number sweeps, workbook and figure outputs, allocation-method
+comparison, posterior robust mate allocation, and full-posterior PMV shortlist
+reruns. These are available at `inst/examples/14_qc_duplicate_removal_and_reporting.R`
+through `inst/examples/20_full_posterior_pmv_shortlist.R`.
+
+## v0.3.12 User-Workflow Additions
+
+Version 0.3.12 adds sequential, runnable examples for the wrapper choices that
+users commonly confuse. `inst/examples/08_prediction_mode_trait_by_trait.R`
+and `inst/examples/09_prediction_mode_index_as_trait.R` show the two
+`prediction_mode` paths. `inst/examples/10_multitrait_method_auto.R` through
+`inst/examples/13_multitrait_method_desired_gain.R` show `auto`, `weighted`,
+`economic_index`, and `desired_gain` as separate scripts with method-specific
+parameter blocks at the top.
+
+## v0.3.11 User-Workflow Additions
+
+Version 0.3.11 exposes the PMV/posterior workflow knobs directly through
+`ng_run_cross_prediction()`: `method_varPMV`, `ril_mode`,
+`run_posterior_prediction`, `posterior_method`, `nIter`, `burnIn`, and
+`use_parallel`. These are wired into the executed workflow. `method_varPMV =
+"full_posterior"` fits and uses the full marker-effect covariance in PMV
+scoring, and `run_posterior_prediction = TRUE` returns posterior cross-score
+tables in `result$posterior_predictions`. The new
+`inst/examples/07_trait_value_metric_parameter_guide.R` script compares the
+trait-value metrics and runs a small posterior-prediction example.
+
+## v0.3.10 User-Workflow Additions
+
+Version 0.3.10 makes `lpSolve` a required package import because the OCS MIP
+optimizers are part of the user-facing optimizer choices. The optimizer guide at
+`inst/examples/06_optimizer_parameter_guide.R` now runs `auto`,
+`greedy_local`, `repair_local`, `mip_linear`, and `mip_contribution` as normal
+package functionality instead of treating the MIP rows as optional.
+
+## v0.3.9 User-Workflow Additions
+
+Version 0.3.9 adds a dedicated package OCS example at
+`inst/examples/05_ocs_user_run.R`. It keeps `allocation_method = "ocs"` separate
+from the AlphaMate-style examples and shows the OCS-specific crossing capacity,
+parent-use, kinship, optimizer, and penalty settings in one runnable script.
+
+## v0.3.8 User-Workflow Additions
+
+Version 0.3.8 adds a dedicated external AlphaMate example at
+`inst/examples/04_alphamate_executable_user_run.R`. It keeps the package-native
+`alphamate_style` path separate from `allocation_method = "alphamate_executable"`
+and shows all executable-specific settings, including `NG_ALPHAMATE_EXE`,
+runtime paths, work directory retention, evolutionary-search controls, and
+thread count.
+
+## v0.3.7 User-Workflow Additions
+
+Version 0.3.7 adds a native `trait_value_metric = "var_complex"` option to
+`ng_run_cross_prediction()`. This is the package-native PopVar-inspired
+usefulness metric; it does not call PopVar and does not make PopVar a required
+dependency. The same wrapper now exposes `allocation_method`, with
+`"ocs"` for package OCS, `"alphamate_style"` for the package-developed
+AlphaMate-style gain-diversity allocator, and `"alphamate_executable"` when the
+user wants to call an installed AlphaMate executable directly.
+
+The immediate goal is not to clone `genomicMateSelectR`, `SimpleMating`, or AlphaMate. The goal is to combine their strongest ideas in a faster and more explicit framework:
+
+- `genomicMateSelectR`: phased haplotype plus recombination-aware progeny variance, with VPM/PMV distinction.
+- `SimpleMating`: breeder-facing criteria such as MPV, TGV, and usefulness, followed by constrained cross selection.
+- AlphaMate: joint selection, diversity maintenance, and mate allocation with valid mating-plan constraints.
+
+The current working direction is not a single tuned method. The active default
+is now `ng_frontier_policy_ocs*`, an empirical policy layer that delegates to
+the best validated method family for the current parent-count band. It records
+the delegated method, source, band, candidates, and fallback status through
+`frontier_policy_*` and `pred_ng_frontier_policy_*` columns. This policy is not
+crop-agnostic or dataset-agnostic; it is a validated default for the current
+DH/RIL AlphaSimR evidence and should be revalidated when crop biology, marker
+density, training population size, trait architecture, generation scheme, or
+external package availability changes.
+
+For crop portability screens, `ng_crop_aware_policy_ocs*` adds a second,
+auditable dispatch layer. It reads `NG_CROP_*` metadata from the crop-genome
+harness, records `crop_policy_*` and `pred_ng_crop_policy_*` diagnostics, routes
+ordinary diploid DH/RIL screens through the frontier policy, and routes the
+current cassava tetraploid and sugarcane polyploid stress templates to the best
+real-AlphaMate target seen in the smoke grid. This is a practical stress-screen
+policy, not proof of true polyploid generality.
+
+Within the DH/RIL frontier policy, `ng_meta_router_ocs*` remains a core control
+method. It builds complete candidate mating plans and chooses among
+recombination-GEBV, scaled PMV-balanced usefulness, the blended meta portfolio,
+PopVar/SimpleMating-style usefulness when available, and `var_simple`. It uses
+prior-cycle method-family performance, current predicted meta rank, candidate
+gain rank, diversity, and SNP-effect reliability. Keep `ng_meta_router_ocs*`,
+`ng_meta_selector_ocs*`, and `ng_meta_portfolio_ocs*` in validation grids as
+controls. Hard minimum unique-parent constraints are opt-in because they can
+erase too much selection intensity.
 
 ## Multi-Trait Selection
 
@@ -215,7 +327,7 @@ for the release note and validation summary.
 Smoke validation runner:
 
 ```text
-Rscript tools/run_multitrait_validation.R
+Rscript nextgen_cross_design/tools/run_multitrait_validation.R
 ```
 
 The runner writes `*_summary.csv`, `*_selections.csv`, and `*_scores.csv` to
@@ -226,7 +338,7 @@ mixed positive and negative trait directions.
 Replicated validation grid:
 
 ```text
-Rscript tools/run_multitrait_validation_grid.R
+Rscript nextgen_cross_design/tools/run_multitrait_validation_grid.R
 ```
 
 Useful grid overrides:
@@ -248,7 +360,7 @@ parents, and minimize disease and max parent use. Ties are recorded in
 AlphaSimR crop multi-trait validation grid:
 
 ```text
-Rscript tools/run_multitrait_crop_validation_grid.R
+Rscript nextgen_cross_design/tools/run_multitrait_crop_validation_grid.R
 ```
 
 Useful crop-grid overrides:
@@ -277,7 +389,7 @@ control or move to a shortlist realization design.
 Formal multi-trait head-to-head benchmark:
 
 ```text
-Rscript tools/run_head_to_head_benchmark.R
+Rscript nextgen_cross_design/tools/run_head_to_head_benchmark.R
 ```
 
 Useful overrides:
@@ -309,7 +421,7 @@ Breeder-facing visual report:
 
 ```text
 NG_HEAD_TO_HEAD_PREFIX=head_to_head_multitrait_grid_20260507
-Rscript tools/render_head_to_head_visual_report.R
+Rscript nextgen_cross_design/tools/render_head_to_head_visual_report.R
 ```
 
 The renderer reads the benchmark CSVs and writes
@@ -318,17 +430,18 @@ backend: it shows multi-trait response, gain-diversity trade-offs, parent
 contribution, mate allocation, ranked crossing decisions, and evidence caveats
 for style-proxy baselines.
 
-Interactive frontend:
+Interactive lab-server frontend:
 
-A point-and-click Shiny workbench for this engine is maintained separately as
-the `nextgenCrossWorkbench` package:
-<https://github.com/pulsesmartlab-innovations/NextGenCrossDesign>
+```text
+cd nextgen_cross_design/frontend
+npm install
+npm run dev
+```
 
-The workbench does not link against this package. It drives it out-of-process
-through the headless JSON contract in `docs/frontend/contracts/`
-(`ng_run_config.v1` in, `ng_run_result.v1` out) via
-`tools/run_cross_prediction_json.R`, so the frontend installs as pure R while
-the compiled kernel stays here.
+The Next.js app reads `*_dashboard.json` artifacts exported by
+`tools/export_head_to_head_dashboard_json.R`, lists runs, opens an interactive
+decision workspace, tracks backend jobs, and includes a Postgres schema plus a
+separate R worker scaffold for lab-server deployment.
 
 ## Autotetraploid 4x Model
 
@@ -354,13 +467,13 @@ without changing the older diploid/crop stress dispatcher.
 Tiny smoke test:
 
 ```text
-Rscript tests/poly4x_runner_smoke.R
+Rscript nextgen_cross_design/tests/poly4x_runner_smoke.R
 ```
 
 Direct benchmark runner:
 
 ```text
-Rscript tools/run_poly4x_benchmark.R
+Rscript nextgen_cross_design/tools/run_poly4x_benchmark.R
 ```
 
 The direct runner keeps `NG_POLY4X_METHODS` for legacy methods and also accepts
@@ -371,7 +484,7 @@ selection outputs plus `pred_poly4x_policy_*` diagnostics in family outputs.
 Controlled OCS comparison runner:
 
 ```text
-Rscript tools/run_poly4x_controlled_ocs.R
+Rscript nextgen_cross_design/tools/run_poly4x_controlled_ocs.R
 ```
 
 This controlled runner compares decisions on a common parent population by
@@ -391,7 +504,7 @@ now also accept policy aliases `gain`, `diversity`, and `ocs`.
 Small grid:
 
 ```text
-powershell -ExecutionPolicy Bypass -File tools/run_poly4x_grid.ps1
+powershell -ExecutionPolicy Bypass -File nextgen_cross_design/tools/run_poly4x_grid.ps1
 ```
 
 By default the grid runs the legacy 4x methods plus policy modes
@@ -412,23 +525,37 @@ The PMV extension uses `E(beta_k^2) = beta_k^2 + Var(beta_k)` on diagonal terms.
 
 Because Haldane decay is exponential, each chromosome quadratic form is computed exactly with a linear recursion rather than a dense marker-by-marker matrix.
 
+## Benchmark Target
+
+Use both focused realistic runs and parent-size grids. Breeding programs may have 20, 30, 40, 50, 60, 70, 80, or more available parents, so no method should be promoted from one parent-count scenario alone.
+
+The standard parent-size screen compares:
+
+- `var_simple`;
+- expected top-k `var_simple`;
+- recombination-aware DH PMV and calibrated hybrid usefulness;
+- AlphaMate-style gain-diversity mate allocation with adaptive parent-use penalties;
+- state-of-art external baselines where installable.
+
+The first correctness check is not whether a metric wins immediately. It is whether predicted within-family variance has the right direction and scale against realized simulated family variance.
+
 ## Quick Smoke Test
 
 ```r
-source("R/load.R")
-ng_load()
+source("nextgen_cross_design/R/load.R")
+ng_load("nextgen_cross_design")
 ```
 
 Or from the repository root:
 
 ```text
-Rscript tests/smoke_test.R
+Rscript nextgen_cross_design/tests/smoke_test.R
 ```
 
 The standalone AlphaSimR harness defaults to pure R to avoid accidental compiler failures in locked-down sessions. For realistic 5K-marker runs, use the C++ kernel after verifying Rtools/Rcpp:
 
 ```text
-NG_USE_CPP=1 Rscript tools/run_alphasimr_benchmark.R
+NG_USE_CPP=1 Rscript nextgen_cross_design/tools/run_alphasimr_benchmark.R
 ```
 
 For fair reproducible AlphaSimR comparisons, keep `NG_ALPHASIMR_THREADS=1`
@@ -442,7 +569,190 @@ now fits marker effects, computes internal cross scores, and runs external
 PopVar/SimpleMating shortlist rescoring once, then remaps the shared score table
 back to each method's parent IDs. Set `NG_SHARED_SCORING=0` only for debugging.
 
-The validation and benchmark harness (parent-size grids, frontier-policy and
-crop-portability screens, external PopVar/SimpleMating/AlphaMate baselines, and
-the family-calibration diagnostics) is documented in `VALIDATION_PROTOCOL.md`
-and `BENCHMARK_NOTES.md`.
+The realistic benchmark wrapper configures the current OCS frontier:
+
+```text
+powershell -ExecutionPolicy Bypass -File nextgen_cross_design/tools/run_realistic_benchmark.ps1
+```
+
+The general-applicability screen runs multiple parent counts and summarizes the results:
+
+```text
+powershell -ExecutionPolicy Bypass -File nextgen_cross_design/tools/run_parent_size_grid.ps1
+```
+
+The frontier-policy validation grid can be launched directly with:
+
+```text
+powershell -ExecutionPolicy Bypass -File nextgen_cross_design/tools/run_frontier_policy_validation_grid.ps1
+```
+
+Real AlphaMate can also be used as an external mating-plan baseline when the
+official binary is available. By default the wrapper looks for
+`external/AlphaMate/binaries/AlphaMate.exe`, or use `NG_ALPHAMATE_EXE` to point
+to another copy. On this Windows setup the bundled executable also needs
+`libiomp5md.dll`, so set `NG_ALPHAMATE_RUNTIME_PATH` to the directory that
+contains it, for example:
+
+```text
+NG_METHODS=var_simple_topn,alphamate_opt45,ng_frontier_policy_ocs10_lps2
+NG_ALPHAMATE_RUNTIME_PATH=C:\Python\Lib\site-packages\torch\lib
+Rscript nextgen_cross_design/tools/run_alphasimr_benchmark.R
+```
+
+Supported AlphaMate benchmark methods are `alphamate_opt`, `alphamate_opt30`,
+`alphamate_opt45`, `alphamate_opt60`, and other numeric target-degree variants.
+These parse `ModeOptTarget1` output and record `alphamate_*` diagnostics in the
+selection summary.
+
+The replicated 5K real-AlphaMate comparison wrapper is:
+
+```text
+powershell -ExecutionPolicy Bypass -File nextgen_cross_design/tools/run_alphamate_external_grid_5k.ps1
+```
+
+Useful environment overrides:
+
+```text
+NG_GRID_PARENT_SIZES=20,30,40,50,60,70,80
+NG_GRID_EFFECT_TRAINING_MODE=same   # or min80 / min160
+NG_GRID_PREFIX=nextgen_parent_grid
+NG_GRID_GENOME_LENGTH_M=1.0
+NG_BALANCED_DIVERSITY_COL=var_simple_cal
+NG_BALANCED_DIVERSITY_WEIGHT=0.30
+NG_BALANCED_PAIR_KINSHIP_WEIGHT=0.10
+NG_BALANCED_AUTO_MIN_UNIQUE=0
+NG_ADAPTIVE_SCORE_COLS=uc_recomb_gebv,etk_dh_recomb_var_gebv_cal,etk_dh_recomb_var_blend_cal,etk_dh_pmv_scaled_var_blend_cal,etk_var_simple_cal
+NG_ADAPTIVE_TARGET=realized_top10
+NG_ADAPTIVE_FALLBACK_COL=etk_var_simple_cal
+NG_ADAPTIVE_FALLBACK_MAX_WEIGHT=0.35
+NG_META_METHOD_MIN_HISTORY_N=10
+NG_META_METHOD_RECENT_CYCLES=3
+NG_META_ROUTER_FAMILIES=recomb_gebv,pmv_balanced,portfolio,popvar_uc,simple_usefa,var_simple
+NG_META_ROUTER_MIN_HISTORY_N=10
+NG_META_ROUTER_RECENT_CYCLES=3
+NG_META_ROUTER_HISTORY_WEIGHT=0.50
+NG_META_ROUTER_PRIOR_WEIGHT=0.25
+NG_META_ROUTER_PLAN_WEIGHT=0.05
+NG_META_ROUTER_GAIN_WEIGHT=0.10
+NG_META_ROUTER_DIVERSITY_WEIGHT=0.12
+NG_META_ROUTER_RELIABILITY_WEIGHT=0.03
+NG_META_ROUTER_REGRET_GUARD=1
+NG_META_ROUTER_REGRET_PLAN_WEIGHT=0.60
+NG_META_ROUTER_REGRET_GAIN_WEIGHT=0.40
+NG_META_ROUTER_REGRET_MIN_ADVANTAGE=0.75
+NG_META_ROUTER_REGRET_MAX_ROUTER_PENALTY=0.40
+NG_FRONTIER_POLICY_SOURCE=validated_5k_parent_grid_2026_05_03
+NG_FRONTIER_POLICY_FALLBACK_METHOD=ng_meta_router_ocs10_lps2
+```
+
+The built-in frontier policy currently dispatches:
+
+| Parent band | Primary method |
+| ---: | --- |
+| 1-25 | `ng_recomb_gebv_ocs10_lps2` |
+| 26-35 | `ng_meta_selector_ocs10_lps2` |
+| 36-45 | `ng_pmv_scaled_blend_balanced_ocs10_lps2` |
+| 46-55 | `ng_meta_router_ocs10_lps2` |
+| 56-65 | `popvar_uc_ocs10_lps1`, then `simple_usefa_ocs10_lps1`, then router fallback |
+| 66-75 | `ng_meta_selector_ocs10_lps2` |
+| 76+ | `ng_meta_portfolio_ocs10_lps2`, then router fallback |
+
+Override it for a crop/site validation with `NG_FRONTIER_POLICY_SPEC`, for
+example:
+
+```text
+NG_FRONTIER_POLICY_SPEC=20-40=ng_meta_router_ocs10_lps2|var_simple_ocs10_lps2;41+=ng_meta_portfolio_ocs10_lps2
+```
+
+To stress-test portability across crop-like genome architectures, run:
+
+```text
+Rscript nextgen_cross_design/tools/run_crop_genome_scenarios.R
+```
+
+The built-in scenarios now include compact selfing, maize, wheat, barley, field
+pea, potato, cassava, and sugarcane-like templates. They vary chromosome count,
+genetic map length, marker density, QTL density, heritability, founders, and
+effect-training size while keeping the DH/RIL diploid assumption. Wheat,
+potato, cassava tetraploid, and sugarcane entries are marked as diploidized
+stress approximations; this is a portability screen, not a true polyploid or
+crop-specific biological simulator. Key overrides:
+
+```text
+NG_CROP_GRID_SCENARIOS=compact_selfing,maize_like,bread_wheat_hexaploid_approx,barley_like,field_pea_like,potato_tetraploid_stress,cassava_diploid,cassava_tetraploid_stress,sugarcane_polyploid_stress
+NG_CROP_GRID_PARENT_SIZES=20,60,80
+NG_CROP_GRID_REPS=1
+NG_CROP_GRID_CYCLES=2
+NG_CROP_GRID_PREFIX=crop_genome_frontier_grid
+```
+
+To run the same crop screen with real AlphaMate target-degree controls:
+
+```text
+powershell -ExecutionPolicy Bypass -File nextgen_cross_design/tools/run_crop_genome_alphamate_grid.ps1
+```
+
+Both crop wrappers include `ng_crop_aware_policy_ocs10_lps2` by default. In the
+current smoke policy it delegates `cassava_tetraploid_stress` to
+`alphamate_opt60`, `sugarcane_polyploid_stress` to `alphamate_opt45`, and other
+templates to `ng_frontier_policy_ocs10_lps2` before trying AlphaMate fallbacks.
+
+External PopVar and SimpleMating baselines can be run with:
+
+```text
+powershell -ExecutionPolicy Bypass -File nextgen_cross_design/tools/run_external_baseline_benchmark.ps1
+```
+
+The default exact external screen uses 40 parents and 5K markers. Full 80-parent all-pair PopVar/SimpleMating usefulness runs can be much slower, so they should be treated as large validation jobs rather than default smoke tests.
+
+The replicated exact external parent-size screen runs 20, 30, and 40 parents by default:
+
+```text
+powershell -ExecutionPolicy Bypass -File nextgen_cross_design/tools/run_external_parent_size_grid.ps1
+```
+
+For 50 to 80+ parents, use the shortlist/exact-rescore screen. It scores all
+pairs with the fast internal metrics, then runs PopVar and SimpleMating only on
+the strongest shortlist. The default shortlist is the union of top pairs from
+calibrated hybrid expected top-k, hybrid usefulness, `var_simple`, and MPV so
+the external methods are not restricted to one internal score ranking. The
+default is a one-replicate exploratory screen; raise `NG_EXTERNAL_GRID_REPS` or
+`NG_EXTERNAL_GRID_SHORTLIST_MULTIPLIER` for deeper validation:
+
+```text
+powershell -ExecutionPolicy Bypass -File nextgen_cross_design/tools/run_external_shortlist_parent_size_grid.ps1
+```
+
+To diagnose whether a result comes from the score itself or from the mate
+allocation algorithm, run the allocator crosscheck grid. It compares top-N,
+adaptive OCS, and SimpleMating-style constrained selection across the internal,
+PopVar, and SimpleMating score families:
+
+```text
+powershell -ExecutionPolicy Bypass -File nextgen_cross_design/tools/run_allocator_crosscheck_grid.ps1
+```
+
+Before promoting any metric, run the family-level calibration benchmark. It
+scores the same sampled crosses with the internal metrics plus PopVar,
+SimpleMating, and the genomicMateSelectR-derived F1/DH variance check, then
+compares predictions against realized AlphaSimR families:
+
+```text
+powershell -ExecutionPolicy Bypass -File nextgen_cross_design/tools/run_family_calibration_grid.ps1
+```
+
+The diagnostic-first validation protocol is documented in
+`nextgen_cross_design/VALIDATION_PROTOCOL.md`. The wrapper below defaults to
+smoke checks; set `NG_VALIDATION_PHASE` to `family`, `allocator`, `grid`, or
+`all` for the heavier validation phases:
+
+```text
+powershell -ExecutionPolicy Bypass -File nextgen_cross_design/tools/run_framework_validation.ps1
+```
+
+After a diagnostic run, generate the markdown summary report with:
+
+```text
+Rscript nextgen_cross_design/tools/summarize_validation_report.R
+```

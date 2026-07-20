@@ -37,8 +37,8 @@ required_args <- c(
   "ril_mode",
   "run_posterior_prediction",
   "posterior_method",
-  "nIter",
-  "burnIn",
+  "n_iter",
+  "burn_in",
   "use_parallel"
 )
 missing_args <- setdiff(required_args, names(formals(nextgenCrossDesign::ng_run_cross_prediction)))
@@ -108,7 +108,7 @@ write.csv(trait_direction, direction_file, row.names = FALSE, quote = FALSE)
 # Shared OCS capacity settings.
 allocation_method <- "ocs"
 n_crosses <- 5
-max_uses_per_parent <- 4
+max_crosses_per_parent <- 4
 min_unique_parents <- 4
 max_pair_kinship <- Inf
 use_ocs <- TRUE
@@ -227,17 +227,17 @@ run_optimizer <- function(row) {
     ril_mode = "infinite",
     run_posterior_prediction = FALSE,
     posterior_method = "mcmc",
-    nIter = 5000,
-    burnIn = 500,
+    n_iter = 5000,
+    burn_in = 500,
     use_parallel = FALSE,
 
     progeny = "DH",
-    recombination_model = "haldane",
+    recomb_model = "haldane",
     assume_inbred = TRUE,
 
     duplicate_action = "none",
     n_crosses = n_crosses,
-    max_uses_per_parent = max_uses_per_parent,
+    max_crosses_per_parent = max_crosses_per_parent,
     min_unique_parents = min_unique_parents,
     max_pair_kinship = max_pair_kinship,
     optimizer = row$optimizer,

@@ -38,7 +38,7 @@ run <- function(...) ng_run_cross_prediction(
   phenotype = phenotype, genotype = genotype, marker_map = marker_map, trait_direction = direction,
   id_col = "NAME", map_marker_col = "SNP", map_chr_col = "Chr", map_pos_cm_col = "PosCM",
   map_position_unit = "cM", prediction_mode = "trait_by_trait", trait_value_metric = "var_complex",
-  progeny = "DH", duplicate_action = "none", n_crosses = 8L, max_uses_per_parent = 6L,
+  progeny = "DH", duplicate_action = "none", n_crosses = 8L, max_crosses_per_parent = 6L,
   optimizer = "evolution", cross_cost = cross_cost,
   write_outputs = FALSE, write_figures = FALSE, seed = 1L, ...)
 

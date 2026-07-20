@@ -102,7 +102,7 @@ mom_config <- function(root = find_project_root()) {
     selection_prop = env_num("NG_MOM_SELECTION_PROP", 0.10),
     method_varpmv = env_chr("NG_MOM_METHOD_VARPMV", "fast"),
     min_effect_reliability = env_num("NG_MOM_MIN_EFFECT_RELIABILITY", 0.20),
-    recombination_model = env_chr("NG_MOM_RECOMBINATION_MODEL", "haldane"),
+    recomb_model = env_chr("NG_MOM_RECOMBINATION_MODEL", "haldane"),
     max_uses = env_int("NG_MOM_MAX_USES", 6L),
     lambda_group = env_num("NG_MOM_LAMBDA_GROUP", 0.05),
     lambda_mating = env_num("NG_MOM_LAMBDA_MATING", 0.02),
@@ -134,8 +134,8 @@ arm_registry <- function() {
     # --- METRIC axis: the 6 real scoring metrics, all on OCS + the EVOLUTION optimizer ---
     arm("mean_ocs",             "package", "mean",        "pmv", "ocs", "evolution"),
     arm("var_simple_ocs",       "package", "var_simple",  "pmv", "ocs", "evolution"),
-    arm("uc_vpm_ocs",           "package", "uc",          "vpm", "ocs", "evolution"),
-    arm("uc_pmv_ocs",           "package", "uc",          "pmv", "ocs", "evolution"),
+    arm("uc_vpm_ocs",           "package", "usefulness",          "vpm", "ocs", "evolution"),
+    arm("uc_pmv_ocs",           "package", "usefulness",          "pmv", "ocs", "evolution"),
     arm("pmv_ocs",              "package", "pmv",         "pmv", "ocs", "evolution"),
     arm("vpm_ocs",              "package", "vpm",         "pmv", "ocs", "evolution"),
     arm("var_complex_ocs",      "package", "var_complex", "pmv", "ocs", "evolution"),
@@ -144,8 +144,8 @@ arm_registry <- function() {
     # --- ALLOCATION axis: native AlphaMate-style vs OCS (metric + optimizer held fixed) ---
     arm("var_complex_alphamate","package", "var_complex", "pmv", "alphamate_style", "evolution"),
     # --- OPTIMIZER axis: same uc/pmv metric under greedy / mip (vs uc_pmv_ocs = evolution) -
-    arm("uc_pmv_greedy",        "package", "uc",          "pmv", "ocs", "greedy_local"),
-    arm("uc_pmv_mip",           "package", "uc",          "pmv", "ocs", "mip"),
+    arm("uc_pmv_greedy",        "package", "usefulness",          "pmv", "ocs", "greedy_local"),
+    arm("uc_pmv_mip",           "package", "usefulness",          "pmv", "ocs", "mip"),
     # --- comparators ----------------------------------------------------------
     arm("simple_usefa_select",  "simplemating"),
     arm("random",               "random")
@@ -226,9 +226,9 @@ select_crosses_package <- function(arm, parents, SP, cfg, seed) {
     progeny = "RIL", ril_mode = "infinite",
     selection_prop = cfg$selection_prop,
     min_effect_reliability = cfg$min_effect_reliability,
-    recombination_model = cfg$recombination_model,
+    recomb_model = cfg$recomb_model,
     duplicate_action = "none",
-    n_crosses = cfg$n_crosses, max_uses_per_parent = cfg$max_uses,
+    n_crosses = cfg$n_crosses, max_crosses_per_parent = cfg$max_uses,
     allocation_method = arm$allocation_method, optimizer = arm$optimizer,
     use_ocs = TRUE,
     lambda_group = cfg$lambda_group, lambda_mating = cfg$lambda_mating,
@@ -258,7 +258,7 @@ select_crosses_simplemating <- function(parents, SP, cfg, seed, sm_external) {
   if (!sm_external) {
     # native evidence-based proxy: UC-VPM (== SimpleMating per metric-merit study)
     proxy <- data.frame(arm = "simplemating_native", engine = "package",
-                        trait_value_metric = "uc", uc_variance_source = "vpm",
+                        trait_value_metric = "usefulness", uc_variance_source = "vpm",
                         allocation_method = "ocs", optimizer = "evolution",
                         strategy = NA, stringsAsFactors = FALSE)
     return(select_crosses_package(proxy, parents, SP, cfg, seed))
@@ -278,7 +278,7 @@ select_crosses_simplemating <- function(parents, SP, cfg, seed, sm_external) {
                                    adjusted_pheno = ph, type = "RIL", generation = 6L,
                                    prop_sel = cfg$selection_prop, engine = "external", fallback = "none")
   plan <- ng_select_simplemating(sc, score_col = "simple_usefa", n_crosses = cfg$n_crosses,
-                                 parent_K = ng_parent_kinship(geno),
+                                 parent_kinship = ng_parent_kinship(geno),
                                  max_crosses_per_parent = cfg$max_uses, min_crosses_per_parent = 1L,
                                  culling_pairwise_k = cfg$simplemating_culling_k)
   as.matrix(plan[, c("parent1", "parent2")])

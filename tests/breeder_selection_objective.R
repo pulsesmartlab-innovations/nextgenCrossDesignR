@@ -87,7 +87,7 @@ strict_err <- tryCatch(
     scores = scores,
     objective = obj_strict,
     n_crosses = 2L,
-    parent_K = diag(6)
+    parent_kinship = diag(6)
   ),
   error = function(e) conditionMessage(e)
 )
@@ -120,13 +120,13 @@ stopifnot(all(c("desired_gain_coefficients", "desired_gain_target") %in% names(d
 stopifnot(all(names(desired_meta$desired_gain_coefficients) == obj_desired$traits$trait))
 
 parents <- sort(unique(c(scores$parent1, scores$parent2)))
-parent_K <- diag(length(parents))
-rownames(parent_K) <- colnames(parent_K) <- parents
+parent_kinship <- diag(length(parents))
+rownames(parent_kinship) <- colnames(parent_kinship) <- parents
 plan <- ng_optimize_breeder_selection_plan(
   scores = scores,
   objective = obj_threshold,
   n_crosses = 2L,
-  parent_K = parent_K,
+  parent_kinship = parent_kinship,
   optimizer_method = "greedy_local",
   max_crosses_per_parent = 2L
 )

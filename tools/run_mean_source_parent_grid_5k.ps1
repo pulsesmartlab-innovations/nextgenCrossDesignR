@@ -28,7 +28,7 @@ Set-DefaultEnv "NG_GRID_SHARED_SCORING" "1"
 Set-DefaultEnv "NG_GRID_CALIBRATION_POOL" "global"
 Set-DefaultEnv "NG_GRID_CALIBRATION_MIN_N" "20"
 Set-DefaultEnv "NG_GRID_EXTERNAL_SHORTLIST_MULTIPLIER" "5"
-Set-DefaultEnv "NG_GRID_EXTERNAL_SHORTLIST_SCORE_COL" "etk_dh_pmv_scaled_var_blend_cal,etk_dh_recomb_var_blend_cal,etk_dh_pmv_scaled_var_gebv_cal,etk_dh_recomb_var_gebv_cal,etk_dh_pmv_scaled_var_adj_cal,etk_dh_recomb_var_adj_cal,mpv,var_simple"
+Set-DefaultEnv "NG_GRID_EXTERNAL_SHORTLIST_SCORE_COL" "etk_dh_pmv_scaled_var_blend_cal,etk_vpm_blend_cal,etk_dh_pmv_scaled_var_gebv_cal,etk_vpm_gebv_cal,etk_dh_pmv_scaled_var_adj_cal,etk_vpm_adj_cal,mid_parent_value,parent_distance"
 Set-DefaultEnv "NG_GRID_METHODS" "var_simple_topn,popvar_uc_topn,simple_usefa_topn,ng_recomb_gebv_cal_topn,ng_recomb_adj_cal_topn,ng_recomb_blend_cal_topn,ng_pmv_gebv_cal_topn,ng_pmv_adj_cal_topn,ng_pmv_blend_cal_topn,popvar_uc_ocs10_lps1,simple_usefa_ocs10_lps1,ng_recomb_gebv_ocs10_lps1,ng_recomb_adj_ocs10_lps1,ng_recomb_blend_ocs10_lps1,ng_pmv_gebv_ocs10_lps1,ng_pmv_adj_ocs10_lps1,ng_pmv_blend_ocs10_lps1"
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")

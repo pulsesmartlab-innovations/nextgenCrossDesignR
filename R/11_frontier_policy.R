@@ -40,7 +40,7 @@ ng_frontier_default_policy <- function(source = ng_frontier_default_source()) {
   # NOTE (v0.1.0): the validated 2026-05-03 frontier was built on the unit-mixed
   # `etk_dh_pmv_scaled_var_blend_cal` score, which was removed in v0.1.0. The
   # `ng_pmv_blend_balanced_ocs10_lps2` slot below is the in-units replacement that
-  # uses `etk_dh_pmv_var_blend_cal`. The frontier dispatch is RETAINED so existing
+  # uses `etk_pmv_blend_cal`. The frontier dispatch is RETAINED so existing
   # users get a sensible default per parent-count band, but the headline claim
   # "ng_frontier_policy_ocs10_lps2 beat AlphaMate in 7/7 bands" MUST be
   # re-validated against the corrected metrics before being repromoted; see

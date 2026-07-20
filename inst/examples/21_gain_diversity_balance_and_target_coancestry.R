@@ -12,7 +12,7 @@
 # exhaust genetic variance and gain plateaus, so managing diversity EXPLICITLY is the recommended
 # true-use pattern. In the 10-rep x 25-cycle study (tools/run_method_optimizer_metric_study.R) the
 # balanced strategy dial (strategy = "balanced") was the 2nd-best arm for cycle-25 realized gain --
-# just behind var_simple and clearly ahead of the pure-usefulness cluster -- because it keeps
+# just behind le and clearly ahead of the pure-usefulness cluster -- because it keeps
 # variance in the tank. Use the dial or target_coancestry on top of a good merit metric (example 27
 # combines it with cost/management), rather than chasing pure usefulness.
 
@@ -44,7 +44,7 @@ run <- function(...) ng_run_cross_prediction(
   map_marker_col = "SNP", map_chr_col = "Chr", map_pos_cm_col = "PosCM", map_position_unit = "cM",
   prediction_mode = "trait_by_trait", trait_value_metric = "var_complex",
   multi_trait_method = "weighted", trait_weights = c(1, 1),
-  n_crosses = 8L, max_uses_per_parent = 4L, use_ocs = TRUE,
+  n_crosses = 8L, max_crosses_per_parent = 4L, use_ocs = TRUE,
   duplicate_action = "none", write_outputs = FALSE, write_figures = FALSE, seed = 1L, ...)
 
 # --- (a) strategy dial: high_gain vs balanced vs diversity ---
@@ -83,7 +83,7 @@ scores <- ng_score_crosses(geno_mat, fit, marker_map = mm, ids = ids,
                            adjusted_pheno = setNames(phenotype$yield, ids), target = "DH")
 K <- ng_parent_kinship(geno_mat)
 frontier_json <- file.path(tempdir(), "mating_frontier.json")
-ng_write_frontier_json(scores, n_crosses = 8L, parent_K = K, output_path = frontier_json)
+ng_write_frontier_json(scores, n_crosses = 8L, parent_kinship = K, output_path = frontier_json)
 stopifnot(file.exists(frontier_json))
 
 message("Gain-diversity balance + constrained OCS example completed.")

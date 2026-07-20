@@ -1,11 +1,7 @@
 local({ .h <- file.path("tools", "ng_project_libpath.R"); if (file.exists(.h)) { source(.h); ng_prepend_project_lib(".Rlib") } else .libPaths(c(normalizePath(".Rlib", mustWork = FALSE), .libPaths())) })
 
-root <- normalizePath(getwd(), mustWork = TRUE)
-if (!file.exists(file.path(root, "R", "load.R"))) {
-  # Legacy layout: package sits in a nextgen_cross_design/ subdirectory of the workspace.
-  root <- normalizePath(file.path(getwd(), "nextgen_cross_design"), mustWork = FALSE)
-  if (!dir.exists(root)) root <- normalizePath(file.path(".."), mustWork = TRUE)
-}
+root <- normalizePath(file.path(getwd(), "nextgen_cross_design"), mustWork = FALSE)
+if (!dir.exists(root)) root <- normalizePath(file.path(".."), mustWork = TRUE)
 source(file.path(root, "R", "load.R"))
 ng_load(root, use_cpp = FALSE, verbose = FALSE)
 

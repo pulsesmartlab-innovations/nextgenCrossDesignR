@@ -45,8 +45,8 @@ banded_k <- ng_dh_recomb_variance_pairs_banded(
   marker_map = sorted$marker_map, ids = ids, pairs = pairs,
   recomb_model = "kosambi", target = "DH", window_cm = window_cm_test
 )
-err_var <- max(abs(dense_k$dh_recomb_var - banded_k$dh_recomb_var))
-err_pmv <- max(abs(dense_k$dh_pmv_var - banded_k$dh_pmv_var))
+err_var <- max(abs(dense_k$vpm - banded_k$vpm))
+err_pmv <- max(abs(dense_k$pmv - banded_k$pmv))
 if (err_var > 1e-10 || err_pmv > 1e-10) {
   stop(sprintf("banded vs dense Kosambi mismatch: var err=%g, pmv err=%g",
                err_var, err_pmv))
@@ -63,8 +63,8 @@ dense_ril <- ng_dh_recomb_variance_pairs_dense(
   marker_map = sorted$marker_map, ids = ids, pairs = pairs,
   recomb_model = "haldane", target = "RIL", window_cm = window_cm_test
 )
-err_var_ril <- max(abs(dense_ril$dh_recomb_var - banded_ril$dh_recomb_var))
-err_pmv_ril <- max(abs(dense_ril$dh_pmv_var - banded_ril$dh_pmv_var))
+err_var_ril <- max(abs(dense_ril$vpm - banded_ril$vpm))
+err_pmv_ril <- max(abs(dense_ril$pmv - banded_ril$pmv))
 if (err_var_ril > 1e-10 || err_pmv_ril > 1e-10) {
   stop(sprintf("banded vs dense Haldane-RIL mismatch: var err=%g, pmv err=%g",
                err_var_ril, err_pmv_ril))
@@ -114,7 +114,7 @@ t_dense <- system.time({
     recomb_model = "kosambi", target = "DH", window_cm = window_cm_perf
   )
 })
-err_perf <- max(abs(res_band$dh_recomb_var - res_dense$dh_recomb_var))
+err_perf <- max(abs(res_band$vpm - res_dense$vpm))
 if (err_perf > 1e-10) {
   stop(sprintf("1000-marker banded vs dense numeric mismatch: %g", err_perf))
 }
@@ -183,8 +183,8 @@ Sys.unsetenv("NGCD_BANDED_RATIO")
 key_b <- paste(sc_band$parent1, sc_band$parent2, sep = "x")
 key_d <- paste(sc_dense$parent1, sc_dense$parent2, sep = "x")
 stopifnot(identical(key_b, key_d))
-err_disp_var <- max(abs(sc_band$dh_recomb_var - sc_dense$dh_recomb_var))
-err_disp_pmv <- max(abs(sc_band$dh_pmv_var - sc_dense$dh_pmv_var))
+err_disp_var <- max(abs(sc_band$vpm - sc_dense$vpm))
+err_disp_pmv <- max(abs(sc_band$pmv - sc_dense$pmv))
 if (err_disp_var > 1e-10 || err_disp_pmv > 1e-10) {
   stop(sprintf(
     "dispatch banded vs dense mismatch in ng_score_crosses: var=%g pmv=%g",

@@ -20,8 +20,8 @@ required_args <- c(
   "ril_mode",
   "run_posterior_prediction",
   "posterior_method",
-  "nIter",
-  "burnIn",
+  "n_iter",
+  "burn_in",
   "use_parallel"
 )
 missing_args <- setdiff(required_args, names(formals(nextgenCrossDesign::ng_run_cross_prediction)))
@@ -127,21 +127,21 @@ prediction_mode <- "trait_by_trait"
 
 variance_method <- "var_complex"
 # Choices:
-#   "uc"         mean +/- selection intensity * within-family SD
+#   "usefulness"  mean +/- selection intensity * within-family SD
 #   "pmv"        usefulness using PMV as the variance source
 #   "vpm"        usefulness using recombination variance as the variance source
 #   "var_complex" native PopVar-inspired complex usefulness metric
-#   "var_simple" relationship-distance proxy for screening
+#   "le"         relationship-distance proxy for screening
 #   "mean"       cross mean only
 trait_value_metric <- variance_method
 
 uc_variance_source <- "pmv"
-# Used when variance_method = "uc".
-# Choices: "pmv", "vpm", "var_simple"
+# Used when trait_value_metric = "usefulness".
+# Choices: "pmv", "vpm", "le"
 
 selection_prop <- 0.10
 progeny <- "RILs"                  # "DH", "DHs", "RIL", or "RILs"
-recombination_model <- "haldane"   # "haldane" or "kosambi"
+recomb_model <- "haldane"   # "haldane" or "kosambi"
 assume_inbred <- FALSE
 min_effect_reliability <- 0.35
 
@@ -151,8 +151,8 @@ method_varPMV <- "fast"
 ril_mode <- "infinite"
 run_posterior_prediction <- FALSE
 posterior_method <- "mcmc"
-nIter <- 5000
-burnIn <- 500
+n_iter <- 5000
+burn_in <- 500
 use_parallel <- FALSE
 
 # -------------------------------------------------------------------------
@@ -176,7 +176,7 @@ threshold_penalty_autoscale <- TRUE
 
 max_crosses <- 100
 n_crosses <- max_crosses
-max_uses_per_parent <- 20
+max_crosses_per_parent <- 20
 min_unique_parents <- NULL
 max_pair_kinship <- Inf
 min_variance <- NULL
@@ -214,7 +214,7 @@ alphamate_mode <- "ModeOptTarget1"
 #   "ModeMinCoancestry"    emphasize diversity
 
 alphamate_target_degree <- 45
-alphamate_max_contributions <- max_uses_per_parent
+alphamate_max_contributions <- max_crosses_per_parent
 alphamate_number_of_parents <- NULL
 alphamate_lambda_group <- NULL
 alphamate_lambda_grid <- NULL
@@ -283,12 +283,12 @@ result <- ng_run_cross_prediction(
   ril_mode = ril_mode,
   run_posterior_prediction = run_posterior_prediction,
   posterior_method = posterior_method,
-  nIter = nIter,
-  burnIn = burnIn,
+  n_iter = n_iter,
+  burn_in = burn_in,
   use_parallel = use_parallel,
 
   progeny = progeny,
-  recombination_model = recombination_model,
+  recomb_model = recomb_model,
   assume_inbred = assume_inbred,
 
   duplicate_action = duplicate_action,
@@ -298,7 +298,7 @@ result <- ng_run_cross_prediction(
   duplicate_min_compared_markers = duplicate_min_compared_markers,
 
   n_crosses = n_crosses,
-  max_uses_per_parent = max_uses_per_parent,
+  max_crosses_per_parent = max_crosses_per_parent,
   min_unique_parents = min_unique_parents,
   max_pair_kinship = max_pair_kinship,
   optimizer = optimizer,
@@ -365,7 +365,7 @@ stopifnot(all(c("pos_bp", "pos_cm") %in% names(map_clean)))
 # -------------------------------------------------------------------------
 
 if (isTRUE(run_cross_number_sweep)) {
-  parent_K <- ng_parent_kinship(geno_clean)
+  parent_kinship <- ng_parent_kinship(geno_clean)
   sweep_optimizer <- switch(
     optimizer,
     lp = "mip_linear",
@@ -380,8 +380,8 @@ if (isTRUE(run_cross_number_sweep)) {
     scores = result$candidate_crosses,
     K_range = k_range,
     gain_col = "multi_trait_score",
-    parent_K = parent_K,
-    max_crosses_per_parent = max_uses_per_parent,
+    parent_kinship = parent_kinship,
+    max_crosses_per_parent = max_crosses_per_parent,
     lambda_group = lambda_group,
     lambda_mating = lambda_mating,
     method = sweep_optimizer,
@@ -430,19 +430,19 @@ run_settings <- data.frame(
   setting = c(
     "prediction_mode", "trait_value_metric", "uc_variance_source",
     "multi_trait_method", "optimizer", "solver", "allocation_method", "use_ocs",
-    "n_crosses", "max_uses_per_parent", "progeny", "recombination_model",
+    "n_crosses", "max_crosses_per_parent", "progeny", "recomb_model",
     "map_position_unit", "bp_per_cm", "method_varPMV", "ril_mode",
     "alphamate_mode", "alphamate_target_degree", "alphamate_max_contributions",
-    "run_posterior_prediction", "posterior_method", "nIter", "burnIn",
+    "run_posterior_prediction", "posterior_method", "n_iter", "burn_in",
     "use_parallel"
   ),
   value = as.character(c(
     prediction_mode, trait_value_metric, uc_variance_source,
     multi_trait_method, optimizer, solver, allocation_method, use_ocs,
-    n_crosses, max_uses_per_parent, progeny, recombination_model,
+    n_crosses, max_crosses_per_parent, progeny, recomb_model,
     map_position_unit, bp_per_cm, method_varPMV, ril_mode,
     alphamate_mode, alphamate_target_degree, alphamate_max_contributions,
-    run_posterior_prediction, posterior_method, nIter, burnIn,
+    run_posterior_prediction, posterior_method, n_iter, burn_in,
     use_parallel
   )),
   stringsAsFactors = FALSE

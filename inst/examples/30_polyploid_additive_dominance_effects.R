@@ -2,8 +2,8 @@
 #
 # WHY DOMINANCE? For CLONAL crops (cassava, potato, sugarcane) you deploy the propagated clone, so
 # the relevant merit is TOTAL GENOTYPIC value = breeding value (additive) + dominance deviation.
-# ng_fit_polyploid_effects(model = "additive_dominance") estimates both marker-effect components;
-# ng_predict_polyploid_value(type = "genotypic" | "breeding") returns either.
+# ng_polyploid_fit_effects(model = "additive_dominance") estimates both marker-effect components;
+# ng_polyploid_predict_value(type = "genotypic" | "breeding") returns either.
 #   * select CLONES for release/propagation on "genotypic" value;
 #   * rank PARENTS for expected crossing gain on "breeding" value.
 # Additive-only (model = "additive") stays the robust default when non-additive variance is small or
@@ -11,8 +11,8 @@
 
 library(nextgenCrossDesign)
 
-if (!"ng_fit_polyploid_effects" %in% getNamespaceExports("nextgenCrossDesign")) {
-  stop("This example needs a build with ng_fit_polyploid_effects. Reinstall the current tarball.",
+if (!"ng_polyploid_fit_effects" %in% getNamespaceExports("nextgenCrossDesign")) {
+  stop("This example needs a build with ng_polyploid_fit_effects. Reinstall the current tarball.",
        call. = FALSE)
 }
 
@@ -35,14 +35,14 @@ names(phenotype) <- ids
 train <- ids[1:180]; test <- ids[181:240]
 
 # --- fit additive-only vs additive + dominance on the training clones ---
-fit_a <- ng_fit_polyploid_effects(dosage[train, ], phenotype[train], ploidy = ploidy, model = "additive")
-fit_ad <- ng_fit_polyploid_effects(dosage[train, ], phenotype[train], ploidy = ploidy,
+fit_a <- ng_polyploid_fit_effects(dosage[train, ], phenotype[train], ploidy = ploidy, model = "additive")
+fit_ad <- ng_polyploid_fit_effects(dosage[train, ], phenotype[train], ploidy = ploidy,
                                    model = "additive_dominance")
 
 # --- predict on held-out clones ---
-gv_a <- ng_predict_polyploid_value(fit_a, dosage[test, ], type = "genotypic")   # additive-only
-gv_ad <- ng_predict_polyploid_value(fit_ad, dosage[test, ], type = "genotypic") # additive + dominance
-bv_ad <- ng_predict_polyploid_value(fit_ad, dosage[test, ], type = "breeding")  # breeding value only
+gv_a <- ng_polyploid_predict_value(fit_a, dosage[test, ], type = "genotypic")   # additive-only
+gv_ad <- ng_polyploid_predict_value(fit_ad, dosage[test, ], type = "genotypic") # additive + dominance
+bv_ad <- ng_polyploid_predict_value(fit_ad, dosage[test, ], type = "breeding")  # breeding value only
 
 cat(sprintf("Held-out genotypic-value accuracy: additive-only %.3f  |  additive+dominance %.3f\n",
             cor(gv_a, true_gv[test]), cor(gv_ad, true_gv[test])))

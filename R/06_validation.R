@@ -1,6 +1,6 @@
 ng_union_screen <- function(scores,
                             keep = 500,
-                            metric_cols = c("uc_dh_gebv", "uc_dh", "mpv", "dh_pmv_var", "var_simple"),
+                            metric_cols = c("usefulness_pmv_gebv", "usefulness_pmv", "mid_parent_value", "pmv", "parent_distance"),
                             min_keep_per_metric = NULL) {
   scores <- as.data.frame(scores, stringsAsFactors = FALSE)
   metric_cols <- intersect(metric_cols, names(scores))
@@ -52,7 +52,7 @@ ng_hc3_slope_se <- function(x, y) {
 
 ng_validate_metric_calibration <- function(scores,
                                            realized,
-                                           pred_cols = c("var_simple", "dh_recomb_var", "dh_pmv_var"),
+                                           pred_cols = c("parent_distance", "vpm", "pmv"),
                                            realized_var_col = "realized_var",
                                            realized_mean_col = "realized_mean",
                                            ci_level = 0.95) {

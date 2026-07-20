@@ -7,8 +7,8 @@ required_tokens <- c(
   "find_project_root", "run_metric_merit_study", "metric_merit_config",
   "is_this_script", "runMacs",                       # realistic LD (NOT quickHaplo)
   # the metrics being raced
-  "uc_vpm", "uc_pmv", "uc_var_simple", "simplemating", "cross_mean_gebv",
-  "uc_recomb_gebv", "uc_dh_gebv",
+  "uc_vpm", "uc_pmv", "usefulness_le", "simplemating", "cross_mean_gebv",
+  "usefulness_vpm_gebv", "usefulness_pmv_gebv",
   # unbiased true-effect yardstick + measures
   "true_uc", "ng_dh_recomb_variance_pairs", "rank_acc", "topk_merit",
   "ng_selection_intensity",

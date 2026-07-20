@@ -37,7 +37,7 @@ res <- ng_run_cross_prediction(
   trait_direction = direction, id_col = "NAME",
   map_marker_col = "SNP", map_chr_col = "Chr", map_pos_cm_col = "PosCM", map_position_unit = "cM",
   prediction_mode = "trait_by_trait", trait_value_metric = "var_complex",
-  n_crosses = 8L, max_uses_per_parent = 4L, use_ocs = TRUE, lethal_spec = lspec,
+  n_crosses = 8L, max_crosses_per_parent = 4L, use_ocs = TRUE, lethal_spec = lspec,
   duplicate_action = "none", write_outputs = FALSE, write_figures = FALSE, seed = 1L)
 key <- paste(pmin(res$selected_crosses$parent1, res$selected_crosses$parent2),
              pmax(res$selected_crosses$parent1, res$selected_crosses$parent2))
@@ -53,14 +53,14 @@ scores <- ng_score_crosses(gm, fit, marker_map = mm, ids = ids,
 mspec <- ng_marker_target_spec("M01", direction = "increase", weight = 1)
 # attach the steering score + expected progeny allele frequency, and blend into a gain col
 aug <- ng_apply_marker_management(scores, geno = gm, marker_target_spec = mspec,
-                                  gain_col = "uc_dh_gebv", lambda_marker = 0.5)
+                                  gain_col = "usefulness_pmv_gebv", lambda_marker = 0.5)
 stopifnot("marker_target_score" %in% names(aug), "marker_adjusted_gain" %in% names(aug))
 K <- ng_parent_kinship(gm)
-plan_steered <- ng_optimize_mating_plan(aug, n_crosses = 8L, parent_K = K,
+plan_steered <- ng_optimize_mating_plan(aug, n_crosses = 8L, parent_kinship = K,
                                         gain_col = "marker_adjusted_gain")
 # the steered plan should favour crosses with a higher marker-target score (and higher
 # expected M01 frequency) than a gain-only plan
-plan_gain <- ng_optimize_mating_plan(aug, n_crosses = 8L, parent_K = K, gain_col = "uc_dh_gebv")
+plan_gain <- ng_optimize_mating_plan(aug, n_crosses = 8L, parent_kinship = K, gain_col = "usefulness_pmv_gebv")
 cat(sprintf("mean marker_target_score:      steered=%.3f  gain-only=%.3f\n",
             mean(plan_steered$marker_target_score), mean(plan_gain$marker_target_score)))
 cat(sprintf("mean expected M01 progeny freq: steered=%.3f  gain-only=%.3f\n",

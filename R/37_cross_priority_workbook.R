@@ -179,7 +179,7 @@ ng_cpw_candidate_table <- function(scored, selected) {
   if (is.null(scored)) return(data.frame())
   scored <- as.data.frame(scored, stringsAsFactors = FALSE, check.names = FALSE)
   if (!nrow(scored)) return(data.frame())
-  score_col <- if ("multi_trait_score" %in% names(scored)) "multi_trait_score" else ng_cpw_first_col(scored, c("priority_index", "uc_dh_gebv"))
+  score_col <- if ("multi_trait_score" %in% names(scored)) "multi_trait_score" else ng_cpw_first_col(scored, c("priority_index", "usefulness_pmv_gebv"))
   if (!is.null(score_col)) {
     ord <- order(-ng_cpw_numeric(scored[[score_col]]), scored$parent1, scored$parent2, na.last = TRUE)
     scored <- scored[ord, , drop = FALSE]

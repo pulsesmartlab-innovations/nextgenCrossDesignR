@@ -11,7 +11,7 @@ pp <- sprintf("P%02d", seq_len(np))
 cmb <- t(utils::combn(np, 2L))
 scores <- data.frame(parent1 = pp[cmb[, 1]], parent2 = pp[cmb[, 2]],
                      stringsAsFactors = FALSE)
-scores$uc_dh_gebv <- rnorm(nrow(scores), 10, 2)
+scores$usefulness_pmv_gebv <- rnorm(nrow(scores), 10, 2)
 L <- matrix(rnorm(np * np, 0, 0.3), np, np)
 G <- crossprod(L) / np; diag(G) <- diag(G) + 1; dimnames(G) <- list(pp, pp)
 scores$pair_kinship <- G[cbind(match(scores$parent1, pp), match(scores$parent2, pp))]
@@ -19,7 +19,7 @@ scores$expected_progeny_inbreeding <- pmax(0, scores$pair_kinship / 2)
 n_crosses <- 12L
 
 # --- 1. frontier payload: schema, points, strategy presets ---
-fp <- ng_frontier_export_payload(scores, n_crosses, parent_K = G)
+fp <- ng_frontier_export_payload(scores, n_crosses, parent_kinship = G)
 stopifnot(identical(fp$schema, "ng_mating_frontier.v1"))
 stopifnot(nrow(fp$points) >= 5L)
 stopifnot(all(c("diversity_emphasis", "mean_gain", "group_coancestry",
@@ -34,8 +34,8 @@ stopifnot(identical(hp$schema, "ng_progeny_inbreeding_histogram.v1"))
 stopifnot(sum(hp$bins$count) == nrow(scores))
 
 # --- 3. run-comparison payload ---
-r1 <- ng_optimize_mating_plan(scores, n_crosses, parent_K = G, strategy = "high_gain")
-r2 <- ng_optimize_mating_plan(scores, n_crosses, parent_K = G, strategy = "diversity")
+r1 <- ng_optimize_mating_plan(scores, n_crosses, parent_kinship = G, strategy = "high_gain")
+r2 <- ng_optimize_mating_plan(scores, n_crosses, parent_kinship = G, strategy = "diversity")
 cp <- ng_run_comparison_payload(list(high_gain = r1, diversity = r2))
 stopifnot(identical(cp$schema, "ng_run_comparison.v1"))
 stopifnot(length(cp$runs) == 2L)
@@ -44,7 +44,7 @@ stopifnot(identical(cp$runs[[1]]$run, "high_gain"))
 # --- 4. JSON writers round-trip through jsonlite ---
 if (requireNamespace("jsonlite", quietly = TRUE)) {
   td <- tempfile("ngexport_"); dir.create(td)
-  f1 <- ng_write_frontier_json(scores, n_crosses, parent_K = G,
+  f1 <- ng_write_frontier_json(scores, n_crosses, parent_kinship = G,
                                output_path = file.path(td, "frontier.json"))
   f2 <- ng_write_progeny_inbreeding_histogram_json(scores,
                                output_path = file.path(td, "hist.json"), breaks = 10L)

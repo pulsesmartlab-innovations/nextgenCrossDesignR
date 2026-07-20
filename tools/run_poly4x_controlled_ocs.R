@@ -118,13 +118,13 @@ poly4x_controlled_population_metrics <- function(pop, base_best, rep_id, cycle, 
   )
 }
 
-poly4x_controlled_select <- function(config, scores, cfg, parent_K) {
+poly4x_controlled_select <- function(config, scores, cfg, parent_kinship) {
   if (config %in% ng_poly4x_policy_modes()) {
     selected <- ng_poly4x_policy(
       scores = scores,
       n_crosses = cfg$top_crosses,
       mode = config,
-      parent_K = parent_K
+      parent_kinship = parent_kinship
     )
     selected$config <- config
     return(selected)
@@ -138,7 +138,7 @@ poly4x_controlled_select <- function(config, scores, cfg, parent_K) {
     selected <- ng_poly4x_ocs(
       scores,
       cfg$top_crosses,
-      parent_K,
+      parent_kinship,
       max_crosses_per_parent = 4L,
       lambda_group = 0.5,
       lambda_parent_use = 1.0
@@ -150,7 +150,7 @@ poly4x_controlled_select <- function(config, scores, cfg, parent_K) {
     selected <- ng_poly4x_ocs(
       scores,
       cfg$top_crosses,
-      parent_K,
+      parent_kinship,
       max_crosses_per_parent = 3L,
       lambda_group = 1.0,
       lambda_parent_use = 2.0
@@ -316,10 +316,10 @@ for (rep_id in seq_len(cfg$reps)) {
       selection_prop = cfg$selection_prop,
       seed = cfg$seed + rep_id * 10000L + cycle * 100L
     )
-    parent_K <- attr(scores, "parent_K")
+    parent_kinship <- attr(scores, "parent_kinship")
     next_pops <- setNames(vector("list", length(cfg$configs)), cfg$configs)
     for (config in cfg$configs) {
-      selected <- poly4x_controlled_select(config, scores, cfg, parent_K)
+      selected <- poly4x_controlled_select(config, scores, cfg, parent_kinship)
       method <- unique(selected$poly4x_method)
       if (length(method) != 1L) ng_stop("controlled selection produced ambiguous method labels")
       selected$rep <- rep_id
@@ -329,7 +329,7 @@ for (rep_id in seq_len(cfg$reps)) {
       selected$advance_config <- cfg$advance_config
       selected_out[[paste(rep_id, config, cycle, sep = "_")]] <- selected
 
-      selected_counts <- ng_parent_counts(selected, rownames(parent_K))
+      selected_counts <- ng_parent_counts(selected, rownames(parent_kinship))
       selected_contrib <- selected_counts / sum(selected_counts)
       plan_summary <- attr(selected, "summary")
       selection_summary_out[[paste(rep_id, config, cycle, sep = "_")]] <- data.frame(
@@ -342,7 +342,7 @@ for (rep_id in seq_len(cfg$reps)) {
         unique_parents = sum(selected_counts > 0),
         max_parent_use = max(selected_counts),
         parent_use_sq = sum(selected_contrib * selected_contrib),
-        group_coancestry = ng_group_coancestry(selected_counts, parent_K),
+        group_coancestry = ng_group_coancestry(selected_counts, parent_kinship),
         mean_pair_kinship = mean(selected$pair_kinship, na.rm = TRUE),
         mean_pred_poly4x_usefulness = mean(selected$poly4x_usefulness, na.rm = TRUE),
         used_dh = 0L,

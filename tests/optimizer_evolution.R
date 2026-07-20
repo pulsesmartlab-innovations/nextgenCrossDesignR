@@ -24,7 +24,7 @@ obj <- function(p, lg, lpu) {
 grid <- list(c(lg = 0, lpu = 0), c(lg = 1, lpu = 0), c(lg = 1, lpu = 2), c(lg = 2, lpu = 1))
 for (cfg in grid) {
   lg <- cfg[["lg"]]; lpu <- cfg[["lpu"]]
-  common <- list(scores = sc, n_crosses = 12, parent_K = K, max_crosses_per_parent = 5,
+  common <- list(scores = sc, n_crosses = 12, parent_kinship = K, max_crosses_per_parent = 5,
                  lambda_group = lg, lambda_parent_use = lpu, lambda_parent_use_mode = "absolute")
   g  <- do.call(ng_optimize_mating_plan, c(common, method = "greedy_local"))
   r  <- do.call(ng_optimize_mating_plan, c(common, method = "repair_local"))

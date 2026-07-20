@@ -19,8 +19,8 @@ required_args <- c(
   "ril_mode",
   "run_posterior_prediction",
   "posterior_method",
-  "nIter",
-  "burnIn",
+  "n_iter",
+  "burn_in",
   "use_parallel"
 )
 missing_args <- setdiff(required_args, names(formals(nextgenCrossDesign::ng_run_cross_prediction)))
@@ -147,17 +147,17 @@ if (!has_alphamate) {
     ril_mode = "infinite",
     run_posterior_prediction = FALSE,
     posterior_method = "mcmc",
-    nIter = 5000,
-    burnIn = 500,
+    n_iter = 5000,
+    burn_in = 500,
     use_parallel = FALSE,
 
     progeny = "DH",
-    recombination_model = "haldane",
+    recomb_model = "haldane",
     assume_inbred = TRUE,
 
     duplicate_action = "none",
     n_crosses = 5,
-    max_uses_per_parent = 3,
+    max_crosses_per_parent = 3,
     optimizer = "greedy_local",
     allocation_method = allocation_method,
     use_ocs = TRUE,

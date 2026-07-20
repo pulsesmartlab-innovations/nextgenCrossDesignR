@@ -729,7 +729,7 @@ checkout:
 Legacy root-level workspace material is intentionally ignored. This includes
 root `R/`, `src/`, `tests/`, `tools/`, `results/`, `external/`, large local
 data files, RStudio state, and old standalone scripts. The package code lives
-under ``.
+under `nextgen_cross_design/`.
 
 ## Evidence-Backed Claims
 

@@ -197,8 +197,8 @@ DataFrame ng_dh_recomb_pairs_cpp(NumericMatrix geno,
   }
 
   return DataFrame::create(
-    Named("dh_recomb_var") = dh_recomb_var,
-    Named("dh_pmv_var") = dh_pmv_var
+    Named("vpm") = dh_recomb_var,
+    Named("pmv") = dh_pmv_var
   );
 }
 
@@ -297,9 +297,9 @@ DataFrame ng_dh_recomb_pairs_full_posterior_cpp(NumericMatrix geno,
   }
 
   return DataFrame::create(
-    Named("dh_recomb_var") = out_v,
-    Named("dh_pmv_var") = out_pmv_diag,
-    Named("dh_pmv_var_full_posterior") = out_pmv_full
+    Named("vpm") = out_v,
+    Named("pmv") = out_pmv_diag,
+    Named("pmv_full_posterior") = out_pmv_full
   );
 }
 
@@ -372,8 +372,8 @@ DataFrame ng_dh_recomb_pairs_banded_cpp(NumericMatrix geno,
   }
 
   return DataFrame::create(
-    Named("dh_recomb_var") = out_v,
-    Named("dh_pmv_var") = out_pmv
+    Named("vpm") = out_v,
+    Named("pmv") = out_pmv
   );
 }
 
@@ -520,7 +520,7 @@ NumericMatrix ng_bcm_posterior_sampler_cpp(NumericMatrix X_centered,
 //   linear_gain      length-n_pairs vector of scores$.linear_gain
 //   pair_p1_zero     length-n_pairs 0-based row index of parent1 into parents[]
 //   pair_p2_zero     length-n_pairs 0-based row index of parent2 into parents[]
-//   parent_K         p x p kinship matrix (rows/cols indexed 0..p-1, same
+//   parent_kinship         p x p kinship matrix (rows/cols indexed 0..p-1, same
 //                    order as the parent_p1/p2 indices)
 //   selected_zero    initial selection (0-based pair indices)
 //   max_per_parent   parent-use cap
@@ -534,7 +534,7 @@ NumericMatrix ng_bcm_posterior_sampler_cpp(NumericMatrix X_centered,
 IntegerVector ng_local_swap_cpp(NumericVector linear_gain,
                                 IntegerVector pair_p1_zero,
                                 IntegerVector pair_p2_zero,
-                                NumericMatrix parent_K,
+                                NumericMatrix parent_kinship,
                                 IntegerVector selected_zero,
                                 int max_per_parent,
                                 double lambda_group,
@@ -542,8 +542,8 @@ IntegerVector ng_local_swap_cpp(NumericVector linear_gain,
                                 int local_iter,
                                 int off_pool_size) {
   const int n_pairs = linear_gain.size();
-  const int p = parent_K.nrow();
-  if (parent_K.ncol() != p) Rcpp::stop("parent_K must be square");
+  const int p = parent_kinship.nrow();
+  if (parent_kinship.ncol() != p) Rcpp::stop("parent_kinship must be square");
   if (pair_p1_zero.size() != n_pairs || pair_p2_zero.size() != n_pairs) {
     Rcpp::stop("pair index vectors must match length(linear_gain)");
   }
@@ -572,7 +572,7 @@ IntegerVector ng_local_swap_cpp(NumericVector linear_gain,
     // cvec[i] = cnt[i] * inv_total. q = sum_{i,j} cvec[i] * K(i,j) * cvec[j].
     // Compute K %*% cvec then dot with cvec; outer over column j is stride-1
     // in column-major.
-    const double* K_ptr = parent_K.begin();
+    const double* K_ptr = parent_kinship.begin();
     std::vector<double> kc(static_cast<std::size_t>(p), 0.0);
     for (int j = 0; j < p; ++j) {
       if (cnt[static_cast<std::size_t>(j)] == 0) continue;

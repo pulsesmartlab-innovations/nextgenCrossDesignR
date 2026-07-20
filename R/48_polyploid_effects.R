@@ -10,7 +10,7 @@
 # breeding value  BV = intercept + W beta_add ;  genotypic value  GV = BV + D beta_dom.
 
 # Fit additive (and optionally digenic dominance) marker effects from dosage + a phenotype.
-ng_fit_polyploid_effects <- function(dosage,
+ng_polyploid_fit_effects <- function(dosage,
                                      y,
                                      ploidy = 2L,
                                      model = c("additive_dominance", "additive"),
@@ -48,10 +48,10 @@ ng_fit_polyploid_effects <- function(dosage,
 
 # Predict breeding value (additive) or genotypic value (additive + dominance) for dosage samples.
 # For CLONAL selection use type = "genotypic"; for expected progeny/breeding gain use "breeding".
-ng_predict_polyploid_value <- function(fit, dosage, type = c("genotypic", "breeding")) {
-  if (!inherits(fit, "ng_polyploid_effects")) ng_stop("fit must come from ng_fit_polyploid_effects")
+ng_polyploid_predict_value <- function(fit, dosage, type = c("genotypic", "breeding")) {
+  if (!inherits(fit, "ng_polyploid_effects")) ng_stop("fit must come from ng_polyploid_fit_effects")
   type <- match.arg(type)
-  M <- ng_poly4x_as_dosage_matrix(dosage, ploidy = fit$ploidy, name = "dosage")
+  M <- ng_polyploid_as_dosage_matrix(dosage, ploidy = fit$ploidy, name = "dosage")
   miss <- setdiff(fit$markers, colnames(M))
   if (length(miss)) ng_stop("dosage is missing ", length(miss), " markers the model was fit on")
   M <- M[, fit$markers, drop = FALSE]

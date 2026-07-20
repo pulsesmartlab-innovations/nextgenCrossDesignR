@@ -78,9 +78,9 @@ ng_predict_variance_calibrator <- function(calibrator, x, min_var = 1e-8) {
 
 ng_fit_family_variance_calibrators <- function(history,
                                                pred_map = c(
-                                                 var_simple = "pred_var_simple",
-                                                 dh_recomb_var = "pred_dh_recomb_var",
-                                                 dh_pmv_var = "pred_dh_pmv_var"
+                                                 parent_distance = "pred_parent_distance",
+                                                 vpm = "pred_vpm",
+                                                 pmv = "pred_pmv"
                                                ),
                                                realized_col = "realized_var",
                                                min_n = 20L) {
@@ -120,9 +120,9 @@ ng_apply_family_variance_calibrators <- function(scores,
       etk_gebv_col <- paste0("etk_", score_col, "_gebv_cal")
       scores[[etk_gebv_col]] <- scores$cross_mean_gebv + intensity * sqrt(pmax(scores[[cal_col]], 0))
     }
-    if ("cross_mean_adjusted_pheno" %in% names(scores)) {
+    if ("cross_mean_adj" %in% names(scores)) {
       etk_adj_col <- paste0("etk_", score_col, "_adj_cal")
-      scores[[etk_adj_col]] <- scores$cross_mean_adjusted_pheno + intensity * sqrt(pmax(scores[[cal_col]], 0))
+      scores[[etk_adj_col]] <- scores$cross_mean_adj + intensity * sqrt(pmax(scores[[cal_col]], 0))
     }
     if ("cross_mean_blend" %in% names(scores)) {
       etk_blend_col <- paste0("etk_", score_col, "_blend_cal")
@@ -196,7 +196,7 @@ ng_default_portfolio_weights <- function(scores, score_cols) {
     } else {
       "blend"
     }
-    v <- if (grepl("dh_pmv_var", col, fixed = TRUE)) "pmv" else "recomb"
+    v <- if (grepl("pmv", col, fixed = TRUE)) "pmv" else "recomb"
     out[col] <- mean_w[[m]] * var_w[[v]]
   }
   out / sum(out)
@@ -235,12 +235,12 @@ ng_add_local_portfolio_scores <- function(scores,
                                           target_col = "realized_top10",
                                           min_history_n = 20L,
                                           score_cols = c(
-                                            "etk_dh_recomb_var_gebv_cal",
-                                            "etk_dh_recomb_var_adj_cal",
-                                            "etk_dh_recomb_var_blend_cal",
-                                            "etk_dh_pmv_var_gebv_cal",
-                                            "etk_dh_pmv_var_adj_cal",
-                                            "etk_dh_pmv_var_blend_cal"
+                                            "etk_vpm_gebv_cal",
+                                            "etk_vpm_adj_cal",
+                                            "etk_vpm_blend_cal",
+                                            "etk_pmv_gebv_cal",
+                                            "etk_pmv_adj_cal",
+                                            "etk_pmv_blend_cal"
                                           ),
                                           history_weight = NULL) {
   scores <- as.data.frame(scores, stringsAsFactors = FALSE)
@@ -283,10 +283,10 @@ ng_add_local_portfolio_scores <- function(scores,
   var_terms <- matrix(0, nrow = nrow(scores), ncol = length(weights))
   colnames(var_terms) <- names(weights)
   for (col in names(weights)) {
-    var_col <- if (grepl("dh_pmv_var", col, fixed = TRUE)) {
-      "dh_pmv_var_cal"
+    var_col <- if (grepl("pmv", col, fixed = TRUE)) {
+      "pmv_cal"
     } else {
-      "dh_recomb_var_cal"
+      "vpm_cal"
     }
     if (var_col %in% names(scores)) {
       var_terms[, col] <- pmax(as.numeric(scores[[var_col]]), 0)
@@ -359,15 +359,15 @@ ng_adaptive_stack_prior_weights <- function(scores,
     max_weight = 0.35
   )
   for (col in score_cols) {
-    out[col] <- if (col %in% c("uc_recomb_gebv", "etk_dh_recomb_var_gebv_cal")) {
+    out[col] <- if (col %in% c("usefulness_vpm_gebv", "etk_vpm_gebv_cal")) {
       0.55 + 0.25 * rel
     } else if (grepl("recomb_var_blend", col, fixed = TRUE) ||
-               grepl("uc_recomb_blend", col, fixed = TRUE)) {
+               grepl("usefulness_vpm_blend", col, fixed = TRUE)) {
       0.22 + 0.18 * (1 - rel)
-    } else if (grepl("dh_pmv_var", col, fixed = TRUE) ||
-               col %in% c("uc_dh_gebv", "uc_dh_blend")) {
+    } else if (grepl("pmv", col, fixed = TRUE) ||
+               col %in% c("usefulness_pmv_gebv", "usefulness_pmv_blend")) {
       0.20 + 0.15 * rel
-    } else if (grepl("var_simple", col, fixed = TRUE)) {
+    } else if (grepl("parent_distance", col, fixed = TRUE)) {
       0.05 + 0.20 * (1 - rel) + 0.15 * pressure + fallback_boost
     } else if (grepl("portfolio", col, fixed = TRUE)) {
       0.12
@@ -381,15 +381,15 @@ ng_adaptive_stack_prior_weights <- function(scores,
 }
 
 ng_variance_col_for_score <- function(score_col) {
-  if (grepl("dh_pmv_var", score_col, fixed = TRUE) ||
-      score_col %in% c("uc_dh_gebv", "uc_dh_blend", "uc_dh_adj", "uc_dh")) {
-    "dh_pmv_var_cal"
-  } else if (grepl("var_simple", score_col, fixed = TRUE)) {
-    "var_simple_cal"
+  if (grepl("pmv", score_col, fixed = TRUE) ||
+      score_col %in% c("usefulness_pmv_gebv", "usefulness_pmv_blend", "usefulness_pmv_adj", "usefulness_pmv")) {
+    "pmv_cal"
+  } else if (grepl("parent_distance", score_col, fixed = TRUE)) {
+    "parent_distance_cal"
   } else if (grepl("portfolio", score_col, fixed = TRUE)) {
     "ng_portfolio_var"
   } else {
-    "dh_recomb_var_cal"
+    "vpm_cal"
   }
 }
 
@@ -398,18 +398,18 @@ ng_add_adaptive_stack_scores <- function(scores,
                                          target_col = "realized_top10",
                                          min_history_n = 20L,
                                          score_cols = c(
-                                           "uc_recomb_gebv",
-                                           "etk_dh_recomb_var_gebv_cal",
-                                           "etk_dh_recomb_var_blend_cal",
-                                           "etk_dh_pmv_var_gebv_cal",
-                                           "etk_dh_pmv_var_blend_cal",
-                                           "etk_var_simple_cal"
+                                           "usefulness_vpm_gebv",
+                                           "etk_vpm_gebv_cal",
+                                           "etk_vpm_blend_cal",
+                                           "etk_pmv_gebv_cal",
+                                           "etk_pmv_blend_cal",
+                                           "etk_parent_distance_cal"
                                          ),
                                          n_parents = NULL,
                                          n_crosses = NULL,
                                          history_weight = NULL,
                                          champion_weight = NULL,
-                                         fallback_col = "etk_var_simple_cal",
+                                         fallback_col = "etk_parent_distance_cal",
                                          fallback_weight = NULL,
                                          fallback_max_weight = 0.35) {
   scores <- as.data.frame(scores, stringsAsFactors = FALSE)
@@ -550,14 +550,14 @@ ng_meta_portfolio_prior_weights <- function(scores,
   for (col in score_cols) {
     out[col] <- if (identical(col, "ng_adaptive_score")) {
       0.28 + 0.12 * pressure + 0.10 * (1 - rel)
-    } else if (col %in% c("uc_recomb_gebv", "etk_dh_recomb_var_gebv_cal")) {
+    } else if (col %in% c("usefulness_vpm_gebv", "etk_vpm_gebv_cal")) {
       0.22 + 0.30 * rel + 0.12 * large_parent
-    } else if (grepl("dh_pmv_var", col, fixed = TRUE) ||
-               col %in% c("uc_dh_gebv", "uc_dh_blend")) {
+    } else if (grepl("pmv", col, fixed = TRUE) ||
+               col %in% c("usefulness_pmv_gebv", "usefulness_pmv_blend")) {
       0.18 + 0.18 * rel + 0.20 * pressure
     } else if (col %in% c("popvar_uc", "simple_usefa")) {
       0.18 + 0.12 * rel + 0.18 * middle_parent
-    } else if (grepl("var_simple", col, fixed = TRUE)) {
+    } else if (grepl("parent_distance", col, fixed = TRUE)) {
       0.10 + 0.35 * (1 - rel)
     } else {
       0.08
@@ -593,12 +593,12 @@ ng_meta_method_patterns <- function(score_cols) {
       # Adaptive score is already a composite of base metrics. Let cross-level
       # calibration weight it, but do not let method history self-reinforce it.
       NA_character_
-    } else if (col %in% c("uc_recomb_gebv", "etk_dh_recomb_var_gebv_cal")) {
+    } else if (col %in% c("usefulness_vpm_gebv", "etk_vpm_gebv_cal")) {
       "^ng_recomb_gebv_ocs"
-    } else if (grepl("dh_pmv_var", col, fixed = TRUE) ||
-               col %in% c("uc_dh_gebv", "uc_dh_blend")) {
+    } else if (grepl("pmv", col, fixed = TRUE) ||
+               col %in% c("usefulness_pmv_gebv", "usefulness_pmv_blend")) {
       "^ng_pmv_blend_balanced_ocs|^ng_pmv_gebv_ocs"
-    } else if (grepl("var_simple", col, fixed = TRUE)) {
+    } else if (grepl("parent_distance", col, fixed = TRUE)) {
       "^var_simple_ocs|^var_simple_select|^var_simple_allocator|^var_simple_mip|^var_simple_repair"
     } else if (identical(col, "popvar_uc")) {
       "^popvar_uc_ocs|^popvar_uc_select"
@@ -712,9 +712,9 @@ ng_add_meta_portfolio_scores <- function(scores,
                                          method_recent_cycles = 3L,
                                          score_cols = c(
                                            "ng_adaptive_score",
-                                           "uc_recomb_gebv",
-                                           "etk_dh_pmv_var_blend_cal",
-                                           "etk_var_simple_cal",
+                                           "usefulness_vpm_gebv",
+                                           "etk_pmv_blend_cal",
+                                           "etk_parent_distance_cal",
                                            "popvar_uc",
                                            "simple_usefa"
                                          ),

@@ -49,8 +49,8 @@ stopifnot(!isTRUE(all.equal(scenario$trait_profile$corA, diag(3L))))
 stopifnot(identical(scenario$crop_scenario$scenario[[1]], "compact_selfing"))
 stopifnot(is.matrix(scenario$parent_genotype))
 stopifnot(!any(scenario$parent_genotype == 1, na.rm = TRUE))
-stopifnot(is.matrix(scenario$parent_K))
-stopifnot(identical(rownames(scenario$parent_K), scenario$parent_values$parent))
+stopifnot(is.matrix(scenario$parent_kinship))
+stopifnot(identical(rownames(scenario$parent_kinship), scenario$parent_values$parent))
 
 ocs_direct <- ng_run_multitrait_validation(
   scores = scenario$scores,
@@ -60,15 +60,15 @@ ocs_direct <- ng_run_multitrait_validation(
   seed = 31L,
   methods = "auto",
   allocator = "ocs",
-  parent_K = scenario$parent_K,
+  parent_kinship = scenario$parent_kinship,
   ocs_lambda_group = 0.20
 )
 stopifnot("group_coancestry" %in% names(ocs_direct$summary))
 stopifnot("lambda_group" %in% names(ocs_direct$summary))
 stopifnot(ocs_direct$summary$lambda_group[[1]] == 0.20)
 stopifnot(is.finite(ocs_direct$summary$group_coancestry[[1]]))
-manual_counts <- ng_parent_counts(ocs_direct$selections, rownames(scenario$parent_K))
-manual_group <- ng_group_coancestry(manual_counts, scenario$parent_K)
+manual_counts <- ng_parent_counts(ocs_direct$selections, rownames(scenario$parent_kinship))
+manual_group <- ng_group_coancestry(manual_counts, scenario$parent_kinship)
 stopifnot(abs(ocs_direct$summary$group_coancestry[[1]] - manual_group) < 1e-8)
 
 methods <- c("auto", "economic_index", "desired_gain")

@@ -41,7 +41,7 @@ $env:NG_FAMILY_ALLOCATION_METHOD = Get-EnvValue "NG_GRID_FAMILY_ALLOCATION_METHO
 $env:NG_SHARED_SCORING = Get-EnvValue "NG_GRID_SHARED_SCORING" "1"
 $env:NG_EXTERNAL_SHORTLIST_N = Get-EnvValue "NG_GRID_EXTERNAL_SHORTLIST_N" ""
 $env:NG_EXTERNAL_SHORTLIST_MULTIPLIER = Get-EnvValue "NG_GRID_EXTERNAL_SHORTLIST_MULTIPLIER" ""
-$env:NG_EXTERNAL_SHORTLIST_SCORE_COL = Get-EnvValue "NG_GRID_EXTERNAL_SHORTLIST_SCORE_COL" "etk_dh_pmv_var_blend_cal,uc_dh_blend,var_simple,mpv"
+$env:NG_EXTERNAL_SHORTLIST_SCORE_COL = Get-EnvValue "NG_GRID_EXTERNAL_SHORTLIST_SCORE_COL" "etk_pmv_blend_cal,usefulness_pmv_blend,parent_distance,mid_parent_value"
 $env:NG_SIMPLEMATING_MIN_CROSS = Get-EnvValue "NG_GRID_SIMPLEMATING_MIN_CROSS" "1"
 $env:NG_SIMPLEMATING_MAX_SEARCH = Get-EnvValue "NG_GRID_SIMPLEMATING_MAX_SEARCH" "100000"
 $env:NG_SIMPLEMATING_CULLING_K = Get-EnvValue "NG_GRID_SIMPLEMATING_CULLING_K" ""
@@ -72,7 +72,7 @@ foreach ($nParents in $parentSizes) {
   $env:NG_FAMILY_SELECTED_TOP_N = [string]$nParents
 
   Write-Host "Running parent-size scenario: parents=$nParents top_crosses=$topCrosses effect_training_n=$effectTrainingN"
-  Rscript tools\run_alphasimr_benchmark.R
+  Rscript nextgen_cross_design\tools\run_alphasimr_benchmark.R
   if ($LASTEXITCODE -ne 0) {
     throw "AlphaSimR benchmark failed for parents=$nParents with exit code $LASTEXITCODE"
   }
@@ -80,7 +80,7 @@ foreach ($nParents in $parentSizes) {
 
 $env:NG_GRID_PREFIX = $gridPrefix
 $env:NG_GRID_PARENT_SIZES = ($parentSizes -join ",")
-Rscript tools\summarize_parent_size_grid.R
+Rscript nextgen_cross_design\tools\summarize_parent_size_grid.R
 if ($LASTEXITCODE -ne 0) {
   throw "Parent-size grid summary failed with exit code $LASTEXITCODE"
 }

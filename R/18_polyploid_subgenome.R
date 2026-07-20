@@ -8,7 +8,7 @@ ng_poly_subgenome_names <- function(x) {
   names_x
 }
 
-ng_poly_subgenome_as_dosage_list <- function(geno_by_subgenome, name = "geno_by_subgenome") {
+ng_polyploid_subgenome_as_dosage_list <- function(geno_by_subgenome, name = "geno_by_subgenome") {
   if (!is.list(geno_by_subgenome) || !length(geno_by_subgenome)) {
     ng_stop(name, " must be a non-empty named list")
   }
@@ -89,8 +89,8 @@ ng_poly_diploid_parent_relationship <- function(geno) {
   K
 }
 
-ng_poly_subgenome_parent_relationship <- function(geno_by_subgenome, weights = NULL) {
-  geno_by_subgenome <- ng_poly_subgenome_as_dosage_list(geno_by_subgenome)
+ng_polyploid_subgenome_grm <- function(geno_by_subgenome, weights = NULL) {
+  geno_by_subgenome <- ng_polyploid_subgenome_as_dosage_list(geno_by_subgenome)
   subgenomes <- names(geno_by_subgenome)
   weights <- ng_poly_subgenome_weights(subgenomes, weights)
 
@@ -174,19 +174,19 @@ ng_poly_add_diagnostics <- function(out,
   out
 }
 
-ng_poly_subgenome_score_crosses <- function(geno_by_subgenome,
+ng_polyploid_subgenome_score_crosses <- function(geno_by_subgenome,
                                             effects_by_subgenome,
                                             candidate_pairs = NULL,
                                             model_decision = NULL,
                                             selection_prop = 0.10,
                                             weights = NULL,
                                             validation_source = "phase2a_deterministic_core") {
-  geno_by_subgenome <- ng_poly_subgenome_as_dosage_list(geno_by_subgenome)
+  geno_by_subgenome <- ng_polyploid_subgenome_as_dosage_list(geno_by_subgenome)
   effects_by_subgenome <- ng_poly_subgenome_as_effects_list(effects_by_subgenome, geno_by_subgenome)
   parent_ids <- rownames(geno_by_subgenome[[1]])
   if (is.null(candidate_pairs)) candidate_pairs <- ng_make_pairs(parent_ids, include_self = FALSE)
   candidate_pairs <- ng_poly_validate_candidate_pairs(candidate_pairs, parent_ids)
-  parent_K <- ng_poly_subgenome_parent_relationship(geno_by_subgenome, weights = weights)
+  parent_kinship <- ng_polyploid_subgenome_grm(geno_by_subgenome, weights = weights)
   intensity <- ng_selection_intensity(selection_prop)
 
   subgenomes <- names(geno_by_subgenome)
@@ -215,25 +215,25 @@ ng_poly_subgenome_score_crosses <- function(geno_by_subgenome,
     poly_gain = as.numeric(gain),
     poly_var = as.numeric(variance),
     poly_usefulness = as.numeric(gain + intensity * sqrt(pmax(variance, 0))),
-    pair_kinship = ng_poly4x_pair_coancestry(parent_K, candidate_pairs),
+    pair_kinship = ng_poly4x_pair_coancestry(parent_kinship, candidate_pairs),
     stringsAsFactors = FALSE
   )
-  attr(out, "parent_K") <- parent_K
+  attr(out, "parent_kinship") <- parent_kinship
   attr(out, "subgenome_names") <- subgenomes
   out <- ng_poly_add_diagnostics(out, model_decision = model_decision, validation_source = validation_source)
-  attr(out, "parent_K") <- parent_K
+  attr(out, "parent_kinship") <- parent_kinship
   attr(out, "subgenome_names") <- subgenomes
   out
 }
 
-ng_poly_policy_modes <- function() {
+ng_polyploid_policy_modes <- function() {
   c("gain", "diversity", "ocs")
 }
 
 ng_poly_normalize_policy_mode <- function(mode) {
   mode <- ng_poly_trim1(mode)
-  if (!nzchar(mode) || !(mode %in% ng_poly_policy_modes())) {
-    ng_stop("mode must be one of: ", paste(ng_poly_policy_modes(), collapse = ", "))
+  if (!nzchar(mode) || !(mode %in% ng_polyploid_policy_modes())) {
+    ng_stop("mode must be one of: ", paste(ng_polyploid_policy_modes(), collapse = ", "))
   }
   mode
 }
@@ -255,10 +255,10 @@ ng_poly_add_policy_diagnostics <- function(plan, mode, source_scores) {
   plan
 }
 
-ng_poly_policy <- function(scores,
+ng_polyploid_policy <- function(scores,
                            n_crosses,
                            mode = "gain",
-                           parent_K = NULL,
+                           parent_kinship = NULL,
                            max_crosses_per_parent = NULL,
                            method = "auto",
                            local_iter = 1000L,
@@ -266,14 +266,14 @@ ng_poly_policy <- function(scores,
                            ...) {
   scores <- as.data.frame(scores, stringsAsFactors = FALSE)
   mode <- ng_poly_normalize_policy_mode(mode)
-  if (is.null(parent_K)) parent_K <- attr(scores, "parent_K")
+  if (is.null(parent_kinship)) parent_kinship <- attr(scores, "parent_kinship")
 
   if (identical(mode, "gain")) {
     plan <- ng_poly4x_select_topn(scores, n_crosses, "poly_usefulness", "ng_poly_gain_topn")
     return(ng_poly_add_policy_diagnostics(plan, mode, scores))
   }
 
-  if (is.null(parent_K)) ng_stop("parent_K is required for OCS polyploid policy modes")
+  if (is.null(parent_kinship)) ng_stop("parent_kinship is required for OCS polyploid policy modes")
   if (is.null(max_crosses_per_parent)) {
     max_crosses_per_parent <- if (identical(mode, "diversity")) 3L else 4L
   }
@@ -281,7 +281,7 @@ ng_poly_policy <- function(scores,
     scores = scores,
     n_crosses = n_crosses,
     gain_col = "poly_usefulness",
-    parent_K = parent_K,
+    parent_kinship = parent_kinship,
     max_crosses_per_parent = max_crosses_per_parent,
     lambda_group = if (identical(mode, "diversity")) 1.0 else 0.5,
     lambda_parent_use = if (identical(mode, "diversity")) 2.0 else 1.0,

@@ -9,7 +9,7 @@
 #   mean           - mid-parent GEBV (gain only)
 #   uc_vpm         - usefulness with the recombination variance      (mean + i*sqrt(VPM))
 #   uc_pmv         - usefulness with the posterior-mean variance      (mean + i*sqrt(PMV)) [default]
-#   uc_var_simple  - usefulness with the naive relationship-distance "variance"
+#   usefulness_le  - usefulness with the naive relationship-distance "variance"
 #   simplemating   - SimpleMating additive usefulness (external; skipped if unavailable)
 #
 # Conditions swept (the ones that change the answer): training-set size (effect-estimation
@@ -116,14 +116,14 @@ score_metrics <- function(cfg, g_snp, mm_snp, g_qtl, mm_qtl, true_eff, train_g, 
   tmean <- 0.5 * (gv_true[pairs$parent1] + gv_true[pairs$parent2])
   tvar <- ng_dh_recomb_variance_pairs(g_qtl, beta = as.numeric(true_eff),
             beta_var = rep(0, length(true_eff)), marker_map = mm_qtl,
-            ids = rownames(g_qtl), pairs = pairs, target = "DH", use_cpp = cfg$use_cpp)$dh_recomb_var
+            ids = rownames(g_qtl), pairs = pairs, target = "DH", use_cpp = cfg$use_cpp)$vpm
   true_uc <- as.numeric(tmean) + i_int * sqrt(pmax(tvar, 0))
 
   metrics <- list(
     mean          = sc$cross_mean_gebv,
-    uc_vpm        = sc$uc_recomb_gebv,
-    uc_pmv        = sc$uc_dh_gebv,
-    uc_var_simple = sc$cross_mean_gebv + i_int * sqrt(pmax(sc$var_simple, 0))
+    uc_vpm        = sc$usefulness_vpm_gebv,
+    uc_pmv        = sc$usefulness_pmv_gebv,
+    usefulness_le = sc$cross_mean_gebv + i_int * sqrt(pmax(sc$parent_distance, 0))
   )
   if (isTRUE(want_sm)) {
     sm <- tryCatch(ng_add_simplemating_scores(sc, geno = g_snp, effects = fit, marker_map = mm_snp,

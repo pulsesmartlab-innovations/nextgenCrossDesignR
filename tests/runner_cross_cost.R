@@ -29,7 +29,7 @@ run <- function(...) ng_run_cross_prediction(
   id_col = "NAME", map_marker_col = "SNP", map_chr_col = "Chr", map_pos_col = "PosBP",
   map_pos_cm_divisor = 1e6, prediction_mode = "trait_by_trait",
   trait_value_metric = "var_complex", duplicate_action = "none",
-  n_crosses = 8L, max_uses_per_parent = 6L, optimizer = "evolution",
+  n_crosses = 8L, max_crosses_per_parent = 6L, optimizer = "evolution",
   write_outputs = FALSE, write_figures = FALSE, seed = 3L, ...)
 
 sel_cost <- function(res) {

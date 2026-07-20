@@ -1,6 +1,6 @@
 # Enlarging the marker-effect training set with extra individuals that are NOT candidate parents.
 #
-# Marker effects (used by every metric except var_simple) are sharper when trained on more
+# Marker effects (used by every metric except le) are sharper when trained on more
 # genotyped + phenotyped individuals. `ng_run_cross_prediction()` lets you add extra "training-only"
 # individuals via training_genotype / training_phenotype: they enlarge the ridge fit but are never
 # crossed. The real parents are exactly the main genotype/phenotype tables; the training-only
@@ -39,7 +39,7 @@ run <- function(...) ng_run_cross_prediction(
   genotype = genotype, phenotype = phenotype, marker_map = marker_map, trait_direction = direction,
   id_col = "NAME", map_position_unit = "bp", bp_per_cm = 1e6,
   trait_value_metric = "var_complex", optimizer = "evolution", allocation_method = "ocs",
-  n_crosses = 20L, max_uses_per_parent = 4L, assume_inbred = TRUE,
+  n_crosses = 20L, max_crosses_per_parent = 4L, assume_inbred = TRUE,
   write_outputs = FALSE, write_figures = FALSE, seed = 7L, ...)
 
 # --- Parents only vs parents + training set ---

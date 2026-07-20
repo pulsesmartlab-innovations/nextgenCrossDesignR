@@ -161,7 +161,7 @@ desired_plan <- ng_optimize_multitrait_mating_plan(
   scores = desired_scores,
   traits = desired_traits,
   n_crosses = 2L,
-  parent_K = desired_parent_K,
+  parent_kinship = desired_parent_K,
   multitrait_method = "desired_gain",
   optimizer_method = "greedy_local",
   max_crosses_per_parent = 2L
@@ -179,7 +179,7 @@ economic_plan <- ng_optimize_multitrait_mating_plan(
   scores = desired_scores,
   traits = desired_traits,
   n_crosses = 2L,
-  parent_K = desired_parent_K,
+  parent_kinship = desired_parent_K,
   multitrait_method = "economic_index",
   optimizer_method = "greedy_local",
   max_crosses_per_parent = 2L
@@ -202,13 +202,13 @@ stopifnot(identical(economic_policy$method, "economic_index"))
 stopifnot(identical(economic_policy$family, "economic_index"))
 
 parents <- sort(unique(c(scores$parent1, scores$parent2)))
-parent_K <- diag(length(parents))
-rownames(parent_K) <- colnames(parent_K) <- parents
+parent_kinship <- diag(length(parents))
+rownames(parent_kinship) <- colnames(parent_kinship) <- parents
 plan <- ng_optimize_multitrait_mating_plan(
   scores = scores,
   traits = weighted_traits,
   n_crosses = 2L,
-  parent_K = parent_K,
+  parent_kinship = parent_kinship,
   multitrait_method = "weighted",
   optimizer_method = "greedy_local",
   max_crosses_per_parent = 2L
