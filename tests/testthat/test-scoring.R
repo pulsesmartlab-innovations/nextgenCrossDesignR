@@ -11,24 +11,24 @@ test_that("every parent pair is scored exactly once", {
 test_that("cross scores are finite and variances are non-negative", {
   s <- ng_test_scores()
   expect_true(all(is.finite(s$cross_mean)))
-  expect_true(all(is.finite(s$uc_dh_gebv)))
-  expect_true(all(s$var_simple >= -1e-8))
-  expect_true(all(s$dh_recomb_var >= -1e-8))
-  expect_true(all(s$dh_pmv_var >= -1e-8))
+  expect_true(all(is.finite(s$usefulness_pmv_gebv)))
+  expect_true(all(s$parent_distance >= -1e-8))
+  expect_true(all(s$vpm >= -1e-8))
+  expect_true(all(s$pmv >= -1e-8))
 })
 
 test_that("PMV is never below VPM", {
   # PMV adds Var(beta) to the diagonal of the quadratic form, so it can only
   # widen the predicted family variance relative to the VPM point estimate.
   s <- ng_test_scores()
-  expect_true(all(s$dh_pmv_var + 1e-12 >= s$dh_recomb_var))
+  expect_true(all(s$pmv + 1e-12 >= s$vpm))
 })
 
 test_that("recombination-aware variance is not the linkage-free variance", {
-  # var_simple ignores linkage; dh_recomb_var applies the Haldane recursion.
+  # parent_distance ignores linkage; vpm applies the Haldane recursion.
   # If these ever coincide the recombination model has stopped doing anything.
   s <- ng_test_scores()
-  expect_false(isTRUE(all.equal(s$var_simple, s$dh_recomb_var)))
+  expect_false(isTRUE(all.equal(s$parent_distance, s$vpm)))
 })
 
 test_that("the C++ kernel and the pure-R path agree", {
@@ -40,6 +40,6 @@ test_that("the C++ kernel and the pure-R path agree", {
                adjusted_pheno = p$y, selection_prop = 0.1)
   r_scores <- do.call(ng_score_crosses, c(args, list(use_cpp = FALSE)))
   cpp_scores <- do.call(ng_score_crosses, c(args, list(use_cpp = TRUE)))
-  expect_equal(r_scores$dh_recomb_var, cpp_scores$dh_recomb_var, tolerance = 1e-8)
-  expect_equal(r_scores$dh_pmv_var, cpp_scores$dh_pmv_var, tolerance = 1e-8)
+  expect_equal(r_scores$vpm, cpp_scores$vpm, tolerance = 1e-8)
+  expect_equal(r_scores$pmv, cpp_scores$pmv, tolerance = 1e-8)
 })

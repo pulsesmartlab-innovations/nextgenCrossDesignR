@@ -25,10 +25,10 @@ test_that("the run entrypoint keeps the arguments the frontend sends", {
   fm <- names(formals(ng_run_cross_prediction))
   expect_true(all(c("genotype_file", "phenotype_file", "map_file",
                     "direction_file", "allocation_method", "optimizer",
-                    "n_crosses", "max_uses_per_parent", "prediction_mode") %in% fm))
+                    "n_crosses", "max_crosses_per_parent", "prediction_mode") %in% fm))
 })
 
 test_that("the polyploid entrypoint the frontend routes to still exists", {
   # The workbench sends workflow = "polyploid_design" and calls this directly.
-  expect_true(is.function(ng_design_crosses_poly))
+  expect_true(is.function(ng_polyploid_design_crosses))
 })
