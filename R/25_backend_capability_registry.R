@@ -58,8 +58,8 @@ ng_backend_capability_registry <- function(generated_at = Sys.time()) {
       "ng_check_same_ids",
       "ng_prepare_marker_map",
       "ng_ld_prune_markers; ng_ld_prune_geno; ng_run_cross_prediction(ld_pruning=); ng_design_crosses(ld_pruning=)",
-      "ng_poly4x_as_dosage_matrix",
-      "ng_poly4x_parent_relationship"
+      "ng_polyploid_as_dosage_matrix",
+      "ng_polyploid_grm; ng_polyploid_subgenome_grm"
     ),
     ui_stage = rep("Data QC", 12L),
     description = c(
@@ -112,9 +112,9 @@ ng_backend_capability_registry <- function(generated_at = Sys.time()) {
       "ng_score_crosses(target = 'DH')",
       "ng_score_crosses(target = 'RIL')",
       "ng_crop_genome_select",
-      "ng_poly4x_policy",
+      "ng_polyploid_policy",
       "ng_poly_subgenome_policy",
-      "ng_poly_model_select"
+      "ng_polyploid_model_select"
     ),
     description = c(
       "Primary validated inbred-line workflow for doubled-haploid family decisions.",
@@ -222,7 +222,7 @@ ng_backend_capability_registry <- function(generated_at = Sys.time()) {
       "ng_external_baseline_scores",
       "ng_run_cross_prediction(trait_value_metric = 'var_complex'); ng_simplemating_*; ng_alphamate_style_select",
       "ng_crop_genome_select",
-      "ng_poly4x_policy",
+      "ng_polyploid_policy",
       "ng_poly_subgenome_policy",
       "ng_optimize_mating_plan(strategy=, diversity_emphasis=, target_coancestry=); ng_select_by_strategy; ng_select_by_target_coancestry; ng_write_frontier_json",
       "ng_score_crosses (expected_progeny_inbreeding); ng_optimize_mating_plan(lambda_progeny_inbreeding=); ng_progeny_inbreeding_histogram",
@@ -231,7 +231,7 @@ ng_backend_capability_registry <- function(generated_at = Sys.time()) {
       "ng_lethal_recessive_spec; ng_lethal_recessive_cross_risk",
       "ng_optimize_mating_plan(cost_col=, budget=, lambda_cost=, logistic_col=, lambda_logistic=); ng_run_cross_prediction(cross_cost=, cost_col=, budget=, lambda_cost=, logistic_col=, lambda_logistic=)",
       "ng_polyploid_grm(method=); ng_polyploid_dominance_grm(method=); ng_polyploid_qc",
-      "ng_design_crosses_poly(dominance=, gain=, double_reduction=, grm_method=); ng_fit_polyploid_effects; ng_predict_polyploid_value; ng_score_crosses_poly_dominance",
+      "ng_polyploid_design_crosses(dominance=, gain=, double_reduction=, grm_method=); ng_polyploid_fit_effects; ng_polyploid_predict_value; ng_polyploid_score_crosses_dominance",
       "ng_run_cross_prediction(training_genotype=, training_phenotype=, training_genotype_file=, training_phenotype_file=)"
     ),
     evidence = c(
@@ -258,7 +258,7 @@ ng_backend_capability_registry <- function(generated_at = Sys.time()) {
       "Optional per-cross cost (soft penalty + hard budget) and logistic/geographic penalty folded into the allocation objective.",
       "Correct allele-frequency-based polyploid additive and dominance GRMs (VanRaden or Yang/GCTA, generalized to ploidy) plus ploidy-aware QC (0..ploidy range, missingness, MAF, monomorphic, duplicates); replaces the diploid-oriented kinship.",
       "Any-ploidy one-call mate design with optional additive+dominance modelling for clonal/heterosis crops (cassava, sugarcane, potato): genotypic-value parent selection, heterosis-inclusive cross mean + within-family additive+dominance variance, optional double reduction, C++-accelerated. Additive-only is the default.",
-      "Enlarge the marker-effect training set with extra genotyped+phenotyped individuals that are NOT candidate parents (the parents are the main genotype/phenotype tables). Improves effect-based metrics (mean/uc/pmv/vpm/var_complex), not var_simple. The result reports training_only_count, effect_training_n, and training_ids so the frontend can display 'trained on N, crossing K parents'."
+      "Enlarge the marker-effect training set with extra genotyped+phenotyped individuals that are NOT candidate parents (the parents are the main genotype/phenotype tables). Improves effect-based metrics (mean/usefulness/pmv/vpm/var_complex), not le. The result reports training_only_count, effect_training_n, and training_ids so the frontend can display 'trained on N, crossing K parents'."
     ),
     stringsAsFactors = FALSE
   )

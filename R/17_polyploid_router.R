@@ -81,7 +81,7 @@ ng_poly_model_decision <- function(model_family, inheritance_model, supported,
   )
 }
 
-ng_poly_model_select <- function(crop = "",
+ng_polyploid_model_select <- function(crop = "",
                                  crop_scenario = "",
                                  ploidy = NULL,
                                  inheritance_model = "",

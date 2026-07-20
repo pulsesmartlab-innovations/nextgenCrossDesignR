@@ -298,7 +298,7 @@ ng_head_to_head_run_case <- function(scenario_name,
       seed = run_seed,
       methods = spec$method[[1]],
       allocator = spec$allocator[[1]],
-      parent_K = scenario_obj$parent_K,
+      parent_kinship = scenario_obj$parent_kinship,
       ocs_lambda_group = ocs_lambda_group,
       ocs_lambda_mating = ocs_lambda_mating
     )

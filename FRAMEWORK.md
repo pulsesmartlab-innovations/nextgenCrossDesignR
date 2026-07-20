@@ -121,7 +121,7 @@ If PMV loses, these diagnostics should say whether the failure is from effect es
 The dedicated family-level calibration runner is:
 
 ```text
-powershell -ExecutionPolicy Bypass -File tools/run_family_calibration_grid.ps1
+powershell -ExecutionPolicy Bypass -File nextgen_cross_design/tools/run_family_calibration_grid.ps1
 ```
 
 It should be run before allocator tuning. Its main outputs are per-metric
@@ -173,7 +173,7 @@ These branches use the installed packages when available. They are not substitut
 The exact external parent-size screen should start with 20, 30, and 40 parents. For 50 to 80+ parents, exact all-pair SimpleMating usefulness should be replaced by a shortlist/exact-rescore design or by formula-compatible fast surrogates before running replicated grids. The current shortlist is a union across calibrated hybrid expected top-k, hybrid usefulness, `var_simple`, and MPV, which avoids benchmarking PopVar/SimpleMating inside only one internal score ranking. The current shortlist runner is:
 
 ```text
-powershell -ExecutionPolicy Bypass -File tools/run_external_shortlist_parent_size_grid.ps1
+powershell -ExecutionPolicy Bypass -File nextgen_cross_design/tools/run_external_shortlist_parent_size_grid.ps1
 ```
 
 The benchmark harness uses shared scoring by default. In the first cycle, all
@@ -188,5 +188,5 @@ runner. It compares each score family under top-N ranking, adaptive OCS, and
 SimpleMating-style constrained selection where available:
 
 ```text
-powershell -ExecutionPolicy Bypass -File tools/run_allocator_crosscheck_grid.ps1
+powershell -ExecutionPolicy Bypass -File nextgen_cross_design/tools/run_allocator_crosscheck_grid.ps1
 ```

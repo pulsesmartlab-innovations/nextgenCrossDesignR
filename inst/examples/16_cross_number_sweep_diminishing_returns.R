@@ -69,7 +69,7 @@ write.csv(genotype, genotype_file, row.names = FALSE, quote = FALSE)
 write.csv(marker_map, map_file, row.names = FALSE, quote = FALSE)
 write.csv(trait_direction, direction_file, row.names = FALSE, quote = FALSE)
 
-max_uses_per_parent <- 4
+max_crosses_per_parent <- 4
 max_pair_kinship <- Inf
 lambda_group <- 0.05
 lambda_mating <- 0.02
@@ -109,7 +109,7 @@ result <- ng_run_cross_prediction(
 
   duplicate_action = "none",
   n_crosses = max(K_range),
-  max_uses_per_parent = max_uses_per_parent,
+  max_crosses_per_parent = max_crosses_per_parent,
   optimizer = optimizer,
   allocation_method = "ocs",
   use_ocs = TRUE,
@@ -124,14 +124,14 @@ result <- ng_run_cross_prediction(
   seed = 20260623
 )
 
-parent_K <- ng_parent_kinship(result$cleaned_data$genotype)
+parent_kinship <- ng_parent_kinship(result$cleaned_data$genotype)
 
 curve <- ng_optimize_mating_plan_curve(
   scores = result$candidate_crosses,
   K_range = K_range,
   gain_col = "multi_trait_score",
-  parent_K = parent_K,
-  max_crosses_per_parent = max_uses_per_parent,
+  parent_kinship = parent_kinship,
+  max_crosses_per_parent = max_crosses_per_parent,
   max_pair_kinship = max_pair_kinship,
   lambda_group = lambda_group,
   lambda_mating = lambda_mating,

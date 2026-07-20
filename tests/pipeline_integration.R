@@ -71,8 +71,8 @@ stopifnot(!any(ng_group_pair_key(dm$plan$parent1, dm$plan$parent2) ==
                  ng_group_pair_key("P05", "P06")))
 
 # --- 7. constrained-OCS (target_coancestry) flows through ng_design_crosses ---
-sweepfr <- ng_pareto_mate_allocation(d0$scores, nx, gain_col = "uc_dh_gebv",
-                                     parent_K = ng_parent_kinship(geno))$frontier
+sweepfr <- ng_pareto_mate_allocation(d0$scores, nx, gain_col = "usefulness_pmv_gebv",
+                                     parent_kinship = ng_parent_kinship(geno))$frontier
 crng <- range(sweepfr$group_coancestry, na.rm = TRUE)
 t_tight <- crng[1] + 0.30 * diff(crng)
 t_loose <- crng[1] + 0.75 * diff(crng)

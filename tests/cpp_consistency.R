@@ -28,6 +28,6 @@ cpp <- ng_dh_recomb_variance_pairs(sorted$geno, sorted$effects, sorted$beta_var,
                                    sorted$marker_map, ids, pairs, use_cpp = TRUE)
 r <- ng_dh_recomb_variance_pairs(sorted$geno, sorted$effects, sorted$beta_var,
                                  sorted$marker_map, ids, pairs, use_cpp = FALSE)
-stopifnot(max(abs(cpp$dh_recomb_var - r$dh_recomb_var)) < 1e-8)
-stopifnot(max(abs(cpp$dh_pmv_var - r$dh_pmv_var)) < 1e-8)
+stopifnot(max(abs(cpp$vpm - r$vpm)) < 1e-8)
+stopifnot(max(abs(cpp$pmv - r$pmv)) < 1e-8)
 message("C++ and R recombination kernels agree.")

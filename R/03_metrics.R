@@ -17,7 +17,7 @@ ng_score_crosses <- function(geno,
                              inbred_tolerance = 0.05,
                              inbred_marker_fraction = 0.02,
                              posterior_cov_full = NULL,
-                             parent_K = NULL,
+                             parent_kinship = NULL,
                              grm_method = c("vanraden", "yang")) {
   target <- match.arg(target)
   recomb_model <- match.arg(recomb_model)
@@ -44,7 +44,7 @@ ng_score_crosses <- function(geno,
     ng_stop(msg)
   } else if (!isTRUE(assume_inbred) && length(inbred_audit$violators)) {
     warning(sprintf(
-      "assume_inbred = FALSE: %d parents are not fully inbred. dh_recomb_var / dh_pmv_var below treat parents as inbreds and will be biased; use ng_exact_gms_additive_var() with phased haplotypes for the exact outbred path.",
+      "assume_inbred = FALSE: %d parents are not fully inbred. vpm / pmv below treat parents as inbreds and will be biased; use ng_exact_gms_additive_var() with phased haplotypes for the exact outbred path.",
       length(inbred_audit$violators)
     ), call. = FALSE)
   }
@@ -63,10 +63,10 @@ ng_score_crosses <- function(geno,
   )
   # Reuse a caller-supplied kinship matrix when given (avoids recomputing the O(n^2*m)
   # VanRaden G on identical genotypes across a per-trait scoring loop); else compute it.
-  K <- if (is.null(parent_K)) {
+  K <- if (is.null(parent_kinship)) {
     ng_parent_kinship(geno, method = grm_method)
   } else {
-    pk <- as.matrix(parent_K)
+    pk <- as.matrix(parent_kinship)
     if (!is.null(rownames(pk)) && all(ids %in% rownames(pk))) pk[ids, ids, drop = FALSE] else pk
   }
   rel_var <- ng_pair_relationship_variance(pairs, K)
@@ -81,7 +81,7 @@ ng_score_crosses <- function(geno,
   # Optional opt-in: full off-diagonal posterior PMV. Routes to a dense O(m^2)
   # kernel that takes the m x m Sigma_beta supplied by the caller (typically
   # from ng_fit_ridge_effects(return_beta_cov_full = TRUE)) and returns an extra
-  # dh_pmv_var_full_posterior column alongside the legacy diagonal one.
+  # pmv_full_posterior column alongside the legacy diagonal one.
   if (!is.null(posterior_cov_full)) {
     if (!is.matrix(posterior_cov_full) ||
         nrow(posterior_cov_full) != ncol(posterior_cov_full)) {
@@ -139,8 +139,8 @@ ng_score_crosses <- function(geno,
   gebv <- setNames(ng_predict_gebv(geno, effects), ids)
   mpv_gebv <- 0.5 * (gebv[p1] + gebv[p2])
   i <- ng_selection_intensity(selection_prop)
-  dh_var <- pmax(dh$dh_recomb_var, 0)
-  dh_pmv <- pmax(dh$dh_pmv_var, 0)
+  dh_var <- pmax(dh$vpm, 0)
+  dh_pmv <- pmax(dh$pmv, 0)
   effect_rel <- max(0, min(1, mean_source$reliability))
   # Blend mean sources with a smooth weight in the marker-effect reliability.
   # This mixes BLUEs/adjusted phenotypes (no marker-effect uncertainty) with
@@ -152,14 +152,14 @@ ng_score_crosses <- function(geno,
   out$mean_source <- mean_source$source
   out$effect_reliability <- effect_rel
   out$progeny_target <- target
-  out$mpv <- as.numeric(mpv_gebv)
+  out$mid_parent_value <- as.numeric(mpv_gebv)
   out$cross_mean <- as.numeric(parent_mean)
   out$cross_mean_gebv <- as.numeric(mpv_gebv)
-  out$cross_mean_adjusted_pheno <- as.numeric(adjusted_mean)
+  out$cross_mean_adj <- as.numeric(adjusted_mean)
   out$cross_mean_blend <- as.numeric(blended_mean)
   # Relationship-distance metric (NOT a variance). Reported separately so the
   # OCS optimizer can use it as a diversity penalty; never combined with PMV.
-  out$var_simple <- rel_var$var_simple
+  out$parent_distance <- rel_var$parent_distance
   out$pair_kinship <- rel_var$pair_kinship
   # Expected inbreeding of the immediate progeny of each cross = coancestry of the two
   # parents (Meuwissen OCS: F_progeny = f(p1, p2)). pair_kinship is read off a VanRaden
@@ -171,33 +171,33 @@ ng_score_crosses <- function(geno,
   # inbreeding as a first-class quantity alongside parental (group) coancestry.
   out$expected_progeny_inbreeding <- pmax(0, as.numeric(rel_var$pair_kinship) / 2)
   # Within-family genetic-value variances under the requested progeny target
-  # (DH or RIL), in (genetic value)^2 units. dh_pmv_var adds the diagonal
-  # posterior marker-effect uncertainty to dh_recomb_var (VPM). When the
-  # caller supplies posterior_cov_full, dh_pmv_var_full_posterior also
+  # (DH or RIL), in (genetic value)^2 units. pmv adds the diagonal
+  # posterior marker-effect uncertainty to vpm (VPM). When the
+  # caller supplies posterior_cov_full, pmv_full_posterior also
   # carries the full off-diagonal correction d'(R o Sigma_beta) d
   # (genomicMateSelectR formulation); NA otherwise.
-  out$dh_recomb_var <- dh_var
-  out$dh_pmv_var <- dh_pmv
-  if (!is.null(dh$dh_pmv_var_full_posterior)) {
-    out$dh_pmv_var_full_posterior <- pmax(dh$dh_pmv_var_full_posterior, 0)
+  out$vpm <- dh_var
+  out$pmv <- dh_pmv
+  if (!is.null(dh$pmv_full_posterior)) {
+    out$pmv_full_posterior <- pmax(dh$pmv_full_posterior, 0)
   } else {
-    out$dh_pmv_var_full_posterior <- NA_real_
+    out$pmv_full_posterior <- NA_real_
   }
   # Usefulness criteria are mu + i * sigma in genetic-value units. Two
-  # variance choices (VPM = dh_recomb_var; PMV = dh_pmv_var) crossed with four
-  # mean sources. Pre-v0.1.0 columns uc_dh_scaled, uc_gated, uc_hybrid (and
+  # variance choices (VPM = vpm; PMV = pmv) crossed with four
+  # mean sources. Pre-v0.1.0 columns usefulness_pmv_scaled, uc_gated, uc_hybrid (and
   # their _gebv/_adj/_blend variants) and dh_recomb_rel_var, dh_pmv_scaled_var,
   # gated_var, hybrid_var were removed because they mixed genetic-value
-  # variance units with the var_simple relatedness distance.
-  out$uc_recomb       <- out$cross_mean                   + i * sqrt(out$dh_recomb_var)
-  out$uc_dh           <- out$cross_mean                   + i * sqrt(out$dh_pmv_var)
-  out$uc_recomb_gebv  <- out$cross_mean_gebv              + i * sqrt(out$dh_recomb_var)
-  out$uc_dh_gebv      <- out$cross_mean_gebv              + i * sqrt(out$dh_pmv_var)
-  out$uc_recomb_adj   <- out$cross_mean_adjusted_pheno    + i * sqrt(out$dh_recomb_var)
-  out$uc_dh_adj       <- out$cross_mean_adjusted_pheno    + i * sqrt(out$dh_pmv_var)
-  out$uc_recomb_blend <- out$cross_mean_blend             + i * sqrt(out$dh_recomb_var)
-  out$uc_dh_blend     <- out$cross_mean_blend             + i * sqrt(out$dh_pmv_var)
-  out$rank_score <- if (effect_rel >= min_effect_reliability) out$uc_dh_gebv else out$uc_dh_blend
+  # variance units with the parent_distance relatedness distance.
+  out$usefulness_vpm       <- out$cross_mean                   + i * sqrt(out$vpm)
+  out$usefulness_pmv           <- out$cross_mean                   + i * sqrt(out$pmv)
+  out$usefulness_vpm_gebv  <- out$cross_mean_gebv              + i * sqrt(out$vpm)
+  out$usefulness_pmv_gebv      <- out$cross_mean_gebv              + i * sqrt(out$pmv)
+  out$usefulness_vpm_adj   <- out$cross_mean_adj    + i * sqrt(out$vpm)
+  out$usefulness_pmv_adj       <- out$cross_mean_adj    + i * sqrt(out$pmv)
+  out$usefulness_vpm_blend <- out$cross_mean_blend             + i * sqrt(out$vpm)
+  out$usefulness_pmv_blend     <- out$cross_mean_blend             + i * sqrt(out$pmv)
+  out$rank_score <- if (effect_rel >= min_effect_reliability) out$usefulness_pmv_gebv else out$usefulness_pmv_blend
   attr(out, "progeny_target") <- target
   attr(out, "recomb_model") <- recomb_model
   out
@@ -208,7 +208,7 @@ ng_pair_relationship_variance <- function(pairs, K) {
   p2 <- match(pairs$parent2, rownames(K))
   v <- 0.5 * (diag(K)[p1] + diag(K)[p2]) - K[cbind(p1, p2)]
   data.frame(
-    var_simple = pmax(as.numeric(v), 0),
+    parent_distance = pmax(as.numeric(v), 0),
     pair_kinship = as.numeric(K[cbind(p1, p2)])
   )
 }
@@ -401,9 +401,9 @@ ng_dh_recomb_variance_pairs_full_posterior <- function(geno,
     out_pmv_full[r] <- max(0, v + pmv_off_extra)
   }
   data.frame(
-    dh_recomb_var = out_v,
-    dh_pmv_var = out_pmv_diag,
-    dh_pmv_var_full_posterior = out_pmv_full
+    vpm = out_v,
+    pmv = out_pmv_diag,
+    pmv_full_posterior = out_pmv_full
   )
 }
 
@@ -502,7 +502,7 @@ ng_dh_recomb_variance_pairs_banded <- function(geno,
     out_v[r]   <- max(0, v)
     out_pmv[r] <- max(0, v + pmv_extra)
   }
-  data.frame(dh_recomb_var = out_v, dh_pmv_var = out_pmv)
+  data.frame(vpm = out_v, pmv = out_pmv)
 }
 
 ng_dh_recomb_variance_pairs_dense <- function(geno,
@@ -551,7 +551,7 @@ ng_dh_recomb_variance_pairs_dense <- function(geno,
   }
   bv <- pmax(beta_var, 0); bv[!is.finite(bv)] <- 0
   pmv_extra <- as.numeric((D * D) %*% bv)
-  data.frame(dh_recomb_var = pmax(0, v), dh_pmv_var = pmax(0, v + pmv_extra))
+  data.frame(vpm = pmax(0, v), pmv = pmax(0, v + pmv_extra))
 }
 
 ng_dh_recomb_variance_pairs_r <- function(geno, beta, beta_var, marker_map, ids, pairs, window_cm = Inf) {
@@ -587,7 +587,7 @@ ng_dh_recomb_variance_pairs_r <- function(geno, beta, beta_var, marker_map, ids,
     out_v[r] <- max(0, v)
     out_pmv[r] <- max(0, pmv)
   }
-  data.frame(dh_recomb_var = out_v, dh_pmv_var = out_pmv)
+  data.frame(vpm = out_v, pmv = out_pmv)
 }
 
 ng_exact_gms_additive_var <- function(parent1,

@@ -48,9 +48,9 @@ r_full <- ng_dh_recomb_variance_pairs_full_posterior(
   target = "DH", recomb_model = "haldane", window_cm = Inf,
   use_cpp = FALSE
 )
-gap_vpm <- max(abs(cpp_full$dh_recomb_var - r_full$dh_recomb_var))
-gap_pmv_diag <- max(abs(cpp_full$dh_pmv_var - r_full$dh_pmv_var))
-gap_pmv_full <- max(abs(cpp_full$dh_pmv_var_full_posterior - r_full$dh_pmv_var_full_posterior))
+gap_vpm <- max(abs(cpp_full$vpm - r_full$vpm))
+gap_pmv_diag <- max(abs(cpp_full$pmv - r_full$pmv))
+gap_pmv_full <- max(abs(cpp_full$pmv_full_posterior - r_full$pmv_full_posterior))
 if (max(gap_vpm, gap_pmv_diag, gap_pmv_full) > 1e-10) {
   stop(sprintf("full-posterior C++ vs R: vpm=%g pmv_diag=%g pmv_full=%g",
                gap_vpm, gap_pmv_diag, gap_pmv_full))
@@ -71,8 +71,8 @@ r_band <- ng_dh_recomb_variance_pairs_banded(
   target = "DH", recomb_model = "kosambi", window_cm = 25,
   use_cpp = FALSE
 )
-gap_band_vpm <- max(abs(cpp_band$dh_recomb_var - r_band$dh_recomb_var))
-gap_band_pmv <- max(abs(cpp_band$dh_pmv_var - r_band$dh_pmv_var))
+gap_band_vpm <- max(abs(cpp_band$vpm - r_band$vpm))
+gap_band_pmv <- max(abs(cpp_band$pmv - r_band$pmv))
 if (max(gap_band_vpm, gap_band_pmv) > 1e-10) {
   stop(sprintf("banded C++ vs R: vpm=%g pmv=%g", gap_band_vpm, gap_band_pmv))
 }
@@ -104,7 +104,7 @@ if (mean_gap > 0.10) {
 }
 
 # ---- 4. ng_local_swap greedy OCS optimizer ---------------------------------
-# Build a small candidate-pair table + linear_gain + parent_K, run greedy
+# Build a small candidate-pair table + linear_gain + parent_kinship, run greedy
 # local search via R reference and via the C++ port from the same seed, and
 # check the selected indices match. The greedy search is deterministic for
 # a fixed candidate ordering, so the selections should be IDENTICAL between
@@ -126,11 +126,11 @@ scores_p$.linear_gain <- rnorm(nrow(pairs_p), mean = 5, sd = 1)
 ord_p <- order(scores_p$.linear_gain, decreasing = TRUE)
 selected_init <- ord_p[seq_len(8L)]
 sel_r   <- ng_local_swap(scores = scores_p, selected = selected_init,
-                         parents = ids_p, parent_K = fake_K,
+                         parents = ids_p, parent_kinship = fake_K,
                          max_crosses_per_parent = 4L, lambda_group = 0.5,
                          local_iter = 200L, use_cpp = FALSE)
 sel_cpp <- ng_local_swap(scores = scores_p, selected = selected_init,
-                         parents = ids_p, parent_K = fake_K,
+                         parents = ids_p, parent_kinship = fake_K,
                          max_crosses_per_parent = 4L, lambda_group = 0.5,
                          local_iter = 200L, use_cpp = TRUE)
 # Compare the final OBJECTIVE rather than the index set: the C++ traversal
@@ -151,11 +151,11 @@ stopifnot(all(table(c(scores_p$parent1[sel_cpp], scores_p$parent2[sel_cpp])) <= 
 # C++ and R must reach the same full objective, and stable_sort tie-breaking
 # must make the C++ selection identical across repeated runs.
 sel_r2 <- ng_local_swap(scores = scores_p, selected = selected_init,
-                        parents = ids_p, parent_K = fake_K,
+                        parents = ids_p, parent_kinship = fake_K,
                         max_crosses_per_parent = 4L, lambda_group = 0.5,
                         local_iter = 200L, use_cpp = FALSE, lambda_parent_use = 3)
 sel_cpp2 <- ng_local_swap(scores = scores_p, selected = selected_init,
-                          parents = ids_p, parent_K = fake_K,
+                          parents = ids_p, parent_kinship = fake_K,
                           max_crosses_per_parent = 4L, lambda_group = 0.5,
                           local_iter = 200L, use_cpp = TRUE, lambda_parent_use = 3)
 obj_r2   <- ng_plan_objective(scores_p, sel_r2,   fake_K, 0.5, 3)
@@ -165,7 +165,7 @@ if (pu_gap > 1e-9) {
   stop(sprintf("local_swap (parent-use) C++ vs R objective disagrees: cpp=%.6f r=%.6f", obj_cpp2, obj_r2))
 }
 sel_cpp2b <- ng_local_swap(scores = scores_p, selected = selected_init,
-                           parents = ids_p, parent_K = fake_K,
+                           parents = ids_p, parent_kinship = fake_K,
                            max_crosses_per_parent = 4L, lambda_group = 0.5,
                            local_iter = 200L, use_cpp = TRUE, lambda_parent_use = 3)
 stopifnot(identical(sort(sel_cpp2), sort(sel_cpp2b)))  # deterministic ties

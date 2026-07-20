@@ -94,7 +94,7 @@ fast_result <- ng_run_cross_prediction(
 
   duplicate_action = "none",
   n_crosses = 6,
-  max_uses_per_parent = 3,
+  max_crosses_per_parent = 3,
   optimizer = "greedy_local",
   allocation_method = "ocs",
 
@@ -134,7 +134,7 @@ full_result <- ng_run_cross_prediction(
 
   duplicate_action = "none",
   n_crosses = shortlist_size,
-  max_uses_per_parent = 3,
+  max_crosses_per_parent = 3,
   optimizer = "greedy_local",
   allocation_method = "ocs",
 

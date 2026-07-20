@@ -5,7 +5,7 @@
 # which allocator is best and to tune knobs BEFORE the full simulation study.
 #
 # Package-only fixture (no AlphaSimR needed): a synthetic genotype matrix is scored
-# with the package's own ng_fit_ridge_effects + ng_score_crosses, and parent_K via
+# with the package's own ng_fit_ridge_effects + ng_score_crosses, and parent_kinship via
 # ng_parent_kinship -- so the candidate table is exactly what the real pipeline feeds
 # the optimizer. External comparators (AlphaMate binary, SimpleMating) are included
 # only when available and never halt the run.
@@ -47,7 +47,7 @@ optimizer_config_from_env <- function(root = find_project_root()) {
     lambda_group = env_num("NG_OPT_LAMBDA_GROUP", 0.5),
     lambda_parent_use = env_num("NG_OPT_LAMBDA_PARENT_USE", 1.0),
     lambda_parent_use_mode = env_chr("NG_OPT_LAMBDA_PARENT_USE_MODE", "adaptive"),
-    gain_col = env_chr("NG_OPT_GAIN_COL", "uc_dh_gebv"),
+    gain_col = env_chr("NG_OPT_GAIN_COL", "usefulness_pmv_gebv"),
     methods = env_csv("NG_OPT_METHODS", c("mip_contribution", "greedy_local", "repair_local", "evolution", "alphamate_style")),
     lambda_grid = env_num_vec("NG_OPT_LAMBDA_GRID", 10^seq(-2, 2.5, length.out = 10)),
     local_iter = env_int("NG_OPT_LOCAL_ITER", 2000L),
@@ -91,19 +91,19 @@ build_optimizer_fixture <- function(cfg) {
   scores <- ng_score_crosses(parent_geno, fit, marker_map = marker_map, ids = ids,
                              adjusted_pheno = setNames(fx$y_all[parent_ids], ids),
                              selection_prop = 0.10, use_cpp = cfg$use_cpp)
-  parent_K <- ng_parent_kinship(parent_geno)
-  out <- list(scores = scores, parent_K = parent_K, ids = ids, gain_col = cfg$gain_col,
+  parent_kinship <- ng_parent_kinship(parent_geno)
+  out <- list(scores = scores, parent_kinship = parent_kinship, ids = ids, gain_col = cfg$gain_col,
               fixture_key = key)
   dir.create(fixture_dir, recursive = TRUE, showWarnings = FALSE)
   tryCatch(saveRDS(out, path), error = function(e) NULL)
   out
 }
 
-# Registry: name -> function(scores, n_crosses, parent_K, lambda_group, lambda_parent_use, cfg) returning a plan.
+# Registry: name -> function(scores, n_crosses, parent_kinship, lambda_group, lambda_parent_use, cfg) returning a plan.
 optimizer_registry <- function() {
-  ocs_call <- function(method) function(scores, n_crosses, parent_K, lg, lpu, cfg) {
+  ocs_call <- function(method) function(scores, n_crosses, parent_kinship, lg, lpu, cfg) {
     ng_optimize_mating_plan(scores = scores, n_crosses = n_crosses, gain_col = cfg$gain_col,
-                            parent_K = parent_K, max_crosses_per_parent = cfg$max_crosses_per_parent,
+                            parent_kinship = parent_kinship, max_crosses_per_parent = cfg$max_crosses_per_parent,
                             lambda_group = lg, lambda_parent_use = lpu,
                             lambda_parent_use_mode = cfg$lambda_parent_use_mode,
                             method = method, local_iter = cfg$local_iter, ocs_iter = cfg$ocs_iter)
@@ -113,9 +113,9 @@ optimizer_registry <- function() {
     greedy_local     = ocs_call("greedy_local"),
     repair_local     = ocs_call("repair_local"),
     evolution        = ocs_call("evolution"),
-    alphamate_style  = function(scores, n_crosses, parent_K, lg, lpu, cfg) {
+    alphamate_style  = function(scores, n_crosses, parent_kinship, lg, lpu, cfg) {
       ng_alphamate_style_select(scores = scores, criterion_col = cfg$gain_col, n_crosses = n_crosses,
-                                parent_K = parent_K, mode = "ModeOptTarget1", target_degree = 45,
+                                parent_kinship = parent_kinship, mode = "ModeOptTarget1", target_degree = 45,
                                 max_contributions = cfg$max_crosses_per_parent,
                                 method = "greedy_local", local_iter = cfg$local_iter)
     }
@@ -131,19 +131,19 @@ plan_row_indices <- function(plan, scores) {
 }
 
 # Achieved objective on the SAME objective every method is scored against.
-achieved_objective <- function(plan, scores, parent_K, lg, lpu, gain_col, lambda_mating = 0) {
+achieved_objective <- function(plan, scores, parent_kinship, lg, lpu, gain_col, lambda_mating = 0) {
   sc <- as.data.frame(scores, stringsAsFactors = FALSE)
   if (!("pair_kinship" %in% names(sc))) sc$pair_kinship <- 0
   sc$.linear_gain <- sc[[gain_col]] - lambda_mating * sc$pair_kinship
   idx <- plan_row_indices(plan, sc)
   if (!length(idx)) return(NA_real_)
-  ng_plan_objective_contribution(sc, idx, parent_K, lambda_group = lg, lambda_parent_use = lpu)
+  ng_plan_objective_contribution(sc, idx, parent_kinship, lambda_group = lg, lambda_parent_use = lpu)
 }
 
 run_one_method <- function(name, fn, fixture, cfg, lg, lpu) {
   err <- NULL
   t <- system.time(plan <- tryCatch(
-    ng_with_rng_seed(cfg$seed, fn(fixture$scores, cfg$n_crosses, fixture$parent_K, lg, lpu, cfg)),
+    ng_with_rng_seed(cfg$seed, fn(fixture$scores, cfg$n_crosses, fixture$parent_kinship, lg, lpu, cfg)),
     error = function(e) { err <<- conditionMessage(e); NULL }
   ))["elapsed"]
   if (is.null(plan)) {
@@ -156,7 +156,7 @@ run_one_method <- function(name, fn, fixture, cfg, lg, lpu) {
   s <- attr(plan, "summary"); if (is.null(s)) s <- list()
   data.frame(
     method = name, status = "ok", reason = "",
-    achieved_objective = achieved_objective(plan, fixture$scores, fixture$parent_K, lg, lpu, cfg$gain_col),
+    achieved_objective = achieved_objective(plan, fixture$scores, fixture$parent_kinship, lg, lpu, cfg$gain_col),
     mean_gain = if (!is.null(s$mean_gain)) s$mean_gain else mean(plan[[cfg$gain_col]], na.rm = TRUE),
     group_coancestry = if (!is.null(s$group_coancestry)) s$group_coancestry else NA_real_,
     parent_use_sq = if (!is.null(s$parent_use_sq)) s$parent_use_sq else NA_real_,

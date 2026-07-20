@@ -34,4 +34,4 @@ $env:NG_TOPK_PROP = "0.10"
 $env:NG_METHODS = "var_simple_topn,var_simple_etk_topn,var_simple_ocs10_lps2,ng_pmv_blend_cal_topn,ng_cal_mip6,ng_ocs_mip10_lps1,ng_ocs_mip10_lps2,ng_ocs_mip10_lps4"
 $env:NG_OUTPUT_PREFIX = "nextgen_80p_5k_3rep5cycle_ocs_lps_frontier"
 
-Rscript tools\run_alphasimr_benchmark.R
+Rscript nextgen_cross_design\tools\run_alphasimr_benchmark.R

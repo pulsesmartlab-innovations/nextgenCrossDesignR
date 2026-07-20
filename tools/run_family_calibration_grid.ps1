@@ -18,4 +18,4 @@ $env:NG_CAL_GMS_MAX_MARKERS = if ($env:NG_CAL_GMS_MAX_MARKERS) { $env:NG_CAL_GMS
 $env:NG_USE_CPP = if ($env:NG_USE_CPP) { $env:NG_USE_CPP } else { "0" }
 $env:NG_ALPHASIMR_THREADS = if ($env:NG_ALPHASIMR_THREADS) { $env:NG_ALPHASIMR_THREADS } else { "1" }
 
-Rscript tools\run_family_calibration_benchmark.R
+Rscript nextgen_cross_design\tools\run_family_calibration_benchmark.R

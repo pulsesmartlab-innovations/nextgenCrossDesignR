@@ -18,12 +18,12 @@ names(y) <- ids
 mk <- data.frame(marker = markers, chr = rep(1:5, length.out = m),
                  pos_cm = rep(seq(0, 100, length.out = m / 5L), 5L))
 fit <- ng_fit_ridge_effects(geno, y, ids = ids, kfold = 5L, seed = 1L)
-parent_K <- ng_parent_kinship(geno)
+parent_kinship <- ng_parent_kinship(geno)
 adj <- setNames(rnorm(n), ids)
 scores <- ng_score_crosses(geno = geno, effects = fit, marker_map = mk, ids = ids,
                            adjusted_pheno = adj, selection_prop = 0.10,
                            recomb_model = "haldane", target = "DH", use_cpp = TRUE)
-scores$.linear_gain <- scores$uc_dh_gebv
+scores$.linear_gain <- scores$usefulness_pmv_gebv
 n_pairs <- nrow(scores)
 cat(sprintf("Fixture: n=%d parents, m=%d markers, %d candidate pairs.\n", n, m, n_pairs))
 
@@ -40,7 +40,7 @@ for (idx in ord) {
 }
 t_swap <- system.time(
   ng_local_swap(scores = scores, selected = selected_init,
-                parents = ids, parent_K = parent_K,
+                parents = ids, parent_kinship = parent_kinship,
                 max_crosses_per_parent = 4L, lambda_group = 1,
                 local_iter = 2000L)
 )["elapsed"]
@@ -48,8 +48,8 @@ cat(sprintf("ng_local_swap (n_crosses=20, local_iter=2000, lambda_group=1): %.2f
 
 # ---- Cost B: full ng_optimize_mating_plan(method='greedy_local') ----------
 t_total <- system.time(
-  ng_optimize_mating_plan(scores = scores, n_crosses = 20L, parent_K = parent_K,
-                          gain_col = "uc_dh_gebv", method = "greedy_local",
+  ng_optimize_mating_plan(scores = scores, n_crosses = 20L, parent_kinship = parent_kinship,
+                          gain_col = "usefulness_pmv_gebv", method = "greedy_local",
                           max_crosses_per_parent = 4L, lambda_group = 1,
                           local_iter = 2000L)
 )["elapsed"]
@@ -66,7 +66,7 @@ cat(sprintf("ng_local_swap share: %.0f%% of greedy_local total\n",
 # lpSolve-unavailable fallback.
 cat("\n## Per-iteration objective cost breakdown\n")
 t_obj <- system.time(replicate(10000L,
-  ng_plan_objective(scores, selected_init, parent_K, lambda_group = 1)
+  ng_plan_objective(scores, selected_init, parent_kinship, lambda_group = 1)
 ))["elapsed"]
 cat(sprintf("ng_plan_objective x 10000 calls (n_crosses=20, n_parents=%d): %.2fs\n", n, t_obj))
 cat(sprintf("Per call: %.2f microseconds\n", t_obj * 1e6 / 10000))

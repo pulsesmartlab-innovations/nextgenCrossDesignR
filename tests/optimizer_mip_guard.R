@@ -17,7 +17,7 @@ K <- ng_parent_kinship(geno)
 
 if (requireNamespace("lpSolve", quietly = TRUE)) {
   # Normal MIP: solves, no fallback.
-  p1 <- ng_optimize_mating_plan(sc, n_crosses = 10, parent_K = K, max_crosses_per_parent = 4,
+  p1 <- ng_optimize_mating_plan(sc, n_crosses = 10, parent_kinship = K, max_crosses_per_parent = 4,
                                 lambda_group = 1, lambda_parent_use = 1, method = "mip_contribution")
   s1 <- attr(p1, "summary")
   stopifnot(nrow(p1) == 10, isFALSE(s1$mip_fallback))
@@ -25,7 +25,7 @@ if (requireNamespace("lpSolve", quietly = TRUE)) {
   # Oversized size guard -> never hangs, falls back to greedy, records mip_fallback,
   # still returns a valid n_crosses feasible plan.
   p2 <- suppressWarnings(ng_optimize_mating_plan(
-    sc, n_crosses = 10, parent_K = K, max_crosses_per_parent = 4,
+    sc, n_crosses = 10, parent_kinship = K, max_crosses_per_parent = 4,
     lambda_group = 1, lambda_parent_use = 1, method = "mip_contribution",
     mip_max_binary_vars = 50, mip_time_limit = 2))
   s2 <- attr(p2, "summary")
@@ -33,7 +33,7 @@ if (requireNamespace("lpSolve", quietly = TRUE)) {
 
   # method="auto" also degrades gracefully under the size guard.
   p3 <- suppressWarnings(ng_optimize_mating_plan(
-    sc, n_crosses = 10, parent_K = K, max_crosses_per_parent = 4,
+    sc, n_crosses = 10, parent_kinship = K, max_crosses_per_parent = 4,
     lambda_group = 1, lambda_parent_use = 1, method = "auto", mip_max_binary_vars = 50))
   stopifnot(nrow(p3) == 10)
   cat("optimizer_mip_guard: normal solve + oversized fallback + auto degrade OK\n")

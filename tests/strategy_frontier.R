@@ -16,7 +16,7 @@ scores <- data.frame(
   parent2 = parents[pairs[, 2]],
   stringsAsFactors = FALSE
 )
-scores$uc_dh_gebv <- rnorm(nrow(scores), 10, 2)
+scores$usefulness_pmv_gebv <- rnorm(nrow(scores), 10, 2)
 L <- matrix(rnorm(n_parents * n_parents, 0, 0.3), n_parents, n_parents)
 K <- crossprod(L) / n_parents
 diag(K) <- diag(K) + 1
@@ -26,9 +26,9 @@ scores$pair_kinship <- K[cbind(match(scores$parent1, parents), match(scores$pare
 
 n_crosses <- 20L
 
-hi <- ng_optimize_mating_plan(scores, n_crosses, parent_K = K, strategy = "high_gain")
-ba <- ng_optimize_mating_plan(scores, n_crosses, parent_K = K, strategy = "balanced")
-di <- ng_optimize_mating_plan(scores, n_crosses, parent_K = K, strategy = "diversity")
+hi <- ng_optimize_mating_plan(scores, n_crosses, parent_kinship = K, strategy = "high_gain")
+ba <- ng_optimize_mating_plan(scores, n_crosses, parent_kinship = K, strategy = "balanced")
+di <- ng_optimize_mating_plan(scores, n_crosses, parent_kinship = K, strategy = "diversity")
 
 sh <- attr(hi, "summary")
 sb <- attr(ba, "summary")
@@ -51,13 +51,13 @@ stopifnot(sd$group_coancestry <= sh$group_coancestry + 1e-8)
 stopifnot(sb$mean_gain >= sd$mean_gain - 1e-8, sh$mean_gain >= sb$mean_gain - 1e-8)
 
 # Numeric diversity_emphasis path works and achieved emphasis tracks the target.
-t70 <- ng_optimize_mating_plan(scores, n_crosses, parent_K = K, diversity_emphasis = 70)
+t70 <- ng_optimize_mating_plan(scores, n_crosses, parent_kinship = K, diversity_emphasis = 70)
 s70 <- attr(t70, "summary")
 stopifnot(is.finite(s70$achieved_emphasis), abs(s70$emphasis_gap) <= 25)
 
 # ng_choose_frontier_point extremes: max_gain picks the highest-gain frontier row,
 # min_coancestry the lowest-coancestry row.
-sweep <- ng_pareto_mate_allocation(scores, n_crosses, parent_K = K)
+sweep <- ng_pareto_mate_allocation(scores, n_crosses, parent_kinship = K)
 fr <- sweep$frontier
 stopifnot(ng_choose_frontier_point(fr, mode = "max_gain") == which.max(fr$mean_gain))
 stopifnot(ng_choose_frontier_point(fr, mode = "min_coancestry") ==

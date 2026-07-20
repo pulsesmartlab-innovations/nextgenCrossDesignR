@@ -166,7 +166,7 @@ ng_poly4x_pull_dosage <- function(pop, sim_param, marker_names = NULL) {
   if (length(marker_names) != ncol(dosage)) ng_stop("marker_names length must match SNP count")
   colnames(dosage) <- as.character(marker_names)
   rownames(dosage) <- pop@id
-  ng_poly4x_as_dosage_matrix(dosage, ploidy = 4L, name = "poly4x dosage")
+  ng_polyploid_as_dosage_matrix(dosage, ploidy = 4L, name = "poly4x dosage")
 }
 
 ng_poly4x_parent_index <- function(parent_pop, parent_id) {

@@ -40,7 +40,7 @@ $env:NG_SIMPLEMATING_MIN_CROSS = Get-EnvValue "NG_EXTERNAL_GRID_SIMPLEMATING_MIN
 $env:NG_SIMPLEMATING_MAX_SEARCH = Get-EnvValue "NG_EXTERNAL_GRID_SIMPLEMATING_MAX_SEARCH" "100000"
 $env:NG_EXTERNAL_SHORTLIST_N = Get-EnvValue "NG_EXTERNAL_GRID_SHORTLIST_N" ""
 $env:NG_EXTERNAL_SHORTLIST_MULTIPLIER = Get-EnvValue "NG_EXTERNAL_GRID_SHORTLIST_MULTIPLIER" ""
-$env:NG_EXTERNAL_SHORTLIST_SCORE_COL = Get-EnvValue "NG_EXTERNAL_GRID_SHORTLIST_SCORE_COL" "etk_dh_pmv_var_blend_cal,uc_dh_blend,var_simple,mpv"
+$env:NG_EXTERNAL_SHORTLIST_SCORE_COL = Get-EnvValue "NG_EXTERNAL_GRID_SHORTLIST_SCORE_COL" "etk_pmv_blend_cal,usefulness_pmv_blend,parent_distance,mid_parent_value"
 $env:NG_METHODS = Get-EnvValue "NG_EXTERNAL_GRID_METHODS" "var_simple_topn,popvar_musp_topn,popvar_uc_topn,simple_mpv_topn,simple_usefa_topn,simple_usefa_select4,ng_ocs_mip10_lps1,ng_ocs_mip10_lps2"
 
 foreach ($nParents in $parentSizes) {
@@ -67,9 +67,9 @@ foreach ($nParents in $parentSizes) {
   $env:NG_OUTPUT_PREFIX = "${gridPrefix}_${nParents}p"
 
   Write-Host "Running exact external parent-size scenario: parents=$nParents top_crosses=$topCrosses effect_training_n=$effectTrainingN"
-  Rscript tools\run_alphasimr_benchmark.R
+  Rscript nextgen_cross_design\tools\run_alphasimr_benchmark.R
 }
 
 $env:NG_GRID_PREFIX = $gridPrefix
 $env:NG_GRID_PARENT_SIZES = ($parentSizes -join ",")
-Rscript tools\summarize_parent_size_grid.R
+Rscript nextgen_cross_design\tools\summarize_parent_size_grid.R

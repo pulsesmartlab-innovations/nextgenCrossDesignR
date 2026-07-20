@@ -85,7 +85,7 @@ result <- ng_run_cross_prediction(
   progeny = "DH",
   duplicate_action = "none",
   n_crosses = 4,
-  max_uses_per_parent = 3,
+  max_crosses_per_parent = 3,
   allocation_method = "alphamate_style",
   alphamate_mode = "ModeOptTarget1",
   alphamate_target_degree = 60,

@@ -73,8 +73,8 @@ ng_popvar_style_scores <- function(scores,
   if (is.null(var_col)) {
     var_col <- ng_first_numeric_col(
       scores,
-      c("dh_pmv_var_cal", "dh_recomb_var_cal",
-        "dh_pmv_var", "dh_recomb_var"),
+      c("pmv_cal", "vpm_cal",
+        "pmv", "vpm"),
       "scores"
     )
   }
@@ -142,11 +142,11 @@ ng_apply_simplemating_native_proxy <- function(scores,
   scores
 }
 
-ng_relationship_components <- function(parent_K, threshold = 0.5) {
-  K <- as.matrix(parent_K)
+ng_relationship_components <- function(parent_kinship, threshold = 0.5) {
+  K <- as.matrix(parent_kinship)
   storage.mode(K) <- "double"
   if (is.null(rownames(K)) || is.null(colnames(K))) {
-    ng_stop("parent_K must have row and column names")
+    ng_stop("parent_kinship must have row and column names")
   }
   ids <- rownames(K)
   K <- K[ids, ids, drop = FALSE]
@@ -175,7 +175,7 @@ ng_relationship_components <- function(parent_K, threshold = 0.5) {
   comps
 }
 
-ng_simplemating_relate_thinning <- function(parent_K,
+ng_simplemating_relate_thinning <- function(parent_kinship,
                                             criterion,
                                             threshold = 0.5,
                                             max_per_cluster = 2L,
@@ -186,9 +186,9 @@ ng_simplemating_relate_thinning <- function(parent_K,
   if (!is.finite(max_per_cluster) || max_per_cluster < 1L) {
     ng_stop("max_per_cluster must be a positive integer")
   }
-  K <- as.matrix(parent_K)
+  K <- as.matrix(parent_kinship)
   ids <- rownames(K)
-  if (is.null(ids)) ng_stop("parent_K must have row names")
+  if (is.null(ids)) ng_stop("parent_kinship must have row names")
   crit <- ng_criterion_vector(
     criterion,
     ids = ids,
@@ -260,7 +260,7 @@ ng_simplemating_build_crosses <- function(moms,
                                           dads,
                                           keep = NULL,
                                           criterion = NULL,
-                                          parent_K = NULL,
+                                          parent_kinship = NULL,
                                           include_self = FALSE,
                                           max_pair_kinship = Inf,
                                           id_col = NULL,
@@ -292,11 +292,11 @@ ng_simplemating_build_crosses <- function(moms,
   rownames(grid) <- NULL
   grid$criterion_mean <- 0.5 * (crit[grid$parent1] + crit[grid$parent2])
   grid$Y <- grid$criterion_mean
-  if (!is.null(parent_K)) {
-    K <- as.matrix(parent_K)
-    if (is.null(rownames(K)) || is.null(colnames(K))) ng_stop("parent_K must have row and column names")
+  if (!is.null(parent_kinship)) {
+    K <- as.matrix(parent_kinship)
+    if (is.null(rownames(K)) || is.null(colnames(K))) ng_stop("parent_kinship must have row and column names")
     missing <- setdiff(unique(c(grid$parent1, grid$parent2)), rownames(K))
-    if (length(missing)) ng_stop("parent_K missing parent IDs: ", paste(missing, collapse = ", "))
+    if (length(missing)) ng_stop("parent_kinship missing parent IDs: ", paste(missing, collapse = ", "))
     grid$pair_kinship <- as.numeric(K[cbind(grid$parent1, grid$parent2)])
   } else {
     grid$pair_kinship <- 0
@@ -312,7 +312,7 @@ ng_simplemating_build_crosses <- function(moms,
 ng_simplemating_style_select <- function(scores,
                                                   score_col = NULL,
                                                   n_crosses,
-                                                  parent_K = NULL,
+                                                  parent_kinship = NULL,
                                                   max_crosses_per_parent = 4L,
                                                   min_unique_parents = NULL,
                                                   culling_pairwise_k = NULL,
@@ -320,7 +320,7 @@ ng_simplemating_style_select <- function(scores,
                                                   local_iter = 2000L) {
   scores <- as.data.frame(scores, stringsAsFactors = FALSE)
   if (is.null(score_col)) {
-    score_col <- ng_first_numeric_col(scores, c("Y", "criterion_mean", "simple_usefa", "uc_dh_gebv", "uc_recomb_gebv", "cross_mean"), "scores")
+    score_col <- ng_first_numeric_col(scores, c("Y", "criterion_mean", "simple_usefa", "usefulness_pmv_gebv", "usefulness_vpm_gebv", "cross_mean"), "scores")
   }
   if (is.null(score_col) || !(score_col %in% names(scores))) ng_stop("No usable score_col found")
   if (!("pair_kinship" %in% names(scores))) {
@@ -335,7 +335,7 @@ ng_simplemating_style_select <- function(scores,
     scores = scores,
     n_crosses = n_crosses,
     gain_col = score_col,
-    parent_K = parent_K,
+    parent_kinship = parent_kinship,
     max_crosses_per_parent = max_crosses_per_parent,
     min_unique_parents = min_unique_parents,
     max_pair_kinship = max_pair_kinship,
@@ -349,7 +349,7 @@ ng_simplemating_style_select <- function(scores,
   s$simplemating_score_col <- score_col
   s$simplemating_culling_pairwise_k <- max_pair_kinship
   s$style_proxy <- TRUE
-  s$style_proxy_note <- "Lambda-penalized OCS approximation of SimpleMating::selectCrosses; not the exact SimpleMating algorithm."
+  s$style_proxy_note <- "Lambda-penalized OCS approximation of SimpleMating selectCrosses; not the exact SimpleMating algorithm."
   attr(plan, "summary") <- s
   attr(plan, "style_proxy") <- TRUE
   plan
@@ -369,7 +369,7 @@ ng_alphamate_style_lambda_grid <- function(lambda_group = NULL) {
 ng_alphamate_style_frontier <- function(scores,
                                         criterion_col,
                                         n_crosses,
-                                        parent_K,
+                                        parent_kinship,
                                         max_contributions = NULL,
                                         lambda_grid = NULL,
                                         method = "auto",
@@ -388,7 +388,7 @@ ng_alphamate_style_frontier <- function(scores,
         scores = scores,
         n_crosses = n_crosses,
         gain_col = criterion_col,
-        parent_K = parent_K,
+        parent_kinship = parent_kinship,
         max_crosses_per_parent = if (is.null(max_contributions)) n_crosses else max_contributions,
         lambda_group = lambda,
         lambda_parent_use = 0,
@@ -465,7 +465,7 @@ ng_alphamate_style_choose_frontier_plan <- function(frontier, mode, target_degre
 ng_alphamate_style_select <- function(scores,
                                       criterion_col = "cross_mean",
                                       n_crosses,
-                                      parent_K,
+                                      parent_kinship,
                                       mode = c("ModeOptTarget1", "ModeMaxCriterion", "ModeMinCoancestry"),
                                       target_degree = 45,
                                       max_contributions = NULL,
@@ -481,7 +481,7 @@ ng_alphamate_style_select <- function(scores,
     scores = scores,
     criterion_col = criterion_col,
     n_crosses = n_crosses,
-    parent_K = parent_K,
+    parent_kinship = parent_kinship,
     max_contributions = max_contributions,
     lambda_grid = lambda_grid,
     method = method,

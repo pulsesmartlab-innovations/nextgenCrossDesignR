@@ -106,31 +106,31 @@ stopifnot(isTRUE(all.equal(
 top_var <- ng_poly4x_var_topn(scores, n_crosses = 3L)
 stopifnot(nrow(top_var) == 3L)
 stopifnot(identical(unique(top_var$poly4x_method), "ng_poly4x_var_topn"))
-stopifnot(!is.null(attr(top_var, "parent_K")))
+stopifnot(!is.null(attr(top_var, "parent_kinship")))
 
 top_usefulness <- ng_poly4x_usefulness_topn(scores, n_crosses = 3L)
 stopifnot(nrow(top_usefulness) == 3L)
 stopifnot(identical(unique(top_usefulness$poly4x_method), "ng_poly4x_usefulness_topn"))
 
-parent_K <- attr(scores, "parent_K")
+parent_kinship <- attr(scores, "parent_kinship")
 ocs <- ng_poly4x_ocs(
   scores,
   n_crosses = 4L,
-  parent_K = parent_K,
+  parent_kinship = parent_kinship,
   max_crosses_per_parent = 2L,
   lambda_group = 0.5,
   lambda_parent_use = 1.0
 )
 stopifnot(nrow(ocs) == 4L)
 stopifnot(identical(unique(ocs$poly4x_method), "ng_poly4x_ocs"))
-counts <- ng_parent_counts(ocs, rownames(parent_K))
+counts <- ng_parent_counts(ocs, rownames(parent_kinship))
 stopifnot(max(counts) <= 2L)
 stopifnot(all(ocs$parent1 != ocs$parent2))
 
 ocs_from_attr <- ng_poly4x_ocs(
   scores,
   n_crosses = 3L,
-  parent_K = NULL,
+  parent_kinship = NULL,
   max_crosses_per_parent = 2L,
   lambda_group = 0.5,
   lambda_parent_use = 1.0
@@ -147,15 +147,15 @@ stopifnot(identical(policy_gain$parent2, expected_gain$parent2))
 stopifnot(identical(unique(policy_gain$poly4x_policy_mode), "gain"))
 stopifnot(identical(unique(policy_gain$poly4x_policy_scope), "autotetraploid_4x"))
 
-policy_ocs <- ng_poly4x_policy(scores, n_crosses = 4L, mode = "ocs", parent_K = parent_K)
+policy_ocs <- ng_poly4x_policy(scores, n_crosses = 4L, mode = "ocs", parent_kinship = parent_kinship)
 stopifnot(nrow(policy_ocs) == 4L)
-stopifnot(max(ng_parent_counts(policy_ocs, rownames(parent_K))) <= 4L)
+stopifnot(max(ng_parent_counts(policy_ocs, rownames(parent_kinship))) <= 4L)
 stopifnot(identical(unique(policy_ocs$poly4x_policy_mode), "ocs"))
 stopifnot(identical(attr(policy_ocs, "summary")$poly4x_policy_mode[[1]], "ocs"))
 
-policy_diversity <- ng_poly4x_policy(scores, n_crosses = 4L, mode = "diversity", parent_K = parent_K)
+policy_diversity <- ng_poly4x_policy(scores, n_crosses = 4L, mode = "diversity", parent_kinship = parent_kinship)
 stopifnot(nrow(policy_diversity) == 4L)
-stopifnot(max(ng_parent_counts(policy_diversity, rownames(parent_K))) <= 3L)
+stopifnot(max(ng_parent_counts(policy_diversity, rownames(parent_kinship))) <= 3L)
 stopifnot(identical(unique(policy_diversity$poly4x_policy_mode), "diversity"))
 
 invalid_policy <- tryCatch(

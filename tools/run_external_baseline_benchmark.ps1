@@ -32,4 +32,4 @@ $env:NG_OCS_MAX_CROSSES_PER_PARENT = Get-EnvValue "NG_EXTERNAL_OCS_MAX_CROSSES_P
 $env:NG_METHODS = Get-EnvValue "NG_EXTERNAL_METHODS" "var_simple_topn,popvar_musp_topn,popvar_uc_topn,simple_mpv_topn,simple_usefa_topn,simple_usefa_select4,ng_ocs_mip10_lps1,ng_ocs_mip10_lps2"
 $env:NG_OUTPUT_PREFIX = Get-EnvValue "NG_EXTERNAL_OUTPUT_PREFIX" "external_40p_5k_all_exact"
 
-Rscript tools\run_alphasimr_benchmark.R
+Rscript nextgen_cross_design\tools\run_alphasimr_benchmark.R

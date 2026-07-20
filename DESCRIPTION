@@ -1,12 +1,12 @@
 Package: nextgenCrossDesign
 Type: Package
 Title: Next Generation Cross Prediction and Mate Allocation
-Version: 0.4.0
+Version: 0.7.0
 Authors@R: c(
-    person("Sikiru", "Atanda", email = "pulsesmartlab@gmail.com", role = c("aut", "cre"))
+    person("NextGen", "Cross Design Team", email = "maintainer@example.com", role = c("aut", "cre"))
     )
-Author: Sikiru Atanda [aut, cre]
-Maintainer: Sikiru Atanda <pulsesmartlab@gmail.com>
+Author: NextGen Cross Design Team
+Maintainer: NextGen Cross Design Team <maintainer@example.com>
 Description: Breeding-program backend for genomic cross prediction, mate
     allocation, multi-trait selection, calibration, external baseline
     comparison, and crop/ploidy validation workflows. The package provides
@@ -16,8 +16,6 @@ Description: Breeding-program backend for genomic cross prediction, mate
     and explicit experimental modules for
     autotetraploid and allopolyploid model families.
 License: MIT + file LICENSE
-URL: https://github.com/pulsesmartlab-innovations/nextgenCrossDesignR
-BugReports: https://github.com/pulsesmartlab-innovations/nextgenCrossDesignR/issues
 Encoding: UTF-8
 Depends:
     R (>= 4.1.0)
@@ -26,24 +24,23 @@ Imports:
     utils,
     grDevices,
     graphics,
+    parallel,
     jsonlite,
     lpSolve,
-    Rcpp
+    Rcpp,
+    Matrix,
+    mvtnorm,
+    ggplot2,
+    openxlsx
 LinkingTo:
     Rcpp
 Suggests:
     AlphaSimR,
-    openxlsx,
     RhpcBLASctl,
-    Matrix,
     sommer,
-    ggplot2,
     patchwork,
     scales,
-    mvtnorm,
-    knitr,
-    rmarkdown,
     testthat (>= 3.0.0),
-    PopVar
+    knitr,
+    rmarkdown
 VignetteBuilder: knitr
-Config/testthat/edition: 3

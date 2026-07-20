@@ -9,14 +9,14 @@
 # three strategy presets resolved to their operating points.
 ng_frontier_export_payload <- function(scores,
                                        n_crosses,
-                                       parent_K,
-                                       gain_col = "uc_dh_gebv",
+                                       parent_kinship,
+                                       gain_col = "usefulness_pmv_gebv",
                                        lambdas = 10 ^ seq(-2, 3, length.out = 10),
                                        strategies = c("high_gain", "balanced", "diversity"),
                                        generated_at = Sys.time(),
                                        ...) {
   sweep <- ng_pareto_mate_allocation(scores = scores, n_crosses = n_crosses,
-                                     gain_col = gain_col, parent_K = parent_K,
+                                     gain_col = gain_col, parent_kinship = parent_kinship,
                                      lambdas = lambdas, ...)
   fr <- sweep$frontier
   gain_range <- range(suppressWarnings(as.numeric(fr$mean_gain)), na.rm = TRUE, finite = TRUE)
@@ -37,7 +37,7 @@ ng_frontier_export_payload <- function(scores,
   )
   strat <- lapply(strategies, function(st) {
     plan <- ng_select_by_strategy(scores = scores, n_crosses = n_crosses,
-                                  parent_K = parent_K, gain_col = gain_col,
+                                  parent_kinship = parent_kinship, gain_col = gain_col,
                                   strategy = st, lambdas = lambdas, ...)
     s <- attr(plan, "summary")
     list(strategy = st,
@@ -61,8 +61,8 @@ ng_frontier_export_payload <- function(scores,
   )
 }
 
-ng_write_frontier_json <- function(scores, n_crosses, parent_K, output_path = NULL,
-                                   gain_col = "uc_dh_gebv", generated_at = Sys.time(), ...) {
+ng_write_frontier_json <- function(scores, n_crosses, parent_kinship, output_path = NULL,
+                                   gain_col = "usefulness_pmv_gebv", generated_at = Sys.time(), ...) {
   if (!requireNamespace("jsonlite", quietly = TRUE)) {
     ng_stop("jsonlite is required to write frontier JSON")
   }
@@ -70,7 +70,7 @@ ng_write_frontier_json <- function(scores, n_crosses, parent_K, output_path = NU
     output_path <- file.path("results", "mating_frontier.json")
   }
   dir.create(dirname(output_path), recursive = TRUE, showWarnings = FALSE)
-  payload <- ng_frontier_export_payload(scores, n_crosses, parent_K, gain_col = gain_col,
+  payload <- ng_frontier_export_payload(scores, n_crosses, parent_kinship, gain_col = gain_col,
                                         generated_at = generated_at, ...)
   jsonlite::write_json(payload, output_path, auto_unbox = TRUE, pretty = TRUE, na = "null",
                        dataframe = "rows")

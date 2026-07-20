@@ -4,7 +4,7 @@
 # of the traits among a cross's progeny. By default it is approximated with per-trait within-family
 # variances and a POPULATION genetic correlation. `ng_cross_trait_within_family_cov()` instead
 # computes the EXACT recombination-aware covariance a_t' R a_s per cross (the two-trait
-# generalization of the single-trait a'Ra; its diagonal reproduces dh_recomb_var). Pass it to
+# generalization of the single-trait a'Ra; its diagonal reproduces vpm). Pass it to
 # `ng_add_p_superior_progeny_multitrait(cross_trait_cov = ...)` to build an exact Sigma_c.
 #
 # This script is self-contained (small simulated inbred lines) and runs against the installed

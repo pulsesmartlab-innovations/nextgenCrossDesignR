@@ -1,4 +1,4 @@
-ng_poly4x_as_dosage_matrix <- function(geno, ploidy = 4L, name = deparse(substitute(geno))) {
+ng_polyploid_as_dosage_matrix <- function(geno, ploidy = 4L, name = deparse(substitute(geno))) {
   if (length(ploidy) != 1L) ng_stop("ploidy must be an integer >= 2")
   ploidy <- suppressWarnings(as.numeric(ploidy))
   if (!is.finite(ploidy) || ploidy < 2L || abs(ploidy - round(ploidy)) > 1e-8) {
@@ -21,17 +21,17 @@ ng_poly4x_as_dosage_matrix <- function(geno, ploidy = 4L, name = deparse(substit
 }
 
 ng_poly4x_additive_scaled <- function(geno, ploidy = 4L) {
-  geno <- ng_poly4x_as_dosage_matrix(geno, ploidy = ploidy, name = "geno")
+  geno <- ng_polyploid_as_dosage_matrix(geno, ploidy = ploidy, name = "geno")
   (geno - ploidy / 2) * (2 / ploidy)
 }
 
 ng_poly4x_digenic_scaled <- function(geno, ploidy = 4L) {
-  geno <- ng_poly4x_as_dosage_matrix(geno, ploidy = ploidy, name = "geno")
+  geno <- ng_polyploid_as_dosage_matrix(geno, ploidy = ploidy, name = "geno")
   geno * (ploidy - geno) * (2 / ploidy) ^ 2
 }
 
 ng_poly4x_parent_relationship <- function(geno, ploidy = 4L) {
-  geno <- ng_poly4x_as_dosage_matrix(geno, ploidy = ploidy, name = "geno")
+  geno <- ng_polyploid_as_dosage_matrix(geno, ploidy = ploidy, name = "geno")
   X <- ng_poly4x_additive_scaled(geno, ploidy = ploidy)
   denom <- sum(diag(stats::var(X)))
   if (!is.finite(denom) || denom <= 0) denom <- ncol(X)
@@ -41,26 +41,26 @@ ng_poly4x_parent_relationship <- function(geno, ploidy = 4L) {
   K
 }
 
-ng_poly4x_pair_coancestry <- function(parent_K, pairs) {
-  parent_K <- as.matrix(parent_K)
-  if (!is.numeric(parent_K)) ng_stop("parent_K must be numeric")
-  if (nrow(parent_K) != ncol(parent_K)) ng_stop("parent_K must be a square matrix")
+ng_poly4x_pair_coancestry <- function(parent_kinship, pairs) {
+  parent_kinship <- as.matrix(parent_kinship)
+  if (!is.numeric(parent_kinship)) ng_stop("parent_kinship must be numeric")
+  if (nrow(parent_kinship) != ncol(parent_kinship)) ng_stop("parent_kinship must be a square matrix")
   pairs <- as.data.frame(pairs, stringsAsFactors = FALSE)
   if (!all(c("parent1", "parent2") %in% names(pairs))) {
     ng_stop("pairs must contain parent1 and parent2")
   }
-  row_ids <- rownames(parent_K)
-  col_ids <- colnames(parent_K)
-  if (is.null(row_ids) || is.null(col_ids)) ng_stop("parent_K must have row and column dimnames")
-  if (anyDuplicated(row_ids)) ng_stop("parent_K row IDs must be unique")
-  if (anyDuplicated(col_ids)) ng_stop("parent_K column IDs must be unique")
+  row_ids <- rownames(parent_kinship)
+  col_ids <- colnames(parent_kinship)
+  if (is.null(row_ids) || is.null(col_ids)) ng_stop("parent_kinship must have row and column dimnames")
+  if (anyDuplicated(row_ids)) ng_stop("parent_kinship row IDs must be unique")
+  if (anyDuplicated(col_ids)) ng_stop("parent_kinship column IDs must be unique")
   requested <- unique(c(as.character(pairs$parent1), as.character(pairs$parent2)))
   miss <- setdiff(requested, row_ids)
-  if (length(miss)) ng_stop("parent_K missing parent IDs: ", paste(miss, collapse = ", "))
+  if (length(miss)) ng_stop("parent_kinship missing parent IDs: ", paste(miss, collapse = ", "))
   miss <- setdiff(requested, col_ids)
-  if (length(miss)) ng_stop("parent_K column IDs missing parent IDs: ", paste(miss, collapse = ", "))
-  if (!setequal(row_ids, col_ids)) ng_stop("parent_K row and column IDs must describe the same parents")
+  if (length(miss)) ng_stop("parent_kinship column IDs missing parent IDs: ", paste(miss, collapse = ", "))
+  if (!setequal(row_ids, col_ids)) ng_stop("parent_kinship row and column IDs must describe the same parents")
   vapply(seq_len(nrow(pairs)), function(i) {
-    parent_K[as.character(pairs$parent1[[i]]), as.character(pairs$parent2[[i]])]
+    parent_kinship[as.character(pairs$parent1[[i]]), as.character(pairs$parent2[[i]])]
   }, numeric(1))
 }

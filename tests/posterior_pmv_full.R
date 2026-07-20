@@ -4,7 +4,7 @@ helper <- c(file.path("tests", "helper_load.R"), "helper_load.R",
 source(helper[file.exists(helper)][[1L]])
 
 # D2: full off-diagonal posterior PMV. With Sigma_beta = diag(beta_var) the new
-# dh_pmv_var_full_posterior must exactly reproduce the legacy diagonal column.
+# pmv_full_posterior must exactly reproduce the legacy diagonal column.
 # With a non-trivial off-diagonal Sigma_beta the full posterior PMV must add
 #   d' (R o Sigma_beta) d   to the VPM, matching the genomicMateSelectR
 # formulation.
@@ -41,10 +41,10 @@ full_diag <- ng_dh_recomb_variance_pairs_full_posterior(
   marker_map = sorted$marker_map, ids = ids, pairs = pairs,
   target = "DH", recomb_model = "haldane"
 )
-stopifnot("dh_pmv_var_full_posterior" %in% names(full_diag))
-err_vpm <- max(abs(full_diag$dh_recomb_var - diag_dh$dh_recomb_var))
-err_pmv <- max(abs(full_diag$dh_pmv_var - diag_dh$dh_pmv_var))
-err_full <- max(abs(full_diag$dh_pmv_var_full_posterior - diag_dh$dh_pmv_var))
+stopifnot("pmv_full_posterior" %in% names(full_diag))
+err_vpm <- max(abs(full_diag$vpm - diag_dh$vpm))
+err_pmv <- max(abs(full_diag$pmv - diag_dh$pmv))
+err_full <- max(abs(full_diag$pmv_full_posterior - diag_dh$pmv))
 if (err_vpm > 1e-9 || err_pmv > 1e-9 || err_full > 1e-9) {
   stop(sprintf("diagonal Sigma_beta: VPM err=%g, PMV err=%g, full err=%g",
                err_vpm, err_pmv, err_full))
@@ -115,15 +115,15 @@ diag_pp <- ng_dh_recomb_variance_pairs_full_posterior(
   marker_map = sorted_p$marker_map, ids = parents, pairs = pairs_p,
   target = "DH", recomb_model = "haldane"
 )
-# VPM (a'Ra) and diagonal dh_pmv_var must be invariant to the off-diagonal Sigma.
-stopifnot(max(abs(full_pp$dh_recomb_var - diag_pp$dh_recomb_var)) < 1e-10)
-stopifnot(max(abs(full_pp$dh_pmv_var - diag_pp$dh_pmv_var)) < 1e-10)
+# VPM (a'Ra) and diagonal pmv must be invariant to the off-diagonal Sigma.
+stopifnot(max(abs(full_pp$vpm - diag_pp$vpm)) < 1e-10)
+stopifnot(max(abs(full_pp$pmv - diag_pp$pmv)) < 1e-10)
 # At least one pair must move (off-diagonals are non-zero and d_k d_l are
 # non-trivial); the column must exist and not collapse to NA.
-stopifnot(all(is.finite(full_pp$dh_pmv_var_full_posterior)))
-delta_full <- full_pp$dh_pmv_var_full_posterior - diag_pp$dh_pmv_var_full_posterior
+stopifnot(all(is.finite(full_pp$pmv_full_posterior)))
+delta_full <- full_pp$pmv_full_posterior - diag_pp$pmv_full_posterior
 if (max(abs(delta_full)) < 1e-8) {
-  stop("off-diagonal Sigma_beta produced no change in dh_pmv_var_full_posterior")
+  stop("off-diagonal Sigma_beta produced no change in pmv_full_posterior")
 }
 
 # ---- Test 3: 2-locus closed-form sanity check --------------------------------------
@@ -155,8 +155,8 @@ full3 <- ng_dh_recomb_variance_pairs_full_posterior(
 expect_vpm <- beta3[1]^2 + beta3[2]^2 + 2 * beta3[1] * beta3[2] * decay3
 expect_pmv_full <- beta3[1]^2 + beta3[2]^2 +
   2 * (beta3[1] * beta3[2] + cov12) * decay3
-err_vpm3 <- abs(full3$dh_recomb_var - expect_vpm)
-err_full3 <- abs(full3$dh_pmv_var_full_posterior - expect_pmv_full)
+err_vpm3 <- abs(full3$vpm - expect_vpm)
+err_full3 <- abs(full3$pmv_full_posterior - expect_pmv_full)
 if (err_vpm3 > 1e-10) {
   stop(sprintf("2-locus VPM disagrees with closed form: err=%g", err_vpm3))
 }
@@ -164,13 +164,13 @@ if (err_full3 > 1e-10) {
   stop(sprintf("2-locus full-posterior PMV disagrees with closed form: err=%g", err_full3))
 }
 # diag(Sigma)=0 here, so the diagonal-only PMV must equal the VPM.
-stopifnot(abs(full3$dh_pmv_var - full3$dh_recomb_var) < 1e-10)
+stopifnot(abs(full3$pmv - full3$vpm) < 1e-10)
 # With cov12 > 0 and a' R a using a positive (1-2r), the full-posterior PMV
 # must exceed the diagonal-only PMV.
-stopifnot(full3$dh_pmv_var_full_posterior > full3$dh_pmv_var)
+stopifnot(full3$pmv_full_posterior > full3$pmv)
 
 # ---- Test 4: ng_score_crosses wiring (posterior_cov_full = ...) --------------------
-# Default (NULL) -> dh_pmv_var_full_posterior column is NA. With the matrix
+# Default (NULL) -> pmv_full_posterior column is NA. With the matrix
 # supplied, the column is finite and matches the kernel.
 effects_p <- list(beta = fit_full$beta, beta_var = fit_full$beta_var,
                   beta_cov_full = fit_full$beta_cov_full,
@@ -182,8 +182,8 @@ sc_legacy <- ng_score_crosses(
   marker_map = mm2, ids = parents, adjusted_pheno = adj_p,
   selection_prop = 0.10, recomb_model = "haldane", use_cpp = FALSE
 )
-stopifnot("dh_pmv_var_full_posterior" %in% names(sc_legacy))
-stopifnot(all(is.na(sc_legacy$dh_pmv_var_full_posterior)))
+stopifnot("pmv_full_posterior" %in% names(sc_legacy))
+stopifnot(all(is.na(sc_legacy$pmv_full_posterior)))
 
 sc_full <- ng_score_crosses(
   geno = geno_p, effects = effects_p,
@@ -191,20 +191,20 @@ sc_full <- ng_score_crosses(
   selection_prop = 0.10, recomb_model = "haldane", use_cpp = FALSE,
   posterior_cov_full = fit_full$beta_cov_full
 )
-stopifnot(all(is.finite(sc_full$dh_pmv_var_full_posterior)))
+stopifnot(all(is.finite(sc_full$pmv_full_posterior)))
 # The wired path must agree with a direct kernel call (after aligning by pair).
 key_l <- paste(sc_legacy$parent1, sc_legacy$parent2, sep = "x")
 key_f <- paste(sc_full$parent1, sc_full$parent2, sep = "x")
 stopifnot(identical(key_l, key_f))
 # Diagonal columns are unchanged across the two calls.
-stopifnot(max(abs(sc_legacy$dh_recomb_var - sc_full$dh_recomb_var)) < 1e-10)
-stopifnot(max(abs(sc_legacy$dh_pmv_var - sc_full$dh_pmv_var)) < 1e-10)
+stopifnot(max(abs(sc_legacy$vpm - sc_full$vpm)) < 1e-10)
+stopifnot(max(abs(sc_legacy$pmv - sc_full$pmv)) < 1e-10)
 # Full posterior PMV must be >= VPM (extra variance is non-negative when Sigma
 # is positive semi-definite, which the ridge dual identity guarantees).
-stopifnot(all(sc_full$dh_pmv_var_full_posterior + 1e-10 >= sc_full$dh_recomb_var))
+stopifnot(all(sc_full$pmv_full_posterior + 1e-10 >= sc_full$vpm))
 
 cat("posterior_pmv_full: 4/4 checks passed\n")
 cat(sprintf("  max |diag-only - legacy diagonal PMV| = %.3e\n", err_full))
-cat(sprintf("  max |off-diag Sigma effect on dh_pmv_var_full_posterior| = %.3e\n",
+cat(sprintf("  max |off-diag Sigma effect on pmv_full_posterior| = %.3e\n",
             max(abs(delta_full))))
 cat(sprintf("  2-locus closed-form full PMV err = %.3e\n", err_full3))

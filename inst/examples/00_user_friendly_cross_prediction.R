@@ -20,8 +20,8 @@ required_args <- c(
   "ril_mode",
   "run_posterior_prediction",
   "posterior_method",
-  "nIter",
-  "burnIn",
+  "n_iter",
+  "burn_in",
   "use_parallel"
 )
 missing_args <- setdiff(required_args, names(formals(nextgenCrossDesign::ng_run_cross_prediction)))
@@ -126,18 +126,18 @@ prediction_mode <- "trait_by_trait"
 # Native trait-value choices:
 #   "var_complex"  native PopVar-inspired complex usefulness metric.
 #                  It uses mean +/- i*SD, prefers PMV variance when available,
-#                  and falls back to recombination variance or var_simple.
-#   "uc"           mean +/- i*SD using uc_variance_source.
+#                  and falls back to recombination variance or le.
+#   "usefulness"   mean +/- i*SD using uc_variance_source.
 #   "pmv"          usefulness using PMV variance.
 #   "vpm"          usefulness using recombination variance.
-#   "var_simple"   relationship-distance diversity proxy.
+#   "le"           relationship-distance diversity proxy.
 #   "mean"         cross mean only.
 trait_value_metric <- "var_complex"
 uc_variance_source <- "pmv"
 selection_prop <- 0.10
 
 progeny <- "RILs"                # "DH", "DHs", "RIL", or "RILs"
-recombination_model <- "haldane" # "haldane" or "kosambi"
+recomb_model <- "haldane" # "haldane" or "kosambi"
 assume_inbred <- FALSE
 min_effect_reliability <- 0.35
 
@@ -149,8 +149,8 @@ method_varPMV <- "fast"          # "fast" or "full_posterior"
 ril_mode <- "infinite"           # current RIL variance mode
 run_posterior_prediction <- FALSE
 posterior_method <- "mcmc"        # "closed_form" or "mcmc"
-nIter <- 5000
-burnIn <- 500
+n_iter <- 5000
+burn_in <- 500
 use_parallel <- FALSE
 
 # -------------------------------------------------------------------------
@@ -173,7 +173,7 @@ threshold_penalty_autoscale <- TRUE
 # -------------------------------------------------------------------------
 
 n_crosses <- 100
-max_uses_per_parent <- 20
+max_crosses_per_parent <- 20
 min_unique_parents <- NULL
 max_pair_kinship <- Inf
 
@@ -200,7 +200,7 @@ ocs_iter <- 5
 # Used when allocation_method is "alphamate_style" or "alphamate_executable".
 alphamate_mode <- "ModeOptTarget1"
 alphamate_target_degree <- 45
-alphamate_max_contributions <- max_uses_per_parent
+alphamate_max_contributions <- max_crosses_per_parent
 alphamate_number_of_parents <- NULL
 alphamate_lambda_group <- NULL
 alphamate_lambda_grid <- NULL
@@ -262,12 +262,12 @@ result <- ng_run_cross_prediction(
   ril_mode = ril_mode,
   run_posterior_prediction = run_posterior_prediction,
   posterior_method = posterior_method,
-  nIter = nIter,
-  burnIn = burnIn,
+  n_iter = n_iter,
+  burn_in = burn_in,
   use_parallel = use_parallel,
 
   progeny = progeny,
-  recombination_model = recombination_model,
+  recomb_model = recomb_model,
   assume_inbred = assume_inbred,
 
   duplicate_action = duplicate_action,
@@ -277,7 +277,7 @@ result <- ng_run_cross_prediction(
   duplicate_min_compared_markers = duplicate_min_compared_markers,
 
   n_crosses = n_crosses,
-  max_uses_per_parent = max_uses_per_parent,
+  max_crosses_per_parent = max_crosses_per_parent,
   min_unique_parents = min_unique_parents,
   max_pair_kinship = max_pair_kinship,
   optimizer = optimizer,

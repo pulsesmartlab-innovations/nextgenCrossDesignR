@@ -22,7 +22,7 @@ crosses <- ng_simplemating_build_crosses(
   dads = ids,
   keep = keep,
   criterion = criterion,
-  parent_K = K,
+  parent_kinship = K,
   include_self = FALSE,
   max_pair_kinship = 0.75
 )
@@ -38,7 +38,7 @@ stopifnot(!any(ng_unordered_pair_key(filtered$parent1, filtered$parent2) == ng_u
 
 scores <- filtered
 scores$cross_mean <- scores$criterion_mean
-scores$var_simple <- seq_len(nrow(scores)) / 10
+scores$parent_distance <- seq_len(nrow(scores)) / 10
 scores <- ng_popvar_style_scores(scores, selection_prop = 0.2, out_prefix = "popvar_style")
 stopifnot(all(is.finite(scores$popvar_style_uc)))
 stopifnot(all(scores$popvar_style_status == "native_proxy"))
@@ -47,7 +47,7 @@ plan_simple <- ng_simplemating_select_crosses_native(
   scores = scores,
   score_col = "Y",
   n_crosses = min(2L, nrow(scores)),
-  parent_K = K,
+  parent_kinship = K,
   max_crosses_per_parent = 2L,
   culling_pairwise_k = 0.75,
   method = "greedy_local"
@@ -59,7 +59,7 @@ plan_alpha <- ng_alphamate_style_select(
   scores = scores,
   criterion_col = "cross_mean",
   n_crosses = min(2L, nrow(scores)),
-  parent_K = K,
+  parent_kinship = K,
   mode = "ModeOptTarget1",
   target_degree = 45,
   max_contributions = 2L,
@@ -72,7 +72,7 @@ fallback_scores <- data.frame(
   parent1 = c("P1", "P1"),
   parent2 = c("P2", "P3"),
   cross_mean = c(1, 2),
-  var_simple = c(0.2, 0.4),
+  parent_distance = c(0.2, 0.4),
   stringsAsFactors = FALSE
 )
 fallback_scores <- ng_apply_popvar_native_proxy(fallback_scores, tail_p = 0.1)
@@ -89,7 +89,7 @@ native_popvar <- ng_add_popvar_scores(
     parent1 = c("P1", "P1"),
     parent2 = c("P2", "P3"),
     cross_mean = c(1.0, 1.5),
-    var_simple = c(0.2, 0.3),
+    parent_distance = c(0.2, 0.3),
     stringsAsFactors = FALSE
   ),
   geno = dummy_geno,
@@ -106,7 +106,7 @@ native_simple <- ng_add_simplemating_scores(
     parent1 = c("P1", "P1"),
     parent2 = c("P2", "P3"),
     cross_mean = c(1.0, 1.5),
-    var_simple = c(0.2, 0.3),
+    parent_distance = c(0.2, 0.3),
     stringsAsFactors = FALSE
   ),
   geno = dummy_geno,
@@ -123,7 +123,7 @@ native_external <- ng_add_external_baseline_scores(
     parent1 = c("P1", "P1"),
     parent2 = c("P2", "P3"),
     cross_mean = c(1.0, 1.5),
-    var_simple = c(0.2, 0.3),
+    parent_distance = c(0.2, 0.3),
     stringsAsFactors = FALSE
   ),
   geno = dummy_geno,
@@ -157,7 +157,7 @@ gain_target <- ng_alphamate_style_select(
   scores = target_scores,
   criterion_col = "cross_mean",
   n_crosses = 2L,
-  parent_K = target_K,
+  parent_kinship = target_K,
   mode = "ModeOptTarget1",
   target_degree = 0,
   max_contributions = 2L,
@@ -168,7 +168,7 @@ diverse_target <- ng_alphamate_style_select(
   scores = target_scores,
   criterion_col = "cross_mean",
   n_crosses = 2L,
-  parent_K = target_K,
+  parent_kinship = target_K,
   mode = "ModeOptTarget1",
   target_degree = 100,
   max_contributions = 2L,

@@ -41,7 +41,7 @@ pp <- sprintf("P%02d", seq_len(np))
 cmb <- t(utils::combn(np, 2L))
 scores <- data.frame(parent1 = pp[cmb[, 1]], parent2 = pp[cmb[, 2]],
                      stringsAsFactors = FALSE)
-scores$uc_dh_gebv <- rnorm(nrow(scores), 5, 1)
+scores$usefulness_pmv_gebv <- rnorm(nrow(scores), 5, 1)
 L <- matrix(rnorm(np * np, 0, 0.3), np, np)
 G <- crossprod(L) / np
 diag(G) <- diag(G) + 1
@@ -49,8 +49,8 @@ dimnames(G) <- list(pp, pp)
 scores$pair_kinship <- G[cbind(match(scores$parent1, pp), match(scores$parent2, pp))]
 scores$expected_progeny_inbreeding <- pmax(0, scores$pair_kinship / 2)
 
-base <- ng_optimize_mating_plan(scores, 12L, parent_K = G, lambda_progeny_inbreeding = 0)
-pen  <- ng_optimize_mating_plan(scores, 12L, parent_K = G, lambda_progeny_inbreeding = 50)
+base <- ng_optimize_mating_plan(scores, 12L, parent_kinship = G, lambda_progeny_inbreeding = 0)
+pen  <- ng_optimize_mating_plan(scores, 12L, parent_kinship = G, lambda_progeny_inbreeding = 50)
 sb <- attr(base, "summary"); sp <- attr(pen, "summary")
 stopifnot(is.finite(sb$mean_progeny_inbreeding), is.finite(sp$mean_progeny_inbreeding))
 stopifnot(sp$mean_progeny_inbreeding <= sb$mean_progeny_inbreeding + 1e-8)
@@ -98,7 +98,7 @@ set.seed(112)
 no <- 18L; po <- sprintf("P%02d", seq_len(no))
 cbo <- t(utils::combn(no, 2L))
 so <- data.frame(parent1 = po[cbo[, 1]], parent2 = po[cbo[, 2]], stringsAsFactors = FALSE)
-so$uc_dh_gebv <- rnorm(nrow(so), 8, 2)
+so$usefulness_pmv_gebv <- rnorm(nrow(so), 8, 2)
 Lo <- matrix(rnorm(no * no, 0, 0.3), no, no); Go <- crossprod(Lo) / no
 diag(Go) <- diag(Go) + 1; dimnames(Go) <- list(po, po)
 so$pair_kinship <- Go[cbind(match(so$parent1, po), match(so$parent2, po))]
@@ -107,13 +107,13 @@ so$expected_progeny_inbreeding <- pmax(0, so$pair_kinship / 2)
 options(ngcd.warned_relatedness_overlap = NULL)  # reset session-once guard
 got_warn <- FALSE
 both <- withCallingHandlers(
-  ng_optimize_mating_plan(so, 10L, parent_K = Go, lambda_mating = 1,
+  ng_optimize_mating_plan(so, 10L, parent_kinship = Go, lambda_mating = 1,
                           lambda_progeny_inbreeding = 10),
   warning = function(w) { if (grepl("both penalize parent-pair", conditionMessage(w))) got_warn <<- TRUE; invokeRestart("muffleWarning") })
 stopifnot(got_warn)
 stopifnot(isTRUE(attr(both, "summary")$relatedness_penalty_overlap))
 # using only one knob does NOT flag overlap
-one <- ng_optimize_mating_plan(so, 10L, parent_K = Go, lambda_progeny_inbreeding = 10)
+one <- ng_optimize_mating_plan(so, 10L, parent_kinship = Go, lambda_progeny_inbreeding = 10)
 stopifnot(isFALSE(attr(one, "summary")$relatedness_penalty_overlap))
 
 cat("progeny inbreeding test passed\n")

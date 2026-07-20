@@ -11,7 +11,7 @@
 #     crosses almost identically -- treat as interchangeable.
 #   * "mean": competitive when the trait is highly polygenic OR training is small / low-h2
 #     (the within-family variance term adds little there and can add noise).
-#   * "var_simple": a diversity/relatedness proxy, NOT a merit metric -- do not select on it.
+#   * "le": a linkage-equilibrium diversity/relatedness proxy, NOT a merit metric -- do not select on it.
 #   * Long-term recurrent selection: manage diversity EXPLICITLY (lambda_group, or the
 #     strategy dial / target_coancestry) on top of a good merit metric, because pure
 #     usefulness metrics exhaust genetic variance and gain plateaus. See example 21.
@@ -24,8 +24,8 @@ required_args <- c(
   "ril_mode",
   "run_posterior_prediction",
   "posterior_method",
-  "nIter",
-  "burnIn",
+  "n_iter",
+  "burn_in",
   "use_parallel"
 )
 missing_args <- setdiff(required_args, names(formals(nextgenCrossDesign::ng_run_cross_prediction)))
@@ -98,7 +98,7 @@ trait_value_metric <- "var_complex"
 uc_variance_source <- "pmv"
 selection_prop <- 0.20
 progeny <- "DH"
-recombination_model <- "haldane"
+recomb_model <- "haldane"
 
 method_varPMV <- "fast"
 method_varPMV_choices <- c("fast", "full_posterior")
@@ -109,9 +109,9 @@ ril_mode_choices <- c("infinite")
 run_posterior_prediction <- FALSE
 posterior_method <- "mcmc"
 posterior_method_choices <- c("closed_form", "mcmc")
-nIter <- 5000
-burnIn <- 500
-n_draws <- max(1L, nIter - burnIn)
+n_iter <- 5000
+burn_in <- 500
+n_draws <- max(1L, n_iter - burn_in)
 
 use_parallel <- FALSE
 
@@ -121,13 +121,13 @@ parameter_notes <- data.frame(
     "uc_variance_source",
     "selection_prop",
     "progeny",
-    "recombination_model",
+    "recomb_model",
     "method_varPMV",
     "ril_mode",
     "run_posterior_prediction",
     "posterior_method",
-    "nIter",
-    "burnIn",
+    "n_iter",
+    "burn_in",
     "use_parallel"
   ),
   wrapper_argument = c(
@@ -135,18 +135,18 @@ parameter_notes <- data.frame(
     "uc_variance_source",
     "selection_prop",
     "progeny",
-    "recombination_model",
+    "recomb_model",
     "method_varPMV",
     "ril_mode",
     "run_posterior_prediction",
     "posterior_method",
-    "nIter",
-    "burnIn",
+    "n_iter",
+    "burn_in",
     "use_parallel"
   ),
   choices = c(
-    "var_complex, uc, pmv, vpm, var_simple, mean",
-    "pmv, vpm, var_simple",
+    "var_complex, usefulness, pmv, vpm, le, mean",
+    "pmv, vpm, le",
     "numeric proportion such as 0.10 or 0.20",
     "DH, DHs, RIL, RILs",
     "haldane, kosambi",
@@ -160,7 +160,7 @@ parameter_notes <- data.frame(
   ),
   when_to_use = c(
     "Choose the cross-value formula. var_complex is the practical default; mean ignores within-family variance.",
-    "Used only when trait_value_metric = 'uc'. Use pmv for marker-effect uncertainty, vpm for recombination variance, or var_simple for a diversity proxy.",
+    "Used only when trait_value_metric = 'usefulness'. Use pmv for marker-effect uncertainty, vpm for recombination variance, or le for a diversity proxy.",
     "Controls selection intensity in mean +/- i * SD. Smaller values emphasize the upper tail more strongly.",
     "Choose DH for doubled haploids or RIL for recombinant inbred lines.",
     "Use haldane as the default. Use kosambi when your genetic map and breeding convention require it.",
@@ -168,7 +168,7 @@ parameter_notes <- data.frame(
     "Current RIL implementation is the infinite-selfing RIL variance approximation.",
     "Set TRUE when you want posterior score intervals returned in result$posterior_predictions.",
     "closed_form is faster. mcmc is slower and integrates over variance-component uncertainty.",
-    "For posterior runs, total user iterations; n_draws is max(1, nIter - burnIn).",
+    "For posterior runs, total user iterations; n_draws is max(1, n_iter - burn_in).",
     "For posterior MCMC, discarded burn-in iterations. For closed_form, it only affects the n_draws calculation.",
     "Runs trait fits in parallel where the current R session can start workers; otherwise the package records a serial fallback."
   ),
@@ -182,17 +182,17 @@ metric_grid <- data.frame(
     "uc_vpm_fast",
     "pmv_full_posterior",
     "vpm_ril_infinite",
-    "var_simple_diversity_proxy",
+    "le_diversity_proxy",
     "mean_only",
     "posterior_closed_form_small"
   ),
   trait_value_metric = c(
     "var_complex",
-    "uc",
-    "uc",
+    "usefulness",
+    "usefulness",
     "pmv",
     "vpm",
-    "var_simple",
+    "le",
     "mean",
     "pmv"
   ),
@@ -246,7 +246,7 @@ metric_grid <- data.frame(
     "infinite",
     "infinite"
   ),
-  recombination_model = c(
+  recomb_model = c(
     "haldane",
     "haldane",
     "haldane",
@@ -276,24 +276,24 @@ metric_grid <- data.frame(
     posterior_method,
     "closed_form"
   ),
-  nIter = c(
-    nIter,
-    nIter,
-    nIter,
-    nIter,
-    nIter,
-    nIter,
-    nIter,
+  n_iter = c(
+    n_iter,
+    n_iter,
+    n_iter,
+    n_iter,
+    n_iter,
+    n_iter,
+    n_iter,
     8
   ),
-  burnIn = c(
-    burnIn,
-    burnIn,
-    burnIn,
-    burnIn,
-    burnIn,
-    burnIn,
-    burnIn,
+  burn_in = c(
+    burn_in,
+    burn_in,
+    burn_in,
+    burn_in,
+    burn_in,
+    burn_in,
+    burn_in,
     3
   ),
   use_parallel = c(
@@ -351,17 +351,17 @@ run_metric <- function(row) {
     ril_mode = row$ril_mode,
     run_posterior_prediction = row$run_posterior_prediction,
     posterior_method = row$posterior_method,
-    nIter = row$nIter,
-    burnIn = row$burnIn,
+    n_iter = row$n_iter,
+    burn_in = row$burn_in,
     use_parallel = row$use_parallel,
 
     progeny = row$progeny,
-    recombination_model = row$recombination_model,
+    recomb_model = row$recomb_model,
     assume_inbred = TRUE,
 
     duplicate_action = "none",
     n_crosses = 4,
-    max_uses_per_parent = 3,
+    max_crosses_per_parent = 3,
     optimizer = "greedy_local",
     allocation_method = "ocs",
     use_ocs = TRUE,
@@ -392,7 +392,7 @@ run_metric <- function(row) {
 
   if (isTRUE(row$run_posterior_prediction)) {
     stopifnot(length(result$posterior_predictions) > 0L)
-    stopifnot(all(c("dh_pmv_var_post_mean", "uc_dh_gebv_post_mean") %in%
+    stopifnot(all(c("pmv_post_mean", "usefulness_pmv_gebv_post_mean") %in%
                     names(result$posterior_predictions[[1L]])))
   }
 
@@ -405,7 +405,7 @@ run_metric <- function(row) {
     method_varPMV = result$settings$method_varPMV,
     progeny = result$settings$progeny,
     ril_mode = result$settings$ril_mode,
-    recombination_model = result$settings$recombination_model,
+    recomb_model = result$settings$recomb_model,
     run_posterior_prediction = result$settings$run_posterior_prediction,
     posterior_method = result$settings$posterior_method,
     posterior_n_draws = result$settings$posterior_n_draws,
@@ -472,7 +472,7 @@ if (run_lower_level_demonstration) {
     ids = rownames(geno_matrix),
     n_draws = n_draws,
     method = posterior_method,
-    mcmc_burnin = burnIn,
+    mcmc_burnin = burn_in,
     seed = 20260623
   )
 

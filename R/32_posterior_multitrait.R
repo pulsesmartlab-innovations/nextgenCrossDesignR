@@ -208,7 +208,7 @@ ng_posterior_multitrait_cross_predict <- function(geno,
           ids = ids, pairs = pairs, window_cm = window_cm,
           use_cpp = use_cpp, recomb_model = recomb_model, target = target
         )
-        pmv_js <- pmax(scored_pair$dh_pmv_var, 0)
+        pmv_js <- pmax(scored_pair$pmv, 0)
         if (do_threshold) trait_cross_var[, j] <- pmv_js
         if (use_pmv) {
           sigma_js <- sqrt(pmv_js)

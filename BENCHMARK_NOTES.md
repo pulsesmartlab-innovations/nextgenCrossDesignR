@@ -230,7 +230,7 @@ before scaling to AlphaSimR or crop-specific validation.
 Command:
 
 ```text
-Rscript tools/run_multitrait_validation.R
+Rscript nextgen_cross_design/tools/run_multitrait_validation.R
 ```
 
 Default configuration:
@@ -278,7 +278,7 @@ NG_MULTITRAIT_GRID_PREFIX=multitrait_grid_smoke_20260506
 NG_MULTITRAIT_GRID_PARENT_SIZES=8,10
 NG_MULTITRAIT_GRID_REPS=2
 NG_MULTITRAIT_GRID_CROSSES=3
-Rscript tools/run_multitrait_validation_grid.R
+Rscript nextgen_cross_design/tools/run_multitrait_validation_grid.R
 ```
 
 Configuration:
@@ -343,7 +343,7 @@ NG_MULTITRAIT_CROP_GRID_N_CHR=2
 NG_MULTITRAIT_CROP_GRID_SEG_SITES=30
 NG_MULTITRAIT_CROP_GRID_SNP_PER_CHR=8
 NG_MULTITRAIT_CROP_GRID_QTL_PER_CHR=2
-Rscript tools/run_multitrait_crop_validation_grid.R
+Rscript nextgen_cross_design/tools/run_multitrait_crop_validation_grid.R
 ```
 
 Configuration:
@@ -400,7 +400,7 @@ seeds, writes candidate score tables, and records tie-aware winner summaries.
 
 Baseline verification:
 
-- Full R test sweep over `tests/*.R`: passed.
+- Full R test sweep over `nextgen_cross_design/tests/*.R`: passed.
 - Focused tests passed for synthetic multi-trait grids, crop multi-trait grids,
   and package-root test invocation.
 
@@ -418,7 +418,7 @@ NG_MULTITRAIT_CROP_GRID_N_CHR=4
 NG_MULTITRAIT_CROP_GRID_SEG_SITES=80
 NG_MULTITRAIT_CROP_GRID_SNP_PER_CHR=20
 NG_MULTITRAIT_CROP_GRID_QTL_PER_CHR=5
-Rscript tools/run_multitrait_crop_validation_grid.R
+Rscript nextgen_cross_design/tools/run_multitrait_crop_validation_grid.R
 ```
 
 Output checks:
@@ -516,7 +516,7 @@ $env:NG_HEAD_TO_HEAD_N_CHR = "2"
 $env:NG_HEAD_TO_HEAD_SEG_SITES = "30"
 $env:NG_HEAD_TO_HEAD_SNP_PER_CHR = "8"
 $env:NG_HEAD_TO_HEAD_QTL_PER_CHR = "2"
-Rscript tools/run_head_to_head_benchmark.R
+Rscript nextgen_cross_design/tools/run_head_to_head_benchmark.R
 ```
 
 Methods:
@@ -594,7 +594,7 @@ $env:NG_HEAD_TO_HEAD_N_CHR = "4"
 $env:NG_HEAD_TO_HEAD_SEG_SITES = "80"
 $env:NG_HEAD_TO_HEAD_SNP_PER_CHR = "20"
 $env:NG_HEAD_TO_HEAD_QTL_PER_CHR = "5"
-Rscript tools/run_head_to_head_benchmark.R
+Rscript nextgen_cross_design/tools/run_head_to_head_benchmark.R
 ```
 
 Output checks:
@@ -665,7 +665,7 @@ The multi-trait head-to-head benchmark now has a breeder-facing HTML report
 renderer:
 
 ```text
-Rscript tools/render_head_to_head_visual_report.R
+Rscript nextgen_cross_design/tools/render_head_to_head_visual_report.R
 ```
 
 It reads `*_summary.csv`, `*_selections.csv`, `*_comparisons.csv`,
@@ -685,18 +685,15 @@ The benchmark now exports a stable dashboard JSON artifact with
 `schema_version = ng_head_to_head_dashboard.v1`:
 
 ```text
-Rscript tools/export_head_to_head_dashboard_json.R
+Rscript nextgen_cross_design/tools/export_head_to_head_dashboard_json.R
 ```
 
-A `frontend/` Next.js app was built against these dashboard artifacts, to keep the
-R package as the scientific backend while giving the UI a typed artifact contract
-instead of scraping generated HTML.
-
-Superseded. That Next.js app was never adopted and no longer exists. The frontend
-is now `nextgenCrossWorkbench`, a Shiny package maintained in a separate repository,
-which drives this engine out-of-process via the headless JSON contract in
-`docs/frontend/contracts/`. The typed-artifact principle recorded here carried over;
-only the implementation changed. The dashboard export named above is still current.
+The new `frontend/` Next.js app reads these dashboard artifacts, lists runs,
+opens an interactive breeder/QG decision workspace, exposes health/run/method
+API routes, and includes a Postgres schema plus a separate R worker scaffold
+for lab-server deployment. This keeps the R package as the scientific backend
+while giving the UI a typed artifact contract instead of scraping generated
+HTML.
 
 ## Implementation: `ng_poly4x_*`
 
@@ -834,7 +831,7 @@ Implemented benchmark method names:
 
 Smoke checks:
 
-- `Rscript tests/alphamate_external.R` first failed on a
+- `Rscript nextgen_cross_design/tests/alphamate_external.R` first failed on a
   missing plan-matching diagnostic, then passed after adding explicit
   self-cross, repeated-pair, and unmatched-pair validation.
 - `alphamate_wrapper_smoke`: 20 parents, one replicate, one cycle, two
@@ -939,7 +936,7 @@ PopVar/SimpleMating availability changes.
 
 Smoke checks:
 
-- `Rscript tests/frontier_policy.R` passed after first
+- `Rscript nextgen_cross_design/tests/frontier_policy.R` passed after first
   failing on the missing API and then on missing external-baseline detection.
 - `frontier_policy_smoke`: 20 parents, 2 chromosomes, 80 SNP/chr, 1 cycle, 1
   rep. `ng_frontier_policy_ocs10_lps2` delegated to
@@ -1008,7 +1005,7 @@ diversity stress tests, not true polyploid dosage-inheritance models.
 
 Smoke checks:
 
-- `Rscript tests/crop_genome_scenarios.R` first failed on
+- `Rscript nextgen_cross_design/tests/crop_genome_scenarios.R` first failed on
   the missing scenario API, then failed on a named-environment propagation bug,
   and now passes.
 - `crop_genome_smoke`: compact-selfing template, 20 parents, one replicate,
@@ -1084,8 +1081,8 @@ reported as crop-agnostic proof.
 
 Verification:
 
-- `Rscript tests/crop_aware_policy.R` passes.
-- `Rscript tests/alphamate_external.R` now includes a
+- `Rscript nextgen_cross_design/tests/crop_aware_policy.R` passes.
+- `Rscript nextgen_cross_design/tests/alphamate_external.R` now includes a
   long-parent-ID regression. `ng_select_alphamate()` aliases parent IDs before
   writing AlphaMate files and restores the original IDs after matching, because
   the external executable truncates long IDs such as
@@ -1121,8 +1118,8 @@ as `meta_router_guard_*` and `pred_ng_meta_router_guard_*` columns.
 
 Smoke checks:
 
-- `Rscript tests/smoke_test.R` passed.
-- `Rscript tests/meta_router_regret_guard.R` passed.
+- `Rscript nextgen_cross_design/tests/smoke_test.R` passed.
+- `Rscript nextgen_cross_design/tests/meta_router_regret_guard.R` passed.
 - `regret_guard_smoke`: 20 parents, 2 chromosomes, 40 SNP/chr, 1 cycle, 1
   rep. The benchmark harness completed and wrote `meta_router_guard_*`
   diagnostics.
@@ -2062,7 +2059,7 @@ top-10 progeny value, and maximum progeny value.
 Runner:
 
 ```text
-powershell -ExecutionPolicy Bypass -File tools/run_family_calibration_grid.ps1
+powershell -ExecutionPolicy Bypass -File nextgen_cross_design/tools/run_family_calibration_grid.ps1
 ```
 
 Outputs:

@@ -45,7 +45,7 @@ ng_poly_gamete_pmf <- function(d, ploidy, dr = 0) {
 # Precompute progeny-dosage moments for every parental dosage pair (di, dj) in 0..ploidy:
 # mu = E[X], varX = Var(X), EH = E[X(ploidy-X)], varH = Var(X(ploidy-X)), covXH = Cov(X,H). Returns
 # (P+1)x(P+1) matrices indexed [di+1, dj+1]. `double_reduction` sets the gamete DR coefficient.
-ng_poly_progeny_moment_table <- function(ploidy, double_reduction = 0) {
+ng_polyploid_progeny_moment_table <- function(ploidy, double_reduction = 0) {
   P <- as.integer(ploidy)
   gam <- lapply(0:P, ng_poly_gamete_pmf, ploidy = P, dr = double_reduction)   # gamete pmf per dosage
   x <- 0:P; Hx <- x * (P - x)
@@ -66,32 +66,32 @@ ng_poly_progeny_moment_table <- function(ploidy, double_reduction = 0) {
 }
 
 # Score candidate crosses on additive (+ optional dominance) genotypic value using marker effects
-# from ng_fit_polyploid_effects. Returns parent1/parent2 + cross_mean (genotypic), add_var, dom_var,
-# cross_var, cross_usefulness, mid_parent_bv, heterosis, pair_kinship, with a parent_K attribute.
-ng_score_crosses_poly_dominance <- function(fit,
+# from ng_polyploid_fit_effects. Returns parent1/parent2 + cross_mean (genotypic), add_var, dom_var,
+# cross_var, cross_usefulness, mid_parent_bv, heterosis, pair_kinship, with a parent_kinship attribute.
+ng_polyploid_score_crosses_dominance <- function(fit,
                                             dosage,
                                             pairs = NULL,
                                             selection_prop = 0.10,
                                             double_reduction = 0,
                                             grm_method = c("vanraden", "yang"),
                                             use_cpp = TRUE) {
-  if (!inherits(fit, "ng_polyploid_effects")) ng_stop("fit must come from ng_fit_polyploid_effects")
+  if (!inherits(fit, "ng_polyploid_effects")) ng_stop("fit must come from ng_polyploid_fit_effects")
   grm_method <- match.arg(grm_method)
   ploidy <- fit$ploidy
-  M <- ng_poly4x_as_dosage_matrix(dosage, ploidy = ploidy, name = "dosage")
+  M <- ng_polyploid_as_dosage_matrix(dosage, ploidy = ploidy, name = "dosage")
   miss <- setdiff(fit$markers, colnames(M))
   if (length(miss)) ng_stop("dosage is missing ", length(miss), " markers the model was fit on")
   M <- M[, fit$markers, drop = FALSE]
   ids <- rownames(M)
   storage.mode(M) <- "integer"
 
-  mt <- ng_poly_progeny_moment_table(ploidy, double_reduction = double_reduction)
+  mt <- ng_polyploid_progeny_moment_table(ploidy, double_reduction = double_reduction)
   ba <- fit$beta_add; bd <- fit$beta_dom; has_dom <- !is.null(bd)
   bd0 <- if (has_dom) bd else numeric(length(ba))
   cen_a <- ploidy * fit$allele_freq                     # additive centering
   hbar <- if (has_dom) fit$hbar else numeric(length(ba)) # dominance centering
   intensity <- ng_selection_intensity(selection_prop)
-  parent_K <- ng_polyploid_grm(M, ploidy = ploidy, method = grm_method)
+  parent_kinship <- ng_polyploid_grm(M, ploidy = ploidy, method = grm_method)
 
   if (is.null(pairs)) pairs <- ng_make_pairs(ids, include_self = FALSE)
   pairs <- as.data.frame(pairs, stringsAsFactors = FALSE)
@@ -127,9 +127,9 @@ ng_score_crosses_poly_dominance <- function(fit,
                     cross_mean = cross_mean, mid_parent_bv = mid_bv, heterosis = heterosis,
                     add_var = add_var, dom_var = dom_var, cross_var = cross_var,
                     cross_usefulness = cross_mean + intensity * sqrt(pmax(cross_var, 0)),
-                    pair_kinship = ng_poly4x_pair_coancestry(parent_K, pairs),
+                    pair_kinship = ng_poly4x_pair_coancestry(parent_kinship, pairs),
                     stringsAsFactors = FALSE)
-  attr(out, "parent_K") <- parent_K
+  attr(out, "parent_kinship") <- parent_kinship
   attr(out, "ploidy") <- as.integer(ploidy)
   attr(out, "has_dominance") <- !is.null(bd)
   out

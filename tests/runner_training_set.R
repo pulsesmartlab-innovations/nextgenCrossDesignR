@@ -40,7 +40,7 @@ base_args <- list(
   id_col = "NAME", map_marker_col = "SNP", map_chr_col = "Chr", map_pos_col = "PosBP",
   map_pos_cm_divisor = 1e6, prediction_mode = "trait_by_trait",
   trait_value_metric = "var_complex", duplicate_action = "none",
-  n_crosses = 10L, max_uses_per_parent = 4L, optimizer = "greedy_local",
+  n_crosses = 10L, max_crosses_per_parent = 4L, optimizer = "greedy_local",
   assume_inbred = TRUE, write_outputs = FALSE, write_figures = FALSE, seed = 7L
 )
 run <- function(...) do.call(ng_run_cross_prediction, modifyList(base_args, list(...)))
@@ -75,13 +75,13 @@ err <- tryCatch(run(training_genotype = bad_geno, training_phenotype = train_phe
                 error = function(e) conditionMessage(e))
 stopifnot(is.character(err), grepl("marker", err, ignore.case = TRUE))
 
-## 5. var_simple does not use marker effects, so supplying training data warns (and is inert).
+## 5. le does not use marker effects, so supplying training data warns (and is inert).
 w <- tryCatch(
   withCallingHandlers(
-    run(trait_value_metric = "var_simple",
+    run(trait_value_metric = "le",
         training_genotype = train_geno, training_phenotype = train_pheno),
     warning = function(cnd) { message("caught: ", conditionMessage(cnd)); invokeRestart("muffleWarning") }
   ), error = function(e) e)
-stopifnot(!inherits(w, "error"))                        # var_simple + training still runs
+stopifnot(!inherits(w, "error"))                        # le + training still runs
 
 cat("runner_training_set.R: PASS\n")

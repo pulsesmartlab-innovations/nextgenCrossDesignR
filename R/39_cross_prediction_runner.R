@@ -395,8 +395,8 @@ ng_run_cp_logical <- function(x, name) {
 
 ng_run_cp_pmv_col <- function(scored_trait, method_varPMV = "fast") {
   method_varPMV <- ng_run_cp_method_varPMV(method_varPMV)
-  if (identical(method_varPMV, "fast")) return("dh_pmv_var")
-  col <- "dh_pmv_var_full_posterior"
+  if (identical(method_varPMV, "fast")) return("pmv")
+  col <- "pmv_full_posterior"
   if (!(col %in% names(scored_trait))) {
     ng_stop("method_varPMV = 'full_posterior' requires score column: ", col)
   }
@@ -407,9 +407,9 @@ ng_run_cp_pmv_col <- function(scored_trait, method_varPMV = "fast") {
   col
 }
 
-ng_run_cp_parallel_cores <- function(parallel_cores, n_jobs) {
-  if (!is.null(parallel_cores)) {
-    cores <- ng_run_cp_integer(parallel_cores, "parallel_cores", min_value = 1L)
+ng_run_cp_parallel_cores <- function(n_threads, n_jobs) {
+  if (!is.null(n_threads)) {
+    cores <- ng_run_cp_integer(n_threads, "n_threads", min_value = 1L)
   } else {
     detected <- tryCatch(parallel::detectCores(logical = FALSE), error = function(e) NA_integer_)
     cores <- if (is.finite(detected) && detected > 1L) detected - 1L else 1L
@@ -417,24 +417,24 @@ ng_run_cp_parallel_cores <- function(parallel_cores, n_jobs) {
   as.integer(max(1L, min(cores, n_jobs)))
 }
 
-ng_run_cp_apply <- function(jobs, fun, use_parallel = FALSE, parallel_cores = NULL) {
+ng_run_cp_apply <- function(jobs, fun, use_parallel = FALSE, n_threads = NULL) {
   if (!isTRUE(use_parallel) || length(jobs) < 2L) {
     out <- lapply(jobs, fun)
     attr(out, "parallel_backend") <- "serial"
-    attr(out, "parallel_cores") <- 1L
+    attr(out, "n_threads") <- 1L
     return(out)
   }
-  cores <- ng_run_cp_parallel_cores(parallel_cores, length(jobs))
+  cores <- ng_run_cp_parallel_cores(n_threads, length(jobs))
   if (cores < 2L) {
     out <- lapply(jobs, fun)
     attr(out, "parallel_backend") <- "serial"
-    attr(out, "parallel_cores") <- 1L
+    attr(out, "n_threads") <- 1L
     return(out)
   }
   if (!identical(.Platform$OS.type, "windows")) {
     out <- parallel::mclapply(jobs, fun, mc.cores = cores)
     attr(out, "parallel_backend") <- "mclapply"
-    attr(out, "parallel_cores") <- cores
+    attr(out, "n_threads") <- cores
     return(out)
   }
   out <- tryCatch({
@@ -452,10 +452,10 @@ ng_run_cp_apply <- function(jobs, fun, use_parallel = FALSE, parallel_cores = NU
   if (is.null(out)) {
     out <- lapply(jobs, fun)
     attr(out, "parallel_backend") <- "serial_after_parallel_error"
-    attr(out, "parallel_cores") <- 1L
+    attr(out, "n_threads") <- 1L
   } else {
     attr(out, "parallel_backend") <- "psock"
-    attr(out, "parallel_cores") <- cores
+    attr(out, "n_threads") <- cores
   }
   out
 }
@@ -466,24 +466,24 @@ ng_run_cp_variance_col <- function(trait_value_metric,
                                    method_varPMV = "fast") {
   metric <- trimws(tolower(as.character(trait_value_metric[[1L]])))
   source <- trimws(tolower(as.character(uc_variance_source[[1L]])))
-  if (identical(metric, "uc")) metric <- source
+  if (identical(metric, "usefulness")) metric <- source
   if (identical(metric, "pmv")) {
-    if (is.null(scored_trait)) return("dh_pmv_var")
+    if (is.null(scored_trait)) return("pmv")
     return(ng_run_cp_pmv_col(scored_trait, method_varPMV))
   }
-  if (identical(metric, "vpm")) return("dh_recomb_var")
-  if (identical(metric, "var_simple")) return("var_simple")
+  if (identical(metric, "vpm")) return("vpm")
+  if (identical(metric, "le")) return("parent_distance")
   if (identical(metric, "var_complex")) {
-    if (is.null(scored_trait)) return("dh_pmv_var")
+    if (is.null(scored_trait)) return("pmv")
     return(ng_run_cp_var_complex_col(scored_trait, method_varPMV))
   }
   if (identical(metric, "mean")) return(NA_character_)
-  ng_stop("trait_value_metric must be one of: uc, pmv, vpm, var_simple, var_complex, mean")
+  ng_stop("trait_value_metric must be one of: usefulness, pmv, vpm, le, var_complex, mean")
 }
 
 ng_run_cp_var_complex_col <- function(scored_trait, method_varPMV = "fast") {
   pmv_col <- ng_run_cp_pmv_col(scored_trait, method_varPMV)
-  candidates <- c(pmv_col, "dh_recomb_var", "var_simple")
+  candidates <- c(pmv_col, "vpm", "parent_distance")
   hit <- candidates[candidates %in% names(scored_trait)]
   if (!length(hit)) ng_stop("scored trait table is missing a usable var_complex variance column")
   hit[[1L]]
@@ -491,7 +491,7 @@ ng_run_cp_var_complex_col <- function(scored_trait, method_varPMV = "fast") {
 
 ng_run_cp_trait_value <- function(scored_trait,
                                   direction,
-                                  trait_value_metric = "uc",
+                                  trait_value_metric = "usefulness",
                                   uc_variance_source = "pmv",
                                   selection_prop = 0.10,
                                   method_varPMV = "fast") {
@@ -653,15 +653,15 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
                                     traits_to_use = NULL,
                                     index_col = NULL,
                                     index_direction = "increase",
-                                    trait_value_metric = c("uc", "pmv", "vpm", "var_simple", "var_complex", "mean"),
-                                    uc_variance_source = c("pmv", "vpm", "var_simple"),
+                                    trait_value_metric = c("usefulness", "pmv", "vpm", "le", "var_complex", "mean"),
+                                    uc_variance_source = c("pmv", "vpm", "le"),
                                     multi_trait_method = "auto",
                                     trait_weights = NULL,
                                     threshold_policy = c("soft", "strict"),
                                     threshold_penalty_weight = 1.0,
                                     threshold_penalty_autoscale = TRUE,
                                     progeny = "DH",
-                                    recombination_model = c("haldane", "kosambi"),
+                                    recomb_model = c("haldane", "kosambi"),
                                     selection_prop = 0.10,
                                     min_effect_reliability = 0.35,
                                     grm_method = c("vanraden", "yang"),
@@ -669,10 +669,10 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
                                     ril_mode = "infinite",
                                     run_posterior_prediction = FALSE,
                                     posterior_method = c("mcmc", "closed_form"),
-                                    nIter = 5000L,
-                                    burnIn = 500L,
+                                    n_iter = 5000L,
+                                    burn_in = 500L,
                                     use_parallel = FALSE,
-                                    parallel_cores = NULL,
+                                    n_threads = NULL,
                                     duplicate_action = c("remove", "report", "none"),
                                     duplicate_threshold = 0.995,
                                     duplicate_maf_min = 0.01,
@@ -685,7 +685,7 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
                                     ld_ploidy = 2,
                                     ld_backend = c("auto", "cpp", "r"),
                                     n_crosses = 100,
-                                    max_uses_per_parent = 6,
+                                    max_crosses_per_parent = 6,
                                     min_unique_parents = NULL,
                                     max_pair_kinship = Inf,
                                     optimizer = "auto",
@@ -752,7 +752,7 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
   trait_value_metric <- match.arg(trait_value_metric)
   uc_variance_source <- match.arg(uc_variance_source)
   threshold_policy <- match.arg(threshold_policy)
-  recombination_model <- match.arg(recombination_model)
+  recomb_model <- match.arg(recomb_model)
   grm_method <- match.arg(grm_method)
   ld_backend <- match.arg(ld_backend)
   method_varPMV <- ng_run_cp_method_varPMV(method_varPMV)
@@ -766,9 +766,9 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
   allocation_method <- ng_run_cp_allocation_method(allocation_method)
   run_posterior_prediction <- ng_run_cp_logical(run_posterior_prediction, "run_posterior_prediction")
   use_parallel <- ng_run_cp_logical(use_parallel, "use_parallel")
-  nIter <- ng_run_cp_integer(nIter, "nIter", min_value = 1L)
-  burnIn <- ng_run_cp_integer(burnIn, "burnIn", min_value = 0L)
-  posterior_n_draws <- max(1L, nIter - burnIn)
+  n_iter <- ng_run_cp_integer(n_iter, "n_iter", min_value = 1L)
+  burn_in <- ng_run_cp_integer(burn_in, "burn_in", min_value = 0L)
+  posterior_n_draws <- max(1L, n_iter - burn_in)
   n_crosses <- suppressWarnings(as.integer(n_crosses[[1L]]))
   if (!is.finite(n_crosses) || n_crosses < 1L) ng_stop("n_crosses must be a positive integer")
 
@@ -891,8 +891,8 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
     training_genotype_id_col = tg_idcol, training_phenotype_id_col = tp_idcol,
     parent_ids = ids, parent_markers = colnames(geno), trait_columns = trait_spec$column
   )
-  if (!is.null(training_set) && identical(trait_value_metric, "var_simple")) {
-    warning("trait_value_metric = 'var_simple' does not use marker effects; the supplied ",
+  if (!is.null(training_set) && identical(trait_value_metric, "le")) {
+    warning("trait_value_metric = 'le' does not use marker effects; the supplied ",
             "training set will not change the selected metric or the crossing plan.", call. = FALSE)
   }
   training_only_count <- if (is.null(training_set)) 0L else length(training_set$ids)
@@ -943,7 +943,7 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
       target = target,
       selection_prop = selection_prop,
       min_effect_reliability = min_effect_reliability,
-      recomb_model = recombination_model,
+      recomb_model = recomb_model,
       use_cpp = use_cpp,
       assume_inbred = assume_inbred,
       grm_method = grm_method,
@@ -966,7 +966,7 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
         ids = fit_ids,
         n_draws = posterior_n_draws,
         method = posterior_method,
-        mcmc_burnin = burnIn,
+        mcmc_burnin = burn_in,
         seed = seed + 1000L + i - 1L
       )
       posterior_scores <- ng_posterior_cross_predict(
@@ -978,7 +978,7 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
         target = target,
         selection_prop = selection_prop,
         min_effect_reliability = min_effect_reliability,
-        recomb_model = recombination_model,
+        recomb_model = recomb_model,
         use_cpp = use_cpp,
         assume_inbred = assume_inbred,
         top_n_targets = unique(as.integer(c(min(n_crosses, 10L), 10L, 20L, 50L)))
@@ -1022,10 +1022,10 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
     jobs = seq_len(nrow(trait_spec)),
     fun = run_trait_job,
     use_parallel = use_parallel,
-    parallel_cores = parallel_cores
+    n_threads = n_threads
   )
   parallel_backend <- attr(trait_results, "parallel_backend")
-  parallel_cores_used <- attr(trait_results, "parallel_cores")
+  parallel_cores_used <- attr(trait_results, "n_threads")
   trait_results <- trait_results[order(vapply(trait_results, `[[`, integer(1L), "index"))]
   effect_summary <- vector("list", length(trait_results))
 
@@ -1039,12 +1039,12 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
     }
     cross_table[[paste0(clean_trait, "_value")]] <- item$value
     cross_table[[paste0(clean_trait, "_mean")]] <- scored_trait$cross_mean_blend
-    cross_table[[paste0(clean_trait, "_pmv")]] <- scored_trait$dh_pmv_var
-    cross_table[[paste0(clean_trait, "_pmv_fast")]] <- scored_trait$dh_pmv_var
-    cross_table[[paste0(clean_trait, "_pmv_full_posterior")]] <- scored_trait$dh_pmv_var_full_posterior
+    cross_table[[paste0(clean_trait, "_pmv")]] <- scored_trait$pmv
+    cross_table[[paste0(clean_trait, "_pmv_fast")]] <- scored_trait$pmv
+    cross_table[[paste0(clean_trait, "_pmv_full_posterior")]] <- scored_trait$pmv_full_posterior
     cross_table[[paste0(clean_trait, "_pmv_used")]] <- scored_trait[[item$pmv_used_col]]
-    cross_table[[paste0(clean_trait, "_vpm")]] <- scored_trait$dh_recomb_var
-    cross_table[[paste0(clean_trait, "_var_simple")]] <- scored_trait$var_simple
+    cross_table[[paste0(clean_trait, "_vpm")]] <- scored_trait$vpm
+    cross_table[[paste0(clean_trait, "_parent_distance")]] <- scored_trait$parent_distance
     cross_table[[paste0(clean_trait, "_var_complex")]] <- scored_trait[[item$var_complex_col]]
     cross_table[[paste0(clean_trait, "_reliability")]] <- scored_trait$effect_reliability
     effects_list[[trait]] <- item$fit
@@ -1126,7 +1126,7 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
       allocation_criterion_col <- "marker_adjusted_gain"
     }
   }
-  parent_K <- if (isTRUE(use_ocs) || !identical(allocation_method, "ocs")) ng_parent_kinship(geno, method = grm_method) else NULL
+  parent_kinship <- if (isTRUE(use_ocs) || !identical(allocation_method, "ocs")) ng_parent_kinship(geno, method = grm_method) else NULL
   if (identical(allocation_method, "ocs")) {
     # The mate-selection module knobs (strategy / diversity_emphasis, progeny inbreeding,
     # breeder constraints, cost/logistics) are forwarded through ng_optimize_breeder_
@@ -1136,7 +1136,7 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
       scores = cross_table,
       objective = objective,
       n_crosses = n_crosses,
-      parent_K = parent_K,
+      parent_kinship = parent_kinship,
       optimizer_method = optimizer_method,
       threshold_penalty_weight = threshold_penalty_weight,
       threshold_penalty_autoscale = threshold_penalty_autoscale,
@@ -1144,7 +1144,7 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
       marker_geno = geno,
       lambda_marker = lambda_marker,
       marker_ploidy = marker_ploidy,
-      max_crosses_per_parent = max_uses_per_parent,
+      max_crosses_per_parent = max_crosses_per_parent,
       min_crosses_per_parent = min_crosses_per_parent,
       min_unique_parents = min_unique_parents,
       max_pair_kinship = max_pair_kinship,
@@ -1173,12 +1173,12 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
       evol_seed = evol_seed
     )
   } else if (identical(allocation_method, "alphamate_style")) {
-    alpha_max_contrib <- if (is.null(alphamate_max_contributions)) max_uses_per_parent else alphamate_max_contributions
+    alpha_max_contrib <- if (is.null(alphamate_max_contributions)) max_crosses_per_parent else alphamate_max_contributions
     plan <- ng_alphamate_style_select(
       scores = scored_crosses,
       criterion_col = allocation_criterion_col,
       n_crosses = n_crosses,
-      parent_K = parent_K,
+      parent_kinship = parent_kinship,
       mode = alphamate_mode,
       target_degree = alphamate_target_degree,
       max_contributions = alpha_max_contrib,
@@ -1188,14 +1188,14 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
       local_iter = local_iter
     )
   } else if (identical(allocation_method, "alphamate_executable")) {
-    alpha_max_contrib <- if (is.null(alphamate_max_contributions)) max_uses_per_parent else alphamate_max_contributions
+    alpha_max_contrib <- if (is.null(alphamate_max_contributions)) max_crosses_per_parent else alphamate_max_contributions
     alpha_executable <- if (is.null(alphamate_executable)) ng_alphamate_default_executable() else alphamate_executable
     alpha_workdir <- if (is.null(alphamate_workdir)) tempfile("ng_alphamate_run_") else alphamate_workdir
     plan <- ng_select_alphamate(
       scores = scored_crosses,
       criterion_col = allocation_criterion_col,
       n_crosses = n_crosses,
-      parent_K = parent_K,
+      parent_kinship = parent_kinship,
       executable = alpha_executable,
       runtime_path = alphamate_runtime_path,
       target_degree = alphamate_target_degree,
@@ -1287,25 +1287,25 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
       multi_trait_method = multi_trait_method,
       progeny = target,
       ril_mode = ril_mode,
-      recombination_model = recombination_model,
+      recomb_model = recomb_model,
       selection_prop = selection_prop,
       run_posterior_prediction = run_posterior_prediction,
       posterior_method = posterior_method,
-      nIter = nIter,
-      burnIn = burnIn,
+      n_iter = n_iter,
+      burn_in = burn_in,
       posterior_n_draws = if (isTRUE(run_posterior_prediction)) posterior_n_draws else 0L,
       use_parallel = use_parallel,
       parallel_backend = parallel_backend,
-      parallel_cores = parallel_cores_used,
+      n_threads = parallel_cores_used,
       optimizer = optimizer,
       optimizer_method = optimizer_method,
       allocation_method = allocation_method,
       alphamate_mode = alphamate_mode,
       alphamate_target_degree = alphamate_target_degree,
-      alphamate_max_contributions = if (is.null(alphamate_max_contributions)) max_uses_per_parent else alphamate_max_contributions,
+      alphamate_max_contributions = if (is.null(alphamate_max_contributions)) max_crosses_per_parent else alphamate_max_contributions,
       use_ocs = isTRUE(use_ocs),
       n_crosses = n_crosses,
-      max_uses_per_parent = max_uses_per_parent
+      max_crosses_per_parent = max_crosses_per_parent
     )
   )
   class(result) <- c("ng_cross_prediction_result", "list")

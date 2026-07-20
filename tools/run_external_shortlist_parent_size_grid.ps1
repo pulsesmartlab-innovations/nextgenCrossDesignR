@@ -8,7 +8,7 @@ $env:NG_EXTERNAL_GRID_PARENT_SIZES = if ($env:NG_EXTERNAL_GRID_PARENT_SIZES) { $
 $env:NG_EXTERNAL_GRID_REPS = if ($env:NG_EXTERNAL_GRID_REPS) { $env:NG_EXTERNAL_GRID_REPS } else { "1" }
 $env:NG_EXTERNAL_GRID_CYCLES = if ($env:NG_EXTERNAL_GRID_CYCLES) { $env:NG_EXTERNAL_GRID_CYCLES } else { "1" }
 $env:NG_EXTERNAL_GRID_SHORTLIST_MULTIPLIER = if ($env:NG_EXTERNAL_GRID_SHORTLIST_MULTIPLIER) { $env:NG_EXTERNAL_GRID_SHORTLIST_MULTIPLIER } else { "2" }
-$env:NG_EXTERNAL_GRID_SHORTLIST_SCORE_COL = if ($env:NG_EXTERNAL_GRID_SHORTLIST_SCORE_COL) { $env:NG_EXTERNAL_GRID_SHORTLIST_SCORE_COL } else { "etk_dh_pmv_var_blend_cal,uc_dh_blend,var_simple,mpv" }
+$env:NG_EXTERNAL_GRID_SHORTLIST_SCORE_COL = if ($env:NG_EXTERNAL_GRID_SHORTLIST_SCORE_COL) { $env:NG_EXTERNAL_GRID_SHORTLIST_SCORE_COL } else { "etk_pmv_blend_cal,usefulness_pmv_blend,parent_distance,mid_parent_value" }
 $env:NG_EXTERNAL_GRID_USE_CPP = if ($env:NG_EXTERNAL_GRID_USE_CPP) { $env:NG_EXTERNAL_GRID_USE_CPP } else { "0" }
 
-powershell -ExecutionPolicy Bypass -File tools\run_external_parent_size_grid.ps1
+powershell -ExecutionPolicy Bypass -File nextgen_cross_design\tools\run_external_parent_size_grid.ps1

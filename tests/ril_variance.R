@@ -48,9 +48,9 @@ dh_var <- ng_dh_recomb_variance_pairs(
 )
 expect_ril_var <- 2 + 2 * expect_ril_h
 expect_dh_var  <- 2 + 2 * expect_dh_h
-stopifnot(abs(ril_var$dh_recomb_var - expect_ril_var) < 1e-10)
-stopifnot(abs(dh_var$dh_recomb_var  - expect_dh_var)  < 1e-10)
-stopifnot(ril_var$dh_recomb_var < dh_var$dh_recomb_var)  # RIL <= DH at same locus
+stopifnot(abs(ril_var$vpm - expect_ril_var) < 1e-10)
+stopifnot(abs(dh_var$vpm  - expect_dh_var)  < 1e-10)
+stopifnot(ril_var$vpm < dh_var$vpm)  # RIL <= DH at same locus
 
 # ---- ng_score_crosses with target = "RIL" must differ from target = "DH" -----------------
 set.seed(7L)
@@ -78,7 +78,7 @@ sc_ril <- ng_score_crosses(geno = g, effects = effects, marker_map = mm2,
                            ids = ids2, adjusted_pheno = adj,
                            selection_prop = 0.1, target = "RIL",
                            recomb_model = "haldane", use_cpp = FALSE)
-delta <- abs(sc_dh$dh_recomb_var - sc_ril$dh_recomb_var)
+delta <- abs(sc_dh$vpm - sc_ril$vpm)
 if (max(delta) < 1e-6) {
   stop("ng_score_crosses produced identical DH and RIL recombination variance")
 }
@@ -92,6 +92,6 @@ cat("ril_variance: 4/4 checks passed\n")
 cat(sprintf("  decay at 50 cM   haldane-DH=%.4f  haldane-RIL=%.4f  kosambi-RIL=%.4f\n",
             expect_dh_h, expect_ril_h, expect_kos_ril))
 cat(sprintf("  P1xP2 var        DH=%.4f  RIL=%.4f\n",
-            dh_var$dh_recomb_var, ril_var$dh_recomb_var))
+            dh_var$vpm, ril_var$vpm))
 cat(sprintf("  mean RIL/DH ratio across %d crosses: %.3f\n",
-            nrow(sc_dh), mean(sc_ril$dh_recomb_var / pmax(sc_dh$dh_recomb_var, 1e-12))))
+            nrow(sc_dh), mean(sc_ril$vpm / pmax(sc_dh$vpm, 1e-12))))

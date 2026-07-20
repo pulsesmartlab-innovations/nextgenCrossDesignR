@@ -57,9 +57,9 @@ dh_k <- ng_dh_recomb_variance_pairs(
 # Equivalently using the package's 1 - 2r decay: 2 + 2 * decay(50).
 expect_h <- 2 + 2 * ng_haldane_decay(50)
 expect_k <- 2 + 2 * ng_kosambi_decay(50)
-stopifnot(abs(dh_h$dh_recomb_var - expect_h) < 1e-10)
-stopifnot(abs(dh_k$dh_recomb_var - expect_k) < 1e-10)
-stopifnot(abs(dh_h$dh_recomb_var - dh_k$dh_recomb_var) > 0.05)
+stopifnot(abs(dh_h$vpm - expect_h) < 1e-10)
+stopifnot(abs(dh_k$vpm - expect_k) < 1e-10)
+stopifnot(abs(dh_h$vpm - dh_k$vpm) > 0.05)
 
 # ---- Dense Haldane path must agree with the chromosome recursion (sanity) ----------------
 # Force the dense path for a Haldane map and compare to the recursion.
@@ -92,8 +92,8 @@ dense_h <- ng_dh_recomb_variance_pairs_dense(
   marker_map = sorted$marker_map, ids = ids2, pairs = pairs2,
   recomb_model = "haldane"
 )
-max_var_err <- max(abs(recursion$dh_recomb_var - dense_h$dh_recomb_var))
-max_pmv_err <- max(abs(recursion$dh_pmv_var   - dense_h$dh_pmv_var))
+max_var_err <- max(abs(recursion$vpm - dense_h$vpm))
+max_pmv_err <- max(abs(recursion$pmv   - dense_h$pmv))
 if (max_var_err > 1e-9 || max_pmv_err > 1e-9) {
   stop(sprintf("dense Haldane path disagrees with recursion: var err=%g, pmv err=%g",
                max_var_err, max_pmv_err))
@@ -122,7 +122,7 @@ sc_k <- ng_score_crosses(
   selection_prop = 0.1, recomb_model = "kosambi",
   use_cpp = FALSE
 )
-if (max(abs(sc_h$dh_recomb_var - sc_k$dh_recomb_var)) < 1e-6) {
+if (max(abs(sc_h$vpm - sc_k$vpm)) < 1e-6) {
   stop("ng_score_crosses produced identical Haldane and Kosambi DH variance")
 }
 
@@ -130,4 +130,4 @@ cat("recomb_kosambi: 4/4 checks passed\n")
 cat(sprintf("  decay at 50 cM   haldane=%.4f  kosambi=%.4f\n",
             ng_haldane_decay(50), ng_kosambi_decay(50)))
 cat(sprintf("  P1xP2 var        haldane=%.4f  kosambi=%.4f\n",
-            dh_h$dh_recomb_var, dh_k$dh_recomb_var))
+            dh_h$vpm, dh_k$vpm))

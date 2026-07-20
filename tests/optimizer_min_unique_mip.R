@@ -18,7 +18,7 @@ eff <- ng_fit_ridge_effects(G, y, ids)
 pairs <- as.data.frame(t(utils::combn(ids, 2)), stringsAsFactors = FALSE)
 names(pairs) <- c("parent1", "parent2")
 sc <- ng_score_crosses(G, eff, map, ids, pairs, target = "DH", assume_inbred = TRUE)
-sc$gain <- sc$uc_dh_gebv
+sc$gain <- sc$usefulness_pmv_gebv
 pk <- ng_parent_kinship(G)
 
 min_unique <- 18L
@@ -28,7 +28,7 @@ uniq <- function(plan) length(unique(c(as.character(plan$parent1), as.character(
 # 20 crosses x 2 parents = 40 slots, max 8/parent, so >= 18 distinct is achievable).
 for (meth in c("auto", "mip_linear", "mip_contribution", "greedy_local", "evolution")) {
   plan <- ng_optimize_mating_plan(
-    sc, n_crosses = 20L, gain_col = "gain", parent_K = pk,
+    sc, n_crosses = 20L, gain_col = "gain", parent_kinship = pk,
     max_crosses_per_parent = 8L, min_unique_parents = min_unique,
     lambda_group = 0, lambda_mating = 0, method = meth
   )

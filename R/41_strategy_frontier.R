@@ -61,8 +61,8 @@ ng_strategy_lambda_bracket <- function(frontier, lambdas, emphasis, gain_range) 
 
 ng_select_by_strategy <- function(scores,
                                   n_crosses,
-                                  parent_K,
-                                  gain_col = "uc_dh_gebv",
+                                  parent_kinship,
+                                  gain_col = "usefulness_pmv_gebv",
                                   strategy = NULL,
                                   diversity_emphasis = NULL,
                                   lambdas = 10 ^ seq(-2, 3, length.out = 10),
@@ -81,7 +81,7 @@ ng_select_by_strategy <- function(scores,
     scores = scores,
     n_crosses = n_crosses,
     gain_col = gain_col,
-    parent_K = parent_K,
+    parent_kinship = parent_kinship,
     lambdas = lambdas,
     method = method,
     ...
@@ -108,7 +108,7 @@ ng_select_by_strategy <- function(scores,
       mid <- sqrt(lo * hi)
       cand <- ng_optimize_mating_plan(
         scores = scores, n_crosses = n_crosses, gain_col = gain_col,
-        parent_K = parent_K, lambda_group = mid, method = method, ...)
+        parent_kinship = parent_kinship, lambda_group = mid, method = method, ...)
       refine_evals <- refine_evals + 1L
       cand_gain <- attr(cand, "summary")$mean_gain
       cand_emphasis <- ng_frontier_achieved_emphasis(cand_gain, gain_range)
@@ -154,8 +154,8 @@ ng_select_by_strategy <- function(scores,
 # keeping the plan feasible.
 ng_select_by_target_coancestry <- function(scores,
                                            n_crosses,
-                                           parent_K,
-                                           gain_col = "uc_dh_gebv",
+                                           parent_kinship,
+                                           gain_col = "usefulness_pmv_gebv",
                                            target_coancestry,
                                            lambdas = 10 ^ seq(-2, 3, length.out = 10),
                                            refine_iter = 12L,
@@ -166,7 +166,7 @@ ng_select_by_target_coancestry <- function(scores,
 
   sweep <- ng_pareto_mate_allocation(
     scores = scores, n_crosses = n_crosses, gain_col = gain_col,
-    parent_K = parent_K, lambdas = lambdas, method = method, ...)
+    parent_kinship = parent_kinship, lambdas = lambdas, method = method, ...)
   fr <- sweep$frontier
   ord <- order(fr$lambda_group)
   lam <- fr$lambda_group[ord]
@@ -196,7 +196,7 @@ ng_select_by_target_coancestry <- function(scores,
         mid <- sqrt(lo * hi)
         cand <- ng_optimize_mating_plan(
           scores = scores, n_crosses = n_crosses, gain_col = gain_col,
-          parent_K = parent_K, lambda_group = mid, method = method, ...)
+          parent_kinship = parent_kinship, lambda_group = mid, method = method, ...)
         cc <- attr(cand, "summary")$group_coancestry
         if (is.finite(cc) && cc <= target_coancestry + eps) {
           plan <- cand

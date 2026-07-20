@@ -21,8 +21,8 @@ ng_bcm_posterior_sampler_cpp <- function(X_centered, yc, A_chol_upper, sigma_e2,
     .Call(`_nextgenCrossDesign_ng_bcm_posterior_sampler_cpp`, X_centered, yc, A_chol_upper, sigma_e2, lambda, n_draws, seed)
 }
 
-ng_local_swap_cpp <- function(linear_gain, pair_p1_zero, pair_p2_zero, parent_K, selected_zero, max_per_parent, lambda_group, lambda_parent_use, local_iter, off_pool_size) {
-    .Call(`_nextgenCrossDesign_ng_local_swap_cpp`, linear_gain, pair_p1_zero, pair_p2_zero, parent_K, selected_zero, max_per_parent, lambda_group, lambda_parent_use, local_iter, off_pool_size)
+ng_local_swap_cpp <- function(linear_gain, pair_p1_zero, pair_p2_zero, parent_kinship, selected_zero, max_per_parent, lambda_group, lambda_parent_use, local_iter, off_pool_size) {
+    .Call(`_nextgenCrossDesign_ng_local_swap_cpp`, linear_gain, pair_p1_zero, pair_p2_zero, parent_kinship, selected_zero, max_per_parent, lambda_group, lambda_parent_use, local_iter, off_pool_size)
 }
 
 ng_poly_dominance_scores_cpp <- function(M, i1, i2, mu, varX, EH, varH, covXH, ba, bd, cen_a, hbar, intercept, has_dom) {

@@ -60,7 +60,7 @@ res <- withCallingHandlers(
 )
 stopifnot(warned)
 stopifnot(nrow(res) == 1L)
-stopifnot(is.finite(res$dh_pmv_var))
+stopifnot(is.finite(res$pmv))
 
 # ---- Pure-inbred input must continue to work without warning -----------------------------
 effects2 <- list(beta = beta, beta_var = setNames(rep(0.005, 10), paste0("M", 1:10)),
@@ -70,7 +70,7 @@ res_in <- ng_score_crosses(geno = geno_inbred, effects = effects2, marker_map = 
                            adjusted_pheno = setNames(rnorm(2L), rownames(geno_inbred)),
                            selection_prop = 0.5, use_cpp = FALSE)
 stopifnot(nrow(res_in) == 1L)
-stopifnot(is.finite(res_in$dh_pmv_var))
+stopifnot(is.finite(res_in$pmv))
 
 cat("heterozygous_parents: 4/4 checks passed\n")
 cat(sprintf("  max het fraction inbred=%.3f outbred=%.3f\n",

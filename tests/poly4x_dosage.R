@@ -29,23 +29,23 @@ expected_digenic <- matrix(
 )
 stopifnot(isTRUE(all.equal(digenic, expected_digenic, tolerance = 1e-12)))
 
-checked <- ng_poly4x_as_dosage_matrix(dosage)
+checked <- ng_polyploid_as_dosage_matrix(dosage)
 stopifnot(identical(dimnames(checked), dimnames(dosage)))
 stopifnot(storage.mode(checked) == "double")
 
 bad <- dosage
 bad[1, 1] <- 5
-err <- tryCatch(ng_poly4x_as_dosage_matrix(bad), error = function(e) e)
+err <- tryCatch(ng_polyploid_as_dosage_matrix(bad), error = function(e) e)
 stopifnot(inherits(err, "error"))
 stopifnot(grepl("outside 0..4", conditionMessage(err), fixed = TRUE))
 
-err <- tryCatch(ng_poly4x_as_dosage_matrix(dosage, ploidy = 4.9), error = function(e) e)
+err <- tryCatch(ng_polyploid_as_dosage_matrix(dosage, ploidy = 4.9), error = function(e) e)
 stopifnot(inherits(err, "error"))
 stopifnot(grepl("ploidy must be an integer >= 2", conditionMessage(err), fixed = TRUE))
 
 dup_dosage <- dosage
 rownames(dup_dosage) <- c("P1", "P1")
-err <- tryCatch(ng_poly4x_as_dosage_matrix(dup_dosage, name = "geno"), error = function(e) e)
+err <- tryCatch(ng_polyploid_as_dosage_matrix(dup_dosage, name = "geno"), error = function(e) e)
 stopifnot(inherits(err, "error"))
 stopifnot(grepl("geno row names must be unique", conditionMessage(err), fixed = TRUE))
 
@@ -71,33 +71,33 @@ K_dup <- K
 rownames(K_dup) <- c("P1", "P1")
 err <- tryCatch(ng_poly4x_pair_coancestry(K_dup, pairs), error = function(e) e)
 stopifnot(inherits(err, "error"))
-stopifnot(grepl("parent_K row IDs must be unique", conditionMessage(err), fixed = TRUE))
+stopifnot(grepl("parent_kinship row IDs must be unique", conditionMessage(err), fixed = TRUE))
 
 K_dup <- K
 colnames(K_dup) <- c("P1", "P1")
 err <- tryCatch(ng_poly4x_pair_coancestry(K_dup, pairs), error = function(e) e)
 stopifnot(inherits(err, "error"))
-stopifnot(grepl("parent_K column IDs must be unique", conditionMessage(err), fixed = TRUE))
+stopifnot(grepl("parent_kinship column IDs must be unique", conditionMessage(err), fixed = TRUE))
 
 K_no_dimnames <- unname(K)
 err <- tryCatch(ng_poly4x_pair_coancestry(K_no_dimnames, pairs), error = function(e) e)
 stopifnot(inherits(err, "error"))
-stopifnot(grepl("parent_K must have row and column dimnames", conditionMessage(err), fixed = TRUE))
+stopifnot(grepl("parent_kinship must have row and column dimnames", conditionMessage(err), fixed = TRUE))
 
 K_non_numeric <- matrix("x", nrow = 2, ncol = 2, dimnames = dimnames(K))
 err <- tryCatch(ng_poly4x_pair_coancestry(K_non_numeric, pairs), error = function(e) e)
 stopifnot(inherits(err, "error"))
-stopifnot(grepl("parent_K must be numeric", conditionMessage(err), fixed = TRUE))
+stopifnot(grepl("parent_kinship must be numeric", conditionMessage(err), fixed = TRUE))
 
 K_not_square <- K[, 1, drop = FALSE]
 err <- tryCatch(ng_poly4x_pair_coancestry(K_not_square, pairs), error = function(e) e)
 stopifnot(inherits(err, "error"))
-stopifnot(grepl("parent_K must be a square matrix", conditionMessage(err), fixed = TRUE))
+stopifnot(grepl("parent_kinship must be a square matrix", conditionMessage(err), fixed = TRUE))
 
 K_bad_cols <- K
 colnames(K_bad_cols) <- c("P1", "PX")
 err <- tryCatch(ng_poly4x_pair_coancestry(K_bad_cols, pairs), error = function(e) e)
 stopifnot(inherits(err, "error"))
-stopifnot(grepl("parent_K column IDs", conditionMessage(err), fixed = TRUE))
+stopifnot(grepl("parent_kinship column IDs", conditionMessage(err), fixed = TRUE))
 
 cat("poly4x dosage tests passed\n")

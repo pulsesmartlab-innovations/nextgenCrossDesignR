@@ -97,22 +97,22 @@ BEGIN_RCPP
 END_RCPP
 }
 // ng_local_swap_cpp
-IntegerVector ng_local_swap_cpp(NumericVector linear_gain, IntegerVector pair_p1_zero, IntegerVector pair_p2_zero, NumericMatrix parent_K, IntegerVector selected_zero, int max_per_parent, double lambda_group, double lambda_parent_use, int local_iter, int off_pool_size);
-RcppExport SEXP _nextgenCrossDesign_ng_local_swap_cpp(SEXP linear_gainSEXP, SEXP pair_p1_zeroSEXP, SEXP pair_p2_zeroSEXP, SEXP parent_KSEXP, SEXP selected_zeroSEXP, SEXP max_per_parentSEXP, SEXP lambda_groupSEXP, SEXP lambda_parent_useSEXP, SEXP local_iterSEXP, SEXP off_pool_sizeSEXP) {
+IntegerVector ng_local_swap_cpp(NumericVector linear_gain, IntegerVector pair_p1_zero, IntegerVector pair_p2_zero, NumericMatrix parent_kinship, IntegerVector selected_zero, int max_per_parent, double lambda_group, double lambda_parent_use, int local_iter, int off_pool_size);
+RcppExport SEXP _nextgenCrossDesign_ng_local_swap_cpp(SEXP linear_gainSEXP, SEXP pair_p1_zeroSEXP, SEXP pair_p2_zeroSEXP, SEXP parent_kinshipSEXP, SEXP selected_zeroSEXP, SEXP max_per_parentSEXP, SEXP lambda_groupSEXP, SEXP lambda_parent_useSEXP, SEXP local_iterSEXP, SEXP off_pool_sizeSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< NumericVector >::type linear_gain(linear_gainSEXP);
     Rcpp::traits::input_parameter< IntegerVector >::type pair_p1_zero(pair_p1_zeroSEXP);
     Rcpp::traits::input_parameter< IntegerVector >::type pair_p2_zero(pair_p2_zeroSEXP);
-    Rcpp::traits::input_parameter< NumericMatrix >::type parent_K(parent_KSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type parent_kinship(parent_kinshipSEXP);
     Rcpp::traits::input_parameter< IntegerVector >::type selected_zero(selected_zeroSEXP);
     Rcpp::traits::input_parameter< int >::type max_per_parent(max_per_parentSEXP);
     Rcpp::traits::input_parameter< double >::type lambda_group(lambda_groupSEXP);
     Rcpp::traits::input_parameter< double >::type lambda_parent_use(lambda_parent_useSEXP);
     Rcpp::traits::input_parameter< int >::type local_iter(local_iterSEXP);
     Rcpp::traits::input_parameter< int >::type off_pool_size(off_pool_sizeSEXP);
-    rcpp_result_gen = Rcpp::wrap(ng_local_swap_cpp(linear_gain, pair_p1_zero, pair_p2_zero, parent_K, selected_zero, max_per_parent, lambda_group, lambda_parent_use, local_iter, off_pool_size));
+    rcpp_result_gen = Rcpp::wrap(ng_local_swap_cpp(linear_gain, pair_p1_zero, pair_p2_zero, parent_kinship, selected_zero, max_per_parent, lambda_group, lambda_parent_use, local_iter, off_pool_size));
     return rcpp_result_gen;
 END_RCPP
 }

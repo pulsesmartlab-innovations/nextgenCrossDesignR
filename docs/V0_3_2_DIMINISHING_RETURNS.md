@@ -119,7 +119,9 @@ ability to specify "use CB29 and CB47 at least once" with the system
 computing the cost of obeying so the breeder can decide whether to
 insist. This is deferred to v0.3.6 because it touches the optimizer
 core (new MIP constraints) and depends on v0.3.5's objective
-decomposition for the cost block.
+decomposition for the cost block. See the roadmap spec at
+`docs/superpowers/specs/2026-05-24-cpp-spec-adoption-roadmap-design.md`
+for the v0.3.6 design.
 
 ## Defaults unchanged
 

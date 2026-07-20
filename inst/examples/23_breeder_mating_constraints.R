@@ -35,7 +35,7 @@ run <- function(...) ng_run_cross_prediction(
   trait_direction = direction, id_col = "NAME",
   map_marker_col = "SNP", map_chr_col = "Chr", map_pos_cm_col = "PosCM", map_position_unit = "cM",
   prediction_mode = "trait_by_trait", trait_value_metric = "var_complex",
-  n_crosses = 12L, max_uses_per_parent = 6L, use_ocs = TRUE,
+  n_crosses = 12L, max_crosses_per_parent = 6L, use_ocs = TRUE,
   duplicate_action = "none", write_outputs = FALSE, write_figures = FALSE, seed = 1L, ...)
 
 # --- (a) min-use-if-used: every used parent appears >= 3 times ---

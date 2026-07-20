@@ -31,8 +31,8 @@ ng_poly4x_score_crosses <- function(parent_pop,
   candidate_pairs <- ng_poly4x_validate_candidate_pairs(candidate_pairs, ids)
 
   dosage <- ng_poly4x_pull_dosage(parent_pop, sim_param)
-  parent_K <- ng_poly4x_parent_relationship(dosage)
-  pair_coancestry <- ng_poly4x_pair_coancestry(parent_K, candidate_pairs)
+  parent_kinship <- ng_poly4x_parent_relationship(dosage)
+  pair_coancestry <- ng_poly4x_pair_coancestry(parent_kinship, candidate_pairs)
   digenic <- rowMeans(ng_poly4x_digenic_scaled(dosage))
   scoring_parent_pop <- unserialize(serialize(parent_pop, NULL))
   scoring_sim_param <- if (is.function(sim_param$clone)) sim_param$clone(deep = TRUE) else sim_param
@@ -67,7 +67,7 @@ ng_poly4x_score_crosses <- function(parent_pop,
     poly4x_score_n = n_score_progeny,
     stringsAsFactors = FALSE
   )
-  attr(out, "parent_K") <- parent_K
+  attr(out, "parent_kinship") <- parent_kinship
   out
 }
 
@@ -146,7 +146,7 @@ ng_poly4x_usefulness_topn <- function(scores, n_crosses) {
 
 ng_poly4x_ocs <- function(scores,
                           n_crosses,
-                          parent_K = NULL,
+                          parent_kinship = NULL,
                           max_crosses_per_parent = 4L,
                           lambda_group = 0.5,
                           lambda_mating = 0,
@@ -156,8 +156,8 @@ ng_poly4x_ocs <- function(scores,
                           local_iter = 1000L,
                           ocs_iter = 5L,
                           ...) {
-  if (is.null(parent_K)) parent_K <- attr(scores, "parent_K")
-  if (is.null(parent_K)) ng_stop("parent_K is required for ng_poly4x_ocs")
+  if (is.null(parent_kinship)) parent_kinship <- attr(scores, "parent_kinship")
+  if (is.null(parent_kinship)) ng_stop("parent_kinship is required for ng_poly4x_ocs")
   # Forward the shared mate-selection controls (strategy / diversity_emphasis /
   # target_coancestry / committed_crosses / group_permission / group_quota /
   # cost_col / budget / logistic / lambda_progeny_inbreeding / min_crosses_per_parent
@@ -168,7 +168,7 @@ ng_poly4x_ocs <- function(scores,
     scores = scores,
     n_crosses = n_crosses,
     gain_col = "poly4x_usefulness",
-    parent_K = parent_K,
+    parent_kinship = parent_kinship,
     max_crosses_per_parent = max_crosses_per_parent,
     lambda_group = lambda_group,
     lambda_mating = lambda_mating,
@@ -236,7 +236,7 @@ ng_poly4x_add_policy_diagnostics <- function(plan, mode) {
 ng_poly4x_policy <- function(scores,
                              n_crosses,
                              mode = "gain",
-                             parent_K = NULL,
+                             parent_kinship = NULL,
                              method = "auto",
                              local_iter = 1000L,
                              ocs_iter = 5L,
@@ -254,7 +254,7 @@ ng_poly4x_policy <- function(scores,
       ng_poly4x_ocs(
         scores = scores,
         n_crosses = n_crosses,
-        parent_K = parent_K,
+        parent_kinship = parent_kinship,
         max_crosses_per_parent = 3L,
         lambda_group = 1.0,
         lambda_parent_use = 2.0,
@@ -271,7 +271,7 @@ ng_poly4x_policy <- function(scores,
     ng_poly4x_ocs(
       scores = scores,
       n_crosses = n_crosses,
-      parent_K = parent_K,
+      parent_kinship = parent_kinship,
       max_crosses_per_parent = 4L,
       lambda_group = 0.5,
       lambda_parent_use = 1.0,

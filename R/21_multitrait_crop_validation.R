@@ -173,7 +173,7 @@ ng_multitrait_crop_validation_scenario <- function(scenario = "compact_selfing",
   geno <- AlphaSimR::pullSnpGeno(parent_pop, simParam = sim_param)
   rownames(geno) <- parent_ids
   if (is.null(colnames(geno))) colnames(geno) <- sprintf("M%05d", seq_len(ncol(geno)))
-  parent_K <- ng_parent_kinship(geno)
+  parent_kinship <- ng_parent_kinship(geno)
 
   pairs <- ng_make_pairs(parent_ids, include_self = FALSE)
   p1 <- match(pairs$parent1, parent_ids)
@@ -206,7 +206,7 @@ ng_multitrait_crop_validation_scenario <- function(scenario = "compact_selfing",
   for (trait in traits$trait) {
     scores[[realized_cols[[trait]]]] <- realized[, trait]
   }
-  rel <- ng_pair_relationship_variance(scores[, c("parent1", "parent2")], parent_K)
+  rel <- ng_pair_relationship_variance(scores[, c("parent1", "parent2")], parent_kinship)
   scores$pair_kinship <- rel$pair_kinship
 
   parent_values <- data.frame(parent = parent_ids, parent_gv, stringsAsFactors = FALSE)
@@ -216,7 +216,7 @@ ng_multitrait_crop_validation_scenario <- function(scenario = "compact_selfing",
     realized_cols = realized_cols,
     parent_values = parent_values,
     parent_genotype = geno,
-    parent_K = parent_K,
+    parent_kinship = parent_kinship,
     trait_profile = profile,
     crop_scenario = crop_scenario,
     config = data.frame(
@@ -345,7 +345,7 @@ ng_run_multitrait_crop_validation_grid <- function(scenarios = c("compact_selfin
           seed = run_seed,
           methods = methods,
           allocator = allocator,
-          parent_K = scenario_obj$parent_K,
+          parent_kinship = scenario_obj$parent_kinship,
           ocs_lambda_group = ocs_lambda_group,
           ocs_lambda_mating = ocs_lambda_mating
         )

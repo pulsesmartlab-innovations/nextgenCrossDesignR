@@ -69,8 +69,8 @@ write.csv(trait_direction, direction_file, row.names = FALSE, quote = FALSE)
 
 run_posterior_prediction <- TRUE
 posterior_method <- "closed_form"
-nIter <- 12
-burnIn <- 4
+n_iter <- 12
+burn_in <- 4
 
 robustness_quantile <- 0.25
 objective <- "posterior_quantile"
@@ -99,12 +99,12 @@ result <- ng_run_cross_prediction(
   method_varPMV = "fast",
   run_posterior_prediction = run_posterior_prediction,
   posterior_method = posterior_method,
-  nIter = nIter,
-  burnIn = burnIn,
+  n_iter = n_iter,
+  burn_in = burn_in,
 
   duplicate_action = "none",
   n_crosses = 4,
-  max_uses_per_parent = 3,
+  max_crosses_per_parent = 3,
   optimizer = optimizer,
   allocation_method = "ocs",
   use_ocs = TRUE,
@@ -119,16 +119,16 @@ stopifnot(inherits(result, "ng_cross_prediction_result"))
 stopifnot(length(result$posterior_predictions) > 0L)
 
 posterior_scores <- result$posterior_predictions[[1L]]
-stopifnot(all(c("uc_dh_gebv_post_mean", "uc_dh_gebv_post_lower", "uc_dh_gebv_post_upper") %in%
+stopifnot(all(c("usefulness_pmv_gebv_post_mean", "usefulness_pmv_gebv_post_lower", "usefulness_pmv_gebv_post_upper") %in%
                 names(posterior_scores)))
 
-parent_K <- ng_parent_kinship(result$cleaned_data$genotype)
+parent_kinship <- ng_parent_kinship(result$cleaned_data$genotype)
 
 robust_plan <- ng_optimize_robust_mating_plan(
   posterior_scores = posterior_scores,
   n_crosses = 4,
-  parent_K = parent_K,
-  gain_col = "uc_dh_gebv",
+  parent_kinship = parent_kinship,
+  gain_col = "usefulness_pmv_gebv",
   robustness_quantile = robustness_quantile,
   objective = objective,
   max_crosses_per_parent = 3,

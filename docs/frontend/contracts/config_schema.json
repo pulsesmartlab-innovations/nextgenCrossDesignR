@@ -39,10 +39,10 @@
         {"name": "traits_to_use", "type": "string[]", "default": null},
         {"name": "index_col", "type": "string", "default": null, "desc": "Required when prediction_mode = index_as_trait"},
         {"name": "index_direction", "type": "string", "default": "increase"},
-        {"name": "trait_value_metric", "type": "enum", "allowed": ["uc", "pmv", "vpm", "var_simple", "var_complex", "mean"], "default": "var_complex", "desc": "var_simple is a DIVERSITY proxy, not a merit metric — do not offer it as a merit option"},
-        {"name": "uc_variance_source", "type": "enum", "allowed": ["pmv", "vpm", "var_simple"], "default": "pmv"},
+        {"name": "trait_value_metric", "type": "enum", "allowed": ["usefulness", "pmv", "vpm", "le", "var_complex", "mean"], "default": "var_complex", "desc": "le is a linkage-equilibrium/relationship-distance DIVERSITY proxy, not a merit metric — do not offer it as a merit option"},
+        {"name": "uc_variance_source", "type": "enum", "allowed": ["pmv", "vpm", "le"], "default": "pmv"},
         {"name": "progeny", "type": "enum", "allowed": ["DH", "RIL"], "default": "DH"},
-        {"name": "recombination_model", "type": "enum", "allowed": ["haldane", "kosambi"], "default": "haldane"},
+        {"name": "recomb_model", "type": "enum", "allowed": ["haldane", "kosambi"], "default": "haldane"},
         {"name": "selection_prop", "type": "number", "default": 0.1},
         {"name": "min_effect_reliability", "type": "number", "default": 0.35},
         {"name": "grm_method", "type": "enum", "allowed": ["vanraden", "yang"], "default": "vanraden"},
@@ -96,7 +96,7 @@
       "id": "allocation", "label": "Allocation & OCS constraints",
       "params": [
         {"name": "n_crosses", "type": "integer", "default": 100},
-        {"name": "max_uses_per_parent", "type": "integer", "default": 6},
+        {"name": "max_crosses_per_parent", "type": "integer", "default": 6},
         {"name": "min_unique_parents", "type": "integer", "default": null, "desc": "Hard floor on distinct parents (auto = min(n_parents, 2*n_crosses)); honored on every optimizer"},
         {"name": "max_pair_kinship", "type": "number", "default": null, "desc": "Cap relatedness of any mated pair (default Inf = off)"},
         {"name": "optimizer", "type": "enum", "allowed": ["auto", "evolution", "greedy_local", "repair_local", "mip_linear", "mip_contribution"], "default": "auto", "aliases": {"lp": "mip_linear", "mip": "mip_contribution", "ocs": "mip_contribution", "ga": "evolution"}, "desc": "evolution recommended for real/recurrent programs"},
@@ -154,8 +154,8 @@
       "params": [
         {"name": "run_posterior_prediction", "type": "boolean", "default": false},
         {"name": "posterior_method", "type": "enum", "allowed": ["mcmc", "closed_form"], "default": "mcmc"},
-        {"name": "nIter", "type": "integer", "default": 5000},
-        {"name": "burnIn", "type": "integer", "default": 500}
+        {"name": "n_iter", "type": "integer", "default": 5000},
+        {"name": "burn_in", "type": "integer", "default": 500}
       ]
     },
     {
@@ -168,7 +168,7 @@
         {"name": "evol_stop", "type": "integer", "default": 40},
         {"name": "evol_seed", "type": "integer", "default": null},
         {"name": "use_parallel", "type": "boolean", "default": false},
-        {"name": "parallel_cores", "type": "integer", "default": null}
+        {"name": "n_threads", "type": "integer", "default": null}
       ]
     },
     {

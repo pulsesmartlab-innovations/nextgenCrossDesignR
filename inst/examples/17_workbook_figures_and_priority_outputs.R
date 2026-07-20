@@ -105,7 +105,7 @@ result <- ng_run_cross_prediction(
 
   duplicate_action = "none",
   n_crosses = 8,
-  max_uses_per_parent = 4,
+  max_crosses_per_parent = 4,
   optimizer = "greedy_local",
   allocation_method = "ocs",
   use_ocs = TRUE,

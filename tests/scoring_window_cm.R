@@ -23,7 +23,7 @@ names(pairs) <- c("parent1", "parent2")
 
 score <- function(w) ng_score_crosses(G, eff, map, ids, pairs, target = "DH",
                                        recomb_model = "haldane", assume_inbred = TRUE,
-                                       use_cpp = FALSE, window_cm = w)$dh_recomb_var
+                                       use_cpp = FALSE, window_cm = w)$vpm
 
 v_inf   <- score(Inf)     # closed-form chromosome recursion
 v_full  <- score(1000)    # finite window wider than any chromosome -> should equal the recursion

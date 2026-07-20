@@ -10,7 +10,7 @@ n_pairs <- nrow(pairs)
 scores <- data.frame(
   parent1 = pairs$parent1,
   parent2 = pairs$parent2,
-  uc_dh_gebv = seq(10, 10 - 0.5 * (n_pairs - 1), length.out = n_pairs),
+  usefulness_pmv_gebv = seq(10, 10 - 0.5 * (n_pairs - 1), length.out = n_pairs),
   pair_kinship = 0,
   stringsAsFactors = FALSE
 )
@@ -242,8 +242,8 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
 }
 
 # ---- Test 14: monotonicity on a realistic fixture (validation gate 1) ----
-# Build a 20-parent fixture with realistic uc_dh_gebv (decreasing across
-# pairs) and a non-trivial parent_K so lambda_group > 0 actually couples
+# Build a 20-parent fixture with realistic usefulness_pmv_gebv (decreasing across
+# pairs) and a non-trivial parent_kinship so lambda_group > 0 actually couples
 # the choices. The marginal gain at each K must be non-increasing.
 set.seed(2026L)
 ids_r <- paste0("R", sprintf("%02d", 1:20))
@@ -252,18 +252,18 @@ n_r <- nrow(pairs_r)
 scores_r <- data.frame(
   parent1 = pairs_r$parent1,
   parent2 = pairs_r$parent2,
-  uc_dh_gebv = sort(rnorm(n_r, mean = 5, sd = 1), decreasing = TRUE),
+  usefulness_pmv_gebv = sort(rnorm(n_r, mean = 5, sd = 1), decreasing = TRUE),
   pair_kinship = runif(n_r, 0, 0.2),
   stringsAsFactors = FALSE
 )
-# Synthetic parent_K (positive-definite kinship-like matrix).
+# Synthetic parent_kinship (positive-definite kinship-like matrix).
 Z <- matrix(rnorm(length(ids_r) * 5L), nrow = length(ids_r))
 K_r <- tcrossprod(Z) / 5 + diag(0.05, length(ids_r))
 rownames(K_r) <- colnames(K_r) <- ids_r
 
 curve_r <- ng_optimize_mating_plan_curve(
   scores = scores_r, K_range = 4:15,
-  parent_K = K_r,
+  parent_kinship = K_r,
   max_crosses_per_parent = 4L,
   lambda_group = 0.5,
   criterion = "elbow_relative"

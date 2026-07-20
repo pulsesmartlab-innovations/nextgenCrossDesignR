@@ -2,16 +2,12 @@
 #
 # Default target: 80 DH parents, 5K markers, 3 phenotype reps, 5 cycles.
 # Override with NG_* environment variables, for example:
-#   NG_REPS=1 NG_CYCLES=1 Rscript tools/run_alphasimr_benchmark.R
+#   NG_REPS=1 NG_CYCLES=1 Rscript nextgen_cross_design/tools/run_alphasimr_benchmark.R
 
 local({ .h <- file.path("tools", "ng_project_libpath.R"); if (file.exists(.h)) { source(.h); ng_prepend_project_lib(".Rlib") } else .libPaths(c(normalizePath(".Rlib", mustWork = FALSE), .libPaths())) })
 
-root <- normalizePath(getwd(), mustWork = TRUE)
-if (!file.exists(file.path(root, "R", "load.R"))) {
-  # Legacy layout: package sits in a nextgen_cross_design/ subdirectory of the workspace.
-  root <- normalizePath(file.path(getwd(), "nextgen_cross_design"), mustWork = FALSE)
-  if (!dir.exists(root)) root <- normalizePath(file.path(".."), mustWork = TRUE)
-}
+root <- normalizePath(file.path(getwd(), "nextgen_cross_design"), mustWork = FALSE)
+if (!dir.exists(root)) root <- normalizePath(file.path(".."), mustWork = TRUE)
 source(file.path(root, "R", "load.R"))
 ng_use_cpp <- tolower(trimws(Sys.getenv("NG_USE_CPP", unset = "0"))) %in% c("1", "true", "yes", "y")
 ng_load(root, use_cpp = ng_use_cpp)
@@ -258,22 +254,22 @@ select_by_named_score <- function(method, score_cols, scores, cfg) {
   select_top_by_score(scores, unname(score_cols[[method]]), cfg$top_crosses)
 }
 
-select_ocs_by_prefix <- function(method, prefix_score_cols, scores, cfg, parent_K) {
+select_ocs_by_prefix <- function(method, prefix_score_cols, scores, cfg, parent_kinship) {
   for (prefix in names(prefix_score_cols)) {
     if (method == prefix || grepl(paste0("^", prefix, "[0-9]*(_lp[us][0-9p]+)?$"), method, perl = TRUE)) {
-      return(select_with_ocs(method, prefix, unname(prefix_score_cols[[prefix]]), scores, cfg, parent_K))
+      return(select_with_ocs(method, prefix, unname(prefix_score_cols[[prefix]]), scores, cfg, parent_kinship))
     }
   }
   NULL
 }
 
-select_with_simplemating <- function(method, prefix, score_col, scores, cfg, parent_K) {
+select_with_simplemating <- function(method, prefix, score_col, scores, cfg, parent_kinship) {
   cap <- method_cap(method, prefix, cfg$max_crosses_per_parent)
   ng_select_simplemating(
     scores = scores,
     score_col = score_col,
     n_crosses = cfg$top_crosses,
-    parent_K = parent_K,
+    parent_kinship = parent_kinship,
     max_crosses_per_parent = cap,
     min_crosses_per_parent = cfg$simplemating_min_cross,
     max_crosses_to_search = cfg$simplemating_max_search,
@@ -281,7 +277,7 @@ select_with_simplemating <- function(method, prefix, score_col, scores, cfg, par
   )
 }
 
-select_with_alphamate <- function(method, scores, cfg, parent_K) {
+select_with_alphamate <- function(method, scores, cfg, parent_kinship) {
   criterion_col <- first_finite_score_col(scores, cfg$alphamate_criterion_cols)
   if (!is.character(criterion_col) || !nzchar(criterion_col) || is.na(criterion_col)) {
     stop("No finite AlphaMate criterion column found", call. = FALSE)
@@ -309,7 +305,7 @@ select_with_alphamate <- function(method, scores, cfg, parent_K) {
     scores = scores,
     criterion_col = criterion_col,
     n_crosses = cfg$top_crosses,
-    parent_K = parent_K,
+    parent_kinship = parent_kinship,
     executable = cfg$alphamate_executable,
     runtime_path = cfg$alphamate_runtime_path,
     target_degree = target_degree,
@@ -325,14 +321,14 @@ select_with_alphamate <- function(method, scores, cfg, parent_K) {
   )
 }
 
-select_with_ocs <- function(method, prefix, gain_col, scores, cfg, parent_K) {
+select_with_ocs <- function(method, prefix, gain_col, scores, cfg, parent_kinship) {
   cap <- method_cap(method, prefix, cfg$ocs_max_crosses_per_parent)
   pp <- method_parent_penalty(method, cfg$lambda_parent_use, cfg$lambda_parent_use_mode)
   ng_optimize_mating_plan(
     scores = scores,
     n_crosses = cfg$top_crosses,
     gain_col = gain_col,
-    parent_K = parent_K,
+    parent_kinship = parent_kinship,
     max_crosses_per_parent = cap,
     max_pair_kinship = cfg$max_pair_kinship,
     lambda_group = cfg$lambda_group,
@@ -345,7 +341,7 @@ select_with_ocs <- function(method, prefix, gain_col, scores, cfg, parent_K) {
   )
 }
 
-select_with_balanced_usefulness <- function(method, prefix, gain_col, scores, cfg, parent_K) {
+select_with_balanced_usefulness <- function(method, prefix, gain_col, scores, cfg, parent_kinship) {
   cap <- method_cap(method, prefix, cfg$ocs_max_crosses_per_parent)
   pp <- method_parent_penalty(method, cfg$lambda_parent_use, cfg$lambda_parent_use_mode)
   ng_optimize_balanced_usefulness(
@@ -353,7 +349,7 @@ select_with_balanced_usefulness <- function(method, prefix, gain_col, scores, cf
     n_crosses = cfg$top_crosses,
     gain_col = gain_col,
     diversity_col = cfg$balanced_diversity_col,
-    parent_K = parent_K,
+    parent_kinship = parent_kinship,
     max_crosses_per_parent = cap,
     min_unique_parents = if (isTRUE(cfg$balanced_auto_min_unique)) "auto" else cfg$balanced_min_unique_parents,
     max_pair_kinship = cfg$max_pair_kinship,
@@ -370,7 +366,7 @@ select_with_balanced_usefulness <- function(method, prefix, gain_col, scores, cf
   )
 }
 
-select_with_adaptive_stack <- function(method, prefix, scores, cfg, parent_K) {
+select_with_adaptive_stack <- function(method, prefix, scores, cfg, parent_kinship) {
   cap <- method_cap(method, prefix, cfg$ocs_max_crosses_per_parent)
   pp <- method_parent_penalty(method, NA_real_, cfg$lambda_parent_use_mode)
   stack <- attr(scores, "adaptive_stack")
@@ -386,7 +382,7 @@ select_with_adaptive_stack <- function(method, prefix, scores, cfg, parent_K) {
     scores = scores,
     n_crosses = cfg$top_crosses,
     gain_col = "ng_adaptive_score",
-    parent_K = parent_K,
+    parent_kinship = parent_kinship,
     max_crosses_per_parent = cap,
     max_pair_kinship = cfg$max_pair_kinship,
     lambda_group = cfg$lambda_group,
@@ -414,7 +410,7 @@ select_with_adaptive_stack <- function(method, prefix, scores, cfg, parent_K) {
   selected
 }
 
-select_with_meta_portfolio <- function(method, prefix, scores, cfg, parent_K) {
+select_with_meta_portfolio <- function(method, prefix, scores, cfg, parent_kinship) {
   cap <- method_cap(method, prefix, cfg$ocs_max_crosses_per_parent)
   pp <- method_parent_penalty(method, NA_real_, cfg$lambda_parent_use_mode)
   meta <- attr(scores, "meta_portfolio")
@@ -430,7 +426,7 @@ select_with_meta_portfolio <- function(method, prefix, scores, cfg, parent_K) {
     scores = scores,
     n_crosses = cfg$top_crosses,
     gain_col = "ng_meta_score",
-    parent_K = parent_K,
+    parent_kinship = parent_kinship,
     max_crosses_per_parent = cap,
     max_pair_kinship = cfg$max_pair_kinship,
     lambda_group = cfg$lambda_group,
@@ -514,7 +510,7 @@ add_meta_selector_columns <- function(selected, decision, gain_col, allocator) {
   selected
 }
 
-select_with_meta_selector <- function(method, prefix, scores, cfg, parent_K) {
+select_with_meta_selector <- function(method, prefix, scores, cfg, parent_kinship) {
   cap <- method_cap(method, prefix, cfg$ocs_max_crosses_per_parent)
   pp <- method_parent_penalty(method, NA_real_, cfg$lambda_parent_use_mode)
   meta <- attr(scores, "meta_portfolio")
@@ -532,7 +528,7 @@ select_with_meta_selector <- function(method, prefix, scores, cfg, parent_K) {
     }
     pp$mode <- "adaptive"
   }
-  balanced_leader <- leader_gain_col %in% c("etk_dh_pmv_var_blend_cal")
+  balanced_leader <- leader_gain_col %in% c("etk_pmv_blend_cal")
   leader_selected <- if (isTRUE(balanced_leader)) {
     select_with_balanced_usefulness(
       method = method,
@@ -540,14 +536,14 @@ select_with_meta_selector <- function(method, prefix, scores, cfg, parent_K) {
       gain_col = leader_gain_col,
       scores = scores,
       cfg = cfg,
-      parent_K = parent_K
+      parent_kinship = parent_kinship
     )
   } else {
     ng_optimize_mating_plan(
       scores = scores,
       n_crosses = cfg$top_crosses,
       gain_col = leader_gain_col,
-      parent_K = parent_K,
+      parent_kinship = parent_kinship,
       max_crosses_per_parent = cap,
       max_pair_kinship = cfg$max_pair_kinship,
       lambda_group = cfg$lambda_group,
@@ -563,7 +559,7 @@ select_with_meta_selector <- function(method, prefix, scores, cfg, parent_K) {
     scores = scores,
     n_crosses = cfg$top_crosses,
     gain_col = "ng_meta_score",
-    parent_K = parent_K,
+    parent_kinship = parent_kinship,
     max_crosses_per_parent = cap,
     max_pair_kinship = cfg$max_pair_kinship,
     lambda_group = cfg$lambda_group,
@@ -776,9 +772,9 @@ meta_router_candidate_def <- function(family, scores) {
   family <- tolower(trimws(as.character(family[[1]])))
   gain_col <- switch(
     family,
-    var_simple = meta_router_first_score_col(scores, c("etk_var_simple_cal", "uc_var_simple", "var_simple")),
-    recomb_gebv = meta_router_first_score_col(scores, c("etk_dh_recomb_var_gebv_cal", "uc_recomb_gebv")),
-    pmv_balanced = meta_router_first_score_col(scores, c("etk_dh_pmv_var_blend_cal", "etk_dh_pmv_var_adj_cal")),
+    var_simple = meta_router_first_score_col(scores, c("etk_parent_distance_cal", "usefulness_le", "parent_distance")),
+    recomb_gebv = meta_router_first_score_col(scores, c("etk_vpm_gebv_cal", "usefulness_vpm_gebv")),
+    pmv_balanced = meta_router_first_score_col(scores, c("etk_pmv_blend_cal", "etk_pmv_adj_cal")),
     portfolio = meta_router_first_score_col(scores, c("ng_meta_score")),
     adaptive_stack = meta_router_first_score_col(scores, c("ng_adaptive_score")),
     popvar_uc = meta_router_first_score_col(scores, c("popvar_uc")),
@@ -892,7 +888,7 @@ meta_router_prior_component <- function(family, n_parents, n_crosses, reliabilit
   }
 }
 
-meta_router_build_candidate <- function(family, method, prefix, scores, cfg, parent_K) {
+meta_router_build_candidate <- function(family, method, prefix, scores, cfg, parent_kinship) {
   def <- meta_router_candidate_def(family, scores)
   if (is.null(def)) return(NULL)
   plan <- tryCatch({
@@ -903,14 +899,14 @@ meta_router_build_candidate <- function(family, method, prefix, scores, cfg, par
         gain_col = def$gain_col,
         scores = scores,
         cfg = cfg,
-        parent_K = parent_K
+        parent_kinship = parent_kinship
       )
     } else if (identical(def$family, "portfolio")) {
-      select_with_meta_portfolio(method, prefix, scores, cfg, parent_K)
+      select_with_meta_portfolio(method, prefix, scores, cfg, parent_kinship)
     } else if (identical(def$family, "adaptive_stack")) {
-      select_with_adaptive_stack(method, prefix, scores, cfg, parent_K)
+      select_with_adaptive_stack(method, prefix, scores, cfg, parent_kinship)
     } else {
-      select_with_ocs(method, prefix, def$gain_col, scores, cfg, parent_K)
+      select_with_ocs(method, prefix, def$gain_col, scores, cfg, parent_kinship)
     }
   }, error = function(e) {
     attr(e, "router_family") <- family
@@ -925,7 +921,7 @@ meta_router_plan_var <- function(selected, var_col) {
     return(pmax(as.numeric(selected[[var_col]]), 0))
   }
   if ("ng_meta_var" %in% names(selected)) return(pmax(as.numeric(selected$ng_meta_var), 0))
-  if ("var_simple_cal" %in% names(selected)) return(pmax(as.numeric(selected$var_simple_cal), 0))
+  if ("parent_distance_cal" %in% names(selected)) return(pmax(as.numeric(selected$parent_distance_cal), 0))
   rep(NA_real_, nrow(selected))
 }
 
@@ -963,7 +959,7 @@ add_meta_router_columns <- function(selected, best, best_diag, guard = NULL) {
   selected
 }
 
-select_with_meta_router <- function(method, prefix, scores, cfg, parent_K) {
+select_with_meta_router <- function(method, prefix, scores, cfg, parent_kinship) {
   families <- unique(trimws(as.character(cfg$meta_router_families)))
   families <- families[nzchar(families)]
   if (!length(families)) families <- c("recomb_gebv", "pmv_balanced", "portfolio", "popvar_uc", "simple_usefa", "var_simple")
@@ -984,9 +980,9 @@ select_with_meta_router <- function(method, prefix, scores, cfg, parent_K) {
   )
   candidates <- Filter(Negate(is.null), lapply(families, meta_router_build_candidate,
                                                 method = method, prefix = prefix,
-                                                scores = scores, cfg = cfg, parent_K = parent_K))
+                                                scores = scores, cfg = cfg, parent_kinship = parent_kinship))
   if (!length(candidates)) {
-    return(select_with_meta_selector(method, prefix, scores, cfg, parent_K))
+    return(select_with_meta_selector(method, prefix, scores, cfg, parent_kinship))
   }
 
   meta <- attr(scores, "meta_portfolio")
@@ -1019,7 +1015,7 @@ select_with_meta_router <- function(method, prefix, scores, cfg, parent_K) {
       history_cycles = hist_cycles,
       prior_raw = meta_router_prior_component(
         fam,
-        n_parents = if (!is.null(parent_K)) nrow(parent_K) else length(unique(c(scores$parent1, scores$parent2))),
+        n_parents = if (!is.null(parent_kinship)) nrow(parent_kinship) else length(unique(c(scores$parent1, scores$parent2))),
         n_crosses = cfg$top_crosses,
         reliability = reliability
       ),
@@ -1146,9 +1142,9 @@ add_frontier_policy_columns <- function(selected, policy_choice, selected_method
   selected
 }
 
-select_with_frontier_policy <- function(method, scores, cfg, parent_K) {
-  n_parents <- if (!is.null(parent_K)) {
-    nrow(parent_K)
+select_with_frontier_policy <- function(method, scores, cfg, parent_kinship) {
+  n_parents <- if (!is.null(parent_kinship)) {
+    nrow(parent_kinship)
   } else {
     length(unique(c(as.character(scores$parent1), as.character(scores$parent2))))
   }
@@ -1168,7 +1164,7 @@ select_with_frontier_policy <- function(method, scores, cfg, parent_K) {
   errors <- character()
   for (candidate in candidates) {
     selected <- tryCatch({
-      select_branch(candidate, scores, cfg, parent_K)
+      select_branch(candidate, scores, cfg, parent_kinship)
     }, error = function(e) {
       e
     })
@@ -1228,9 +1224,9 @@ add_crop_policy_columns <- function(selected, policy_choice, selected_method, er
   selected
 }
 
-select_with_crop_aware_policy <- function(method, scores, cfg, parent_K) {
-  n_parents <- if (!is.null(parent_K)) {
-    nrow(parent_K)
+select_with_crop_aware_policy <- function(method, scores, cfg, parent_kinship) {
+  n_parents <- if (!is.null(parent_kinship)) {
+    nrow(parent_kinship)
   } else {
     length(unique(c(as.character(scores$parent1), as.character(scores$parent2))))
   }
@@ -1250,7 +1246,7 @@ select_with_crop_aware_policy <- function(method, scores, cfg, parent_K) {
   errors <- character()
   for (candidate in candidates) {
     selected <- tryCatch({
-      select_branch(candidate, scores, cfg, parent_K)
+      select_branch(candidate, scores, cfg, parent_kinship)
     }, error = function(e) {
       e
     })
@@ -1267,21 +1263,21 @@ select_with_crop_aware_policy <- function(method, scores, cfg, parent_K) {
   ng_stop("crop-aware policy could not select a candidate: ", paste(errors, collapse = " | "))
 }
 
-select_branch <- function(method, scores, cfg, parent_K) {
+select_branch <- function(method, scores, cfg, parent_kinship) {
   i <- ng_selection_intensity(cfg$selection_prop)
-  var_mean <- if ("cross_mean_adjusted_pheno" %in% names(scores) &&
-                  any(is.finite(scores$cross_mean_adjusted_pheno))) {
-    scores$cross_mean_adjusted_pheno
+  var_mean <- if ("cross_mean_adj" %in% names(scores) &&
+                  any(is.finite(scores$cross_mean_adj))) {
+    scores$cross_mean_adj
   } else {
     scores$cross_mean
   }
-  scores$uc_var_simple <- var_mean + i * sqrt(pmax(scores$var_simple, 0))
+  scores$usefulness_le <- var_mean + i * sqrt(pmax(scores$parent_distance, 0))
   if (method == "var_simple_topn") {
-    selected <- scores[order(scores$uc_var_simple, decreasing = TRUE), , drop = FALSE]
+    selected <- scores[order(scores$usefulness_le, decreasing = TRUE), , drop = FALSE]
     return(utils::head(selected, cfg$top_crosses))
   }
   if (method == "var_simple_etk_topn") {
-    selected <- scores[order(scores$etk_var_simple_cal, decreasing = TRUE), , drop = FALSE]
+    selected <- scores[order(scores$etk_parent_distance_cal, decreasing = TRUE), , drop = FALSE]
     return(utils::head(selected, cfg$top_crosses))
   }
   if (method == "popvar_mu_topn") {
@@ -1303,34 +1299,34 @@ select_branch <- function(method, scores, cfg, parent_K) {
     return(select_top_by_score(scores, "simple_usefa", cfg$top_crosses))
   }
   if (method == "simple_mpv_select" || grepl("^simple_mpv_select[0-9]*$", method)) {
-    return(select_with_simplemating(method, "simple_mpv_select", "simple_mpv", scores, cfg, parent_K))
+    return(select_with_simplemating(method, "simple_mpv_select", "simple_mpv", scores, cfg, parent_kinship))
   }
   if (method == "simple_usefa_select" || grepl("^simple_usefa_select[0-9]*$", method)) {
-    return(select_with_simplemating(method, "simple_usefa_select", "simple_usefa", scores, cfg, parent_K))
+    return(select_with_simplemating(method, "simple_usefa_select", "simple_usefa", scores, cfg, parent_kinship))
   }
   if (method == "var_simple_select" || grepl("^var_simple_select[0-9]*$", method)) {
-    return(select_with_simplemating(method, "var_simple_select", "etk_var_simple_cal", scores, cfg, parent_K))
+    return(select_with_simplemating(method, "var_simple_select", "etk_parent_distance_cal", scores, cfg, parent_kinship))
   }
   if (method == "ng_hybrid_select" || grepl("^ng_hybrid_select[0-9]*$", method)) {
-    return(select_with_simplemating(method, "ng_hybrid_select", "etk_dh_pmv_var_blend_cal", scores, cfg, parent_K))
+    return(select_with_simplemating(method, "ng_hybrid_select", "etk_pmv_blend_cal", scores, cfg, parent_kinship))
   }
   if (method == "popvar_musp_select" || grepl("^popvar_musp_select[0-9]*$", method)) {
-    return(select_with_simplemating(method, "popvar_musp_select", "popvar_musp_high", scores, cfg, parent_K))
+    return(select_with_simplemating(method, "popvar_musp_select", "popvar_musp_high", scores, cfg, parent_kinship))
   }
   if (method == "popvar_uc_select" || grepl("^popvar_uc_select[0-9]*$", method)) {
-    return(select_with_simplemating(method, "popvar_uc_select", "popvar_uc", scores, cfg, parent_K))
+    return(select_with_simplemating(method, "popvar_uc_select", "popvar_uc", scores, cfg, parent_kinship))
   }
   if (method == "alphamate_opt" ||
       grepl("^alphamate_opt[0-9]+(?:p[0-9]+)?$", method, perl = TRUE) ||
       method %in% c("alphamate_maxcriterion", "alphamate_mincoancestry")) {
-    return(select_with_alphamate(method, scores, cfg, parent_K))
+    return(select_with_alphamate(method, scores, cfg, parent_kinship))
   }
   if (method == "var_simple_allocator") {
     return(ng_optimize_mating_plan(
       scores = scores,
       n_crosses = cfg$top_crosses,
-      gain_col = "uc_var_simple",
-      parent_K = parent_K,
+      gain_col = "usefulness_le",
+      parent_kinship = parent_kinship,
       max_crosses_per_parent = cfg$max_crosses_per_parent,
       max_pair_kinship = cfg$max_pair_kinship,
       lambda_group = cfg$lambda_group,
@@ -1344,8 +1340,8 @@ select_branch <- function(method, scores, cfg, parent_K) {
     return(ng_optimize_mating_plan(
       scores = scores,
       n_crosses = cfg$top_crosses,
-      gain_col = "uc_var_simple",
-      parent_K = parent_K,
+      gain_col = "usefulness_le",
+      parent_kinship = parent_kinship,
       max_crosses_per_parent = cap,
       max_pair_kinship = cfg$max_pair_kinship,
       lambda_group = 0,
@@ -1359,8 +1355,8 @@ select_branch <- function(method, scores, cfg, parent_K) {
     return(ng_optimize_mating_plan(
       scores = scores,
       n_crosses = cfg$top_crosses,
-      gain_col = "uc_var_simple",
-      parent_K = parent_K,
+      gain_col = "usefulness_le",
+      parent_kinship = parent_kinship,
       max_crosses_per_parent = cap,
       max_pair_kinship = cfg$max_pair_kinship,
       lambda_group = 0,
@@ -1375,8 +1371,8 @@ select_branch <- function(method, scores, cfg, parent_K) {
     return(ng_optimize_mating_plan(
       scores = scores,
       n_crosses = cfg$top_crosses,
-      gain_col = "etk_var_simple_cal",
-      parent_K = parent_K,
+      gain_col = "etk_parent_distance_cal",
+      parent_kinship = parent_kinship,
       max_crosses_per_parent = cap,
       max_pair_kinship = cfg$max_pair_kinship,
       lambda_group = cfg$lambda_group,
@@ -1394,8 +1390,8 @@ select_branch <- function(method, scores, cfg, parent_K) {
     selected <- ng_optimize_mating_plan(
       scores = scores,
       n_crosses = cfg$top_crosses,
-      gain_col = "etk_var_simple_cal",
-      parent_K = parent_K,
+      gain_col = "etk_parent_distance_cal",
+      parent_kinship = parent_kinship,
       max_crosses_per_parent = cap,
       max_pair_kinship = cfg$max_pair_kinship,
       lambda_group = cfg$lambda_group,
@@ -1406,61 +1402,61 @@ select_branch <- function(method, scores, cfg, parent_K) {
       local_iter = cfg$local_iter,
       ocs_iter = cfg$ocs_iter
     )
-    return(apply_family_allocation(selected, cfg, "etk_var_simple_cal", "var_simple_cal"))
+    return(apply_family_allocation(selected, cfg, "etk_parent_distance_cal", "parent_distance_cal"))
   }
   if (method == "popvar_musp_ocs" || grepl("^popvar_musp_ocs[0-9]*(_lp[us][0-9p]+)?$", method, perl = TRUE)) {
-    return(select_with_ocs(method, "popvar_musp_ocs", "popvar_musp_high", scores, cfg, parent_K))
+    return(select_with_ocs(method, "popvar_musp_ocs", "popvar_musp_high", scores, cfg, parent_kinship))
   }
   if (method == "popvar_uc_ocs" || grepl("^popvar_uc_ocs[0-9]*(_lp[us][0-9p]+)?$", method, perl = TRUE)) {
-    return(select_with_ocs(method, "popvar_uc_ocs", "popvar_uc", scores, cfg, parent_K))
+    return(select_with_ocs(method, "popvar_uc_ocs", "popvar_uc", scores, cfg, parent_kinship))
   }
   if (method == "popvar_mu_ocs" || grepl("^popvar_mu_ocs[0-9]*(_lp[us][0-9p]+)?$", method, perl = TRUE)) {
-    return(select_with_ocs(method, "popvar_mu_ocs", "popvar_mu", scores, cfg, parent_K))
+    return(select_with_ocs(method, "popvar_mu_ocs", "popvar_mu", scores, cfg, parent_kinship))
   }
   if (method == "simple_mpv_ocs" || grepl("^simple_mpv_ocs[0-9]*(_lp[us][0-9p]+)?$", method, perl = TRUE)) {
-    return(select_with_ocs(method, "simple_mpv_ocs", "simple_mpv", scores, cfg, parent_K))
+    return(select_with_ocs(method, "simple_mpv_ocs", "simple_mpv", scores, cfg, parent_kinship))
   }
   if (method == "simple_usefa_ocs" || grepl("^simple_usefa_ocs[0-9]*(_lp[us][0-9p]+)?$", method, perl = TRUE)) {
-    return(select_with_ocs(method, "simple_usefa_ocs", "simple_usefa", scores, cfg, parent_K))
+    return(select_with_ocs(method, "simple_usefa_ocs", "simple_usefa", scores, cfg, parent_kinship))
   }
   if (method == "ng_portfolio_topn") {
     return(select_top_by_score(scores, "ng_portfolio_score", cfg$top_crosses))
   }
   if (method == "ng_portfolio_ocs" || grepl("^ng_portfolio_ocs[0-9]*(_lp[us][0-9p]+)?$", method, perl = TRUE)) {
-    return(select_with_ocs(method, "ng_portfolio_ocs", "ng_portfolio_score", scores, cfg, parent_K))
+    return(select_with_ocs(method, "ng_portfolio_ocs", "ng_portfolio_score", scores, cfg, parent_kinship))
   }
   if (method == "ng_adaptive_stack_topn") {
     return(select_top_by_score(scores, "ng_adaptive_score", cfg$top_crosses))
   }
   if (method == "ng_adaptive_stack_ocs" || grepl("^ng_adaptive_stack_ocs[0-9]*(_lp[us][0-9p]+)?$", method, perl = TRUE)) {
-    return(select_with_adaptive_stack(method, "ng_adaptive_stack_ocs", scores, cfg, parent_K))
+    return(select_with_adaptive_stack(method, "ng_adaptive_stack_ocs", scores, cfg, parent_kinship))
   }
   if (method == "ng_meta_portfolio_topn") {
     return(select_top_by_score(scores, "ng_meta_score", cfg$top_crosses))
   }
   if (method == "ng_meta_portfolio_ocs" || grepl("^ng_meta_portfolio_ocs[0-9]*(_lp[us][0-9p]+)?$", method, perl = TRUE)) {
-    return(select_with_meta_portfolio(method, "ng_meta_portfolio_ocs", scores, cfg, parent_K))
+    return(select_with_meta_portfolio(method, "ng_meta_portfolio_ocs", scores, cfg, parent_kinship))
   }
   if (method == "ng_meta_selector_topn") {
     return(select_top_by_score(scores, "ng_meta_leader_score", cfg$top_crosses))
   }
   if (method == "ng_meta_selector_ocs" || grepl("^ng_meta_selector_ocs[0-9]*(_lp[us][0-9p]+)?$", method, perl = TRUE)) {
-    return(select_with_meta_selector(method, "ng_meta_selector_ocs", scores, cfg, parent_K))
+    return(select_with_meta_selector(method, "ng_meta_selector_ocs", scores, cfg, parent_kinship))
   }
   if (method == "ng_meta_router_ocs" || grepl("^ng_meta_router_ocs[0-9]*(_lp[us][0-9p]+)?$", method, perl = TRUE)) {
-    return(select_with_meta_router(method, "ng_meta_router_ocs", scores, cfg, parent_K))
+    return(select_with_meta_router(method, "ng_meta_router_ocs", scores, cfg, parent_kinship))
   }
   if (method == "ng_frontier_policy" || grepl("^ng_frontier_policy(_ocs[0-9]*(_lp[us][0-9p]+)?)?$", method, perl = TRUE)) {
-    return(select_with_frontier_policy(method, scores, cfg, parent_K))
+    return(select_with_frontier_policy(method, scores, cfg, parent_kinship))
   }
   if (method == "ng_crop_aware_policy" || grepl("^ng_crop_aware_policy(_ocs[0-9]*(_lp[us][0-9p]+)?)?$", method, perl = TRUE)) {
-    return(select_with_crop_aware_policy(method, scores, cfg, parent_K))
+    return(select_with_crop_aware_policy(method, scores, cfg, parent_kinship))
   }
   balanced_gain_cols <- c(
     ng_useful_balanced_ocs = cfg$balanced_gain_col,
-    ng_recomb_gebv_balanced_ocs = "uc_recomb_gebv",
-    ng_recomb_blend_balanced_ocs = "etk_dh_recomb_var_blend_cal",
-    ng_pmv_blend_balanced_ocs = "etk_dh_pmv_var_blend_cal",
+    ng_recomb_gebv_balanced_ocs = "usefulness_vpm_gebv",
+    ng_recomb_blend_balanced_ocs = "etk_vpm_blend_cal",
+    ng_pmv_blend_balanced_ocs = "etk_pmv_blend_cal",
     ng_portfolio_balanced_ocs = "ng_portfolio_score"
   )
   for (prefix in names(balanced_gain_cols)) {
@@ -1471,84 +1467,84 @@ select_branch <- function(method, scores, cfg, parent_K) {
         gain_col = unname(balanced_gain_cols[[prefix]]),
         scores = scores,
         cfg = cfg,
-        parent_K = parent_K
+        parent_kinship = parent_kinship
       ))
     }
   }
   mean_source_ocs <- c(
-    ng_recomb_ocs = "etk_dh_recomb_var_cal",
-    ng_recomb_gebv_ocs = "etk_dh_recomb_var_gebv_cal",
-    ng_recomb_adj_ocs = "etk_dh_recomb_var_adj_cal",
-    ng_recomb_blend_ocs = "etk_dh_recomb_var_blend_cal",
-    ng_pmv_ocs = "etk_dh_pmv_var_cal",
-    ng_pmv_gebv_ocs = "etk_dh_pmv_var_gebv_cal",
-    ng_pmv_adj_ocs = "etk_dh_pmv_var_adj_cal",
-    ng_pmv_blend_ocs = "etk_dh_pmv_var_blend_cal"
+    ng_recomb_ocs = "etk_vpm_cal",
+    ng_recomb_gebv_ocs = "etk_vpm_gebv_cal",
+    ng_recomb_adj_ocs = "etk_vpm_adj_cal",
+    ng_recomb_blend_ocs = "etk_vpm_blend_cal",
+    ng_pmv_ocs = "etk_pmv_cal",
+    ng_pmv_gebv_ocs = "etk_pmv_gebv_cal",
+    ng_pmv_adj_ocs = "etk_pmv_adj_cal",
+    ng_pmv_blend_ocs = "etk_pmv_blend_cal"
   )
-  selected <- select_ocs_by_prefix(method, mean_source_ocs, scores, cfg, parent_K)
+  selected <- select_ocs_by_prefix(method, mean_source_ocs, scores, cfg, parent_kinship)
   if (!is.null(selected)) return(selected)
   mean_source_topn <- c(
-    ng_recomb_topn = "uc_recomb",
-    ng_recomb_gebv_topn = "uc_recomb_gebv",
-    ng_recomb_adj_topn = "uc_recomb_adj",
-    ng_recomb_blend_topn = "uc_recomb_blend",
-    ng_pmv_topn = "uc_dh",
-    ng_pmv_gebv_topn = "uc_dh_gebv",
-    ng_pmv_adj_topn = "uc_dh_adj",
-    ng_pmv_blend_topn = "uc_dh_blend",
-    ng_recomb_cal_topn = "etk_dh_recomb_var_cal",
-    ng_recomb_gebv_cal_topn = "etk_dh_recomb_var_gebv_cal",
-    ng_recomb_adj_cal_topn = "etk_dh_recomb_var_adj_cal",
-    ng_recomb_blend_cal_topn = "etk_dh_recomb_var_blend_cal",
-    ng_pmv_cal_topn = "etk_dh_pmv_var_cal",
-    ng_pmv_gebv_cal_topn = "etk_dh_pmv_var_gebv_cal",
-    ng_pmv_adj_cal_topn = "etk_dh_pmv_var_adj_cal",
-    ng_pmv_blend_cal_topn = "etk_dh_pmv_var_blend_cal"
+    ng_recomb_topn = "usefulness_vpm",
+    ng_recomb_gebv_topn = "usefulness_vpm_gebv",
+    ng_recomb_adj_topn = "usefulness_vpm_adj",
+    ng_recomb_blend_topn = "usefulness_vpm_blend",
+    ng_pmv_topn = "usefulness_pmv",
+    ng_pmv_gebv_topn = "usefulness_pmv_gebv",
+    ng_pmv_adj_topn = "usefulness_pmv_adj",
+    ng_pmv_blend_topn = "usefulness_pmv_blend",
+    ng_recomb_cal_topn = "etk_vpm_cal",
+    ng_recomb_gebv_cal_topn = "etk_vpm_gebv_cal",
+    ng_recomb_adj_cal_topn = "etk_vpm_adj_cal",
+    ng_recomb_blend_cal_topn = "etk_vpm_blend_cal",
+    ng_pmv_cal_topn = "etk_pmv_cal",
+    ng_pmv_gebv_cal_topn = "etk_pmv_gebv_cal",
+    ng_pmv_adj_cal_topn = "etk_pmv_adj_cal",
+    ng_pmv_blend_cal_topn = "etk_pmv_blend_cal"
   )
   selected <- select_by_named_score(method, mean_source_topn, scores, cfg)
   if (!is.null(selected)) return(selected)
   if (method == "ng_uc_topn") {
-    selected <- scores[order(scores$uc_dh_gebv, decreasing = TRUE), , drop = FALSE]
+    selected <- scores[order(scores$usefulness_pmv_gebv, decreasing = TRUE), , drop = FALSE]
     return(utils::head(selected, cfg$top_crosses))
   }
   if (method == "ng_recomb_topn") {
-    selected <- scores[order(scores$uc_recomb, decreasing = TRUE), , drop = FALSE]
+    selected <- scores[order(scores$usefulness_vpm, decreasing = TRUE), , drop = FALSE]
     return(utils::head(selected, cfg$top_crosses))
   }
   if (method == "ng_recomb_gebv_topn") {
-    selected <- scores[order(scores$uc_recomb_gebv, decreasing = TRUE), , drop = FALSE]
+    selected <- scores[order(scores$usefulness_vpm_gebv, decreasing = TRUE), , drop = FALSE]
     return(utils::head(selected, cfg$top_crosses))
   }
   if (method == "ng_pmv_gebv_topn") {
-    selected <- scores[order(scores$uc_dh_gebv, decreasing = TRUE), , drop = FALSE]
+    selected <- scores[order(scores$usefulness_pmv_gebv, decreasing = TRUE), , drop = FALSE]
     return(utils::head(selected, cfg$top_crosses))
   }
   if (method == "ng_pmv_topn") {
-    selected <- scores[order(scores$uc_dh, decreasing = TRUE), , drop = FALSE]
+    selected <- scores[order(scores$usefulness_pmv, decreasing = TRUE), , drop = FALSE]
     return(utils::head(selected, cfg$top_crosses))
   }
   if (method == "ng_pmv_cal_topn") {
-    selected <- scores[order(scores$etk_dh_pmv_var_cal, decreasing = TRUE), , drop = FALSE]
+    selected <- scores[order(scores$etk_pmv_cal, decreasing = TRUE), , drop = FALSE]
     return(utils::head(selected, cfg$top_crosses))
   }
   if (method == "ng_recomb_cal_topn") {
-    selected <- scores[order(scores$etk_dh_recomb_var_cal, decreasing = TRUE), , drop = FALSE]
+    selected <- scores[order(scores$etk_vpm_cal, decreasing = TRUE), , drop = FALSE]
     return(utils::head(selected, cfg$top_crosses))
   }
   if (method == "ng_recomb_gebv_cal_topn") {
-    selected <- scores[order(scores$etk_dh_recomb_var_gebv_cal, decreasing = TRUE), , drop = FALSE]
+    selected <- scores[order(scores$etk_vpm_gebv_cal, decreasing = TRUE), , drop = FALSE]
     return(utils::head(selected, cfg$top_crosses))
   }
   if (method == "ng_pmv_gebv_cal_topn") {
-    selected <- scores[order(scores$etk_dh_pmv_var_gebv_cal, decreasing = TRUE), , drop = FALSE]
+    selected <- scores[order(scores$etk_pmv_gebv_cal, decreasing = TRUE), , drop = FALSE]
     return(utils::head(selected, cfg$top_crosses))
   }
   if (method == "ng_allocator") {
     return(ng_optimize_mating_plan(
       scores = scores,
       n_crosses = cfg$top_crosses,
-      gain_col = "uc_dh_gebv",
-      parent_K = parent_K,
+      gain_col = "usefulness_pmv_gebv",
+      parent_kinship = parent_kinship,
       max_crosses_per_parent = cfg$max_crosses_per_parent,
       max_pair_kinship = cfg$max_pair_kinship,
       lambda_group = cfg$lambda_group,
@@ -1561,8 +1557,8 @@ select_branch <- function(method, scores, cfg, parent_K) {
     return(ng_optimize_mating_plan(
       scores = scores,
       n_crosses = cfg$top_crosses,
-      gain_col = "uc_dh_blend",
-      parent_K = parent_K,
+      gain_col = "usefulness_pmv_blend",
+      parent_kinship = parent_kinship,
       max_crosses_per_parent = cfg$max_crosses_per_parent,
       max_pair_kinship = cfg$max_pair_kinship,
       lambda_group = cfg$lambda_group,
@@ -1575,8 +1571,8 @@ select_branch <- function(method, scores, cfg, parent_K) {
     return(ng_optimize_mating_plan(
       scores = scores,
       n_crosses = cfg$top_crosses,
-      gain_col = "etk_dh_pmv_var_blend_cal",
-      parent_K = parent_K,
+      gain_col = "etk_pmv_blend_cal",
+      parent_kinship = parent_kinship,
       max_crosses_per_parent = cfg$max_crosses_per_parent,
       max_pair_kinship = cfg$max_pair_kinship,
       lambda_group = cfg$lambda_group,
@@ -1590,8 +1586,8 @@ select_branch <- function(method, scores, cfg, parent_K) {
     return(ng_optimize_mating_plan(
       scores = scores,
       n_crosses = cfg$top_crosses,
-      gain_col = "etk_dh_pmv_var_blend_cal",
-      parent_K = parent_K,
+      gain_col = "etk_pmv_blend_cal",
+      parent_kinship = parent_kinship,
       max_crosses_per_parent = cap,
       max_pair_kinship = cfg$max_pair_kinship,
       lambda_group = 0,
@@ -1605,8 +1601,8 @@ select_branch <- function(method, scores, cfg, parent_K) {
     return(ng_optimize_mating_plan(
       scores = scores,
       n_crosses = cfg$top_crosses,
-      gain_col = "etk_dh_pmv_var_blend_cal",
-      parent_K = parent_K,
+      gain_col = "etk_pmv_blend_cal",
+      parent_kinship = parent_kinship,
       max_crosses_per_parent = cap,
       max_pair_kinship = cfg$max_pair_kinship,
       lambda_group = 0,
@@ -1621,8 +1617,8 @@ select_branch <- function(method, scores, cfg, parent_K) {
     return(ng_optimize_mating_plan(
       scores = scores,
       n_crosses = cfg$top_crosses,
-      gain_col = "etk_dh_pmv_var_blend_cal",
-      parent_K = parent_K,
+      gain_col = "etk_pmv_blend_cal",
+      parent_kinship = parent_kinship,
       max_crosses_per_parent = cap,
       max_pair_kinship = cfg$max_pair_kinship,
       lambda_group = cfg$lambda_group,
@@ -1640,8 +1636,8 @@ select_branch <- function(method, scores, cfg, parent_K) {
     selected <- ng_optimize_mating_plan(
       scores = scores,
       n_crosses = cfg$top_crosses,
-      gain_col = "etk_dh_pmv_var_blend_cal",
-      parent_K = parent_K,
+      gain_col = "etk_pmv_blend_cal",
+      parent_kinship = parent_kinship,
       max_crosses_per_parent = cap,
       max_pair_kinship = cfg$max_pair_kinship,
       lambda_group = cfg$lambda_group,
@@ -1652,7 +1648,7 @@ select_branch <- function(method, scores, cfg, parent_K) {
       local_iter = cfg$local_iter,
       ocs_iter = cfg$ocs_iter
     )
-    return(apply_family_allocation(selected, cfg, "etk_dh_pmv_var_blend_cal", "dh_pmv_var_cal"))
+    return(apply_family_allocation(selected, cfg, "etk_pmv_blend_cal", "pmv_cal"))
   }
   stop("Unknown method: ", method, call. = FALSE)
 }
@@ -1720,15 +1716,15 @@ make_selected_progeny <- function(parent_pop,
     pred_var <- if (method_for_pred %in% c("var_simple_etk_topn") ||
                     grepl("^var_simple_ocs", method_for_pred) ||
                     grepl("^var_simple_select[0-9]*$", method_for_pred)) {
-      selected$var_simple_cal[i]
+      selected$parent_distance_cal[i]
     } else if (grepl("^popvar_", method_for_pred)) {
       selected$popvar_varG[i]
     } else if (grepl("^simple_usefa", method_for_pred)) {
       selected$simple_usefa_var[i]
     } else if (grepl("^simple_mpv", method_for_pred)) {
-      selected$var_simple[i]
+      selected$parent_distance[i]
     } else if (grepl("^alphamate", method_for_pred)) {
-      selected$var_simple[i]
+      selected$parent_distance[i]
     } else if (grepl("balanced_ocs", method_for_pred)) {
       if (identical(balanced_gain_col, "ng_portfolio_score") && "ng_portfolio_var" %in% names(selected)) {
         selected$ng_portfolio_var[i]
@@ -1737,9 +1733,9 @@ make_selected_progeny <- function(parent_pop,
       } else if (identical(balanced_gain_col, "simple_usefa") && "simple_usefa_var" %in% names(selected)) {
         selected$simple_usefa_var[i]
       } else if (isTRUE(grepl("pmv", balanced_gain_col, fixed = TRUE))) {
-        selected$dh_pmv_var_cal[i]
+        selected$pmv_cal[i]
       } else {
-        selected$dh_recomb_var_cal[i]
+        selected$vpm_cal[i]
       }
     } else if (grepl("^ng_portfolio", method_for_pred)) {
       selected$ng_portfolio_var[i]
@@ -1762,18 +1758,18 @@ make_selected_progeny <- function(parent_pop,
     } else if (method_for_pred %in% c("var_simple_topn", "var_simple_allocator") ||
                grepl("^var_simple_repair[0-9]+$", method_for_pred) ||
                grepl("^var_simple_mip[0-9]+$", method_for_pred)) {
-      selected$var_simple[i]
+      selected$parent_distance[i]
     } else if (grepl("^ng_recomb", method_for_pred)) {
-      if (grepl("_cal_topn$|_ocs", method_for_pred)) selected$dh_recomb_var_cal[i] else selected$dh_recomb_var[i]
+      if (grepl("_cal_topn$|_ocs", method_for_pred)) selected$vpm_cal[i] else selected$vpm[i]
     } else if (grepl("^ng_pmv", method_for_pred)) {
-      if (grepl("_cal_topn$|_ocs", method_for_pred)) selected$dh_pmv_var_cal[i] else selected$dh_pmv_var[i]
+      if (grepl("_cal_topn$|_ocs", method_for_pred)) selected$pmv_cal[i] else selected$pmv[i]
     } else if (method_for_pred %in% c("ng_cal_allocator") ||
                grepl("^ng_hybrid_select[0-9]*$", method_for_pred) ||
                grepl("^ng_cal_repair[0-9]+$", method_for_pred) ||
                grepl("^ng_cal_mip[0-9]+$", method_for_pred)) {
-      selected$dh_pmv_var_cal[i]
+      selected$pmv_cal[i]
     } else {
-      selected$dh_pmv_var[i]
+      selected$pmv[i]
     }
     families[[i]] <- data.frame(
       cross_rank = i,
@@ -1783,32 +1779,32 @@ make_selected_progeny <- function(parent_pop,
       realization_seed = family_seed,
       pred_mean = selected$cross_mean[i],
       pred_mean_gebv = selected$cross_mean_gebv[i],
-      pred_mean_adjusted_pheno = selected$cross_mean_adjusted_pheno[i],
+      pred_mean_adjusted_pheno = selected$cross_mean_adj[i],
       pred_mean_blend = selected$cross_mean_blend[i],
       pred_var = pred_var,
-      pred_var_simple = selected$var_simple[i],
-      pred_dh_recomb_var = selected$dh_recomb_var[i],
-      pred_dh_pmv_var = selected$dh_pmv_var[i],
-      pred_var_simple_cal = selected$var_simple_cal[i],
-      pred_dh_recomb_var_cal = selected$dh_recomb_var_cal[i],
-      pred_dh_pmv_var_cal = selected$dh_pmv_var_cal[i],
-      pred_uc_recomb = selected$uc_recomb[i],
-      pred_uc_recomb_gebv = selected$uc_recomb_gebv[i],
-      pred_uc_recomb_adj = selected$uc_recomb_adj[i],
-      pred_uc_recomb_blend = selected$uc_recomb_blend[i],
-      pred_uc_dh_gebv = selected$uc_dh_gebv[i],
-      pred_uc_dh_adj = selected$uc_dh_adj[i],
-      pred_uc_dh_blend = selected$uc_dh_blend[i],
-      pred_etk_var_simple_cal = selected$etk_var_simple_cal[i],
-      pred_etk_dh_recomb_var_cal = selected$etk_dh_recomb_var_cal[i],
-      pred_etk_dh_pmv_var_cal = selected$etk_dh_pmv_var_cal[i],
-      pred_etk_dh_pmv_var_blend_cal = selected$etk_dh_pmv_var_blend_cal[i],
-      pred_etk_var_simple_gebv_cal = selected$etk_var_simple_gebv_cal[i],
-      pred_etk_dh_recomb_var_gebv_cal = selected$etk_dh_recomb_var_gebv_cal[i],
-      pred_etk_dh_pmv_var_gebv_cal = selected$etk_dh_pmv_var_gebv_cal[i],
-      pred_etk_dh_recomb_var_adj_cal = selected$etk_dh_recomb_var_adj_cal[i],
-      pred_etk_dh_pmv_var_adj_cal = selected$etk_dh_pmv_var_adj_cal[i],
-      pred_etk_dh_recomb_var_blend_cal = selected$etk_dh_recomb_var_blend_cal[i],
+      pred_parent_distance = selected$parent_distance[i],
+      pred_vpm = selected$vpm[i],
+      pred_pmv = selected$pmv[i],
+      pred_parent_distance_cal = selected$parent_distance_cal[i],
+      pred_vpm_cal = selected$vpm_cal[i],
+      pred_pmv_cal = selected$pmv_cal[i],
+      pred_usefulness_vpm = selected$usefulness_vpm[i],
+      pred_usefulness_vpm_gebv = selected$usefulness_vpm_gebv[i],
+      pred_usefulness_vpm_adj = selected$usefulness_vpm_adj[i],
+      pred_usefulness_vpm_blend = selected$usefulness_vpm_blend[i],
+      pred_usefulness_pmv_gebv = selected$usefulness_pmv_gebv[i],
+      pred_usefulness_pmv_adj = selected$usefulness_pmv_adj[i],
+      pred_usefulness_pmv_blend = selected$usefulness_pmv_blend[i],
+      pred_etk_parent_distance_cal = selected$etk_parent_distance_cal[i],
+      pred_etk_vpm_cal = selected$etk_vpm_cal[i],
+      pred_etk_pmv_cal = selected$etk_pmv_cal[i],
+      pred_etk_pmv_blend_cal = selected$etk_pmv_blend_cal[i],
+      pred_etk_parent_distance_gebv_cal = selected$etk_parent_distance_gebv_cal[i],
+      pred_etk_vpm_gebv_cal = selected$etk_vpm_gebv_cal[i],
+      pred_etk_pmv_gebv_cal = selected$etk_pmv_gebv_cal[i],
+      pred_etk_vpm_adj_cal = selected$etk_vpm_adj_cal[i],
+      pred_etk_pmv_adj_cal = selected$etk_pmv_adj_cal[i],
+      pred_etk_vpm_blend_cal = selected$etk_vpm_blend_cal[i],
       pred_ng_portfolio_score = if ("ng_portfolio_score" %in% names(selected)) selected$ng_portfolio_score[i] else NA_real_,
       pred_ng_portfolio_var = if ("ng_portfolio_var" %in% names(selected)) selected$ng_portfolio_var[i] else NA_real_,
       pred_ng_portfolio_reliability = if ("ng_portfolio_reliability" %in% names(selected)) selected$ng_portfolio_reliability[i] else NA_real_,
@@ -1926,8 +1922,8 @@ cfg <- list(
   lambda_parent_use_mode = env_chr("NG_LAMBDA_PARENT_USE_MODE", "adaptive"),
   ocs_iter = env_int("NG_OCS_ITER", 5L),
   ocs_max_crosses_per_parent = env_int("NG_OCS_MAX_CROSSES_PER_PARENT", 10L),
-  balanced_gain_col = env_chr("NG_BALANCED_GAIN_COL", "uc_recomb_gebv"),
-  balanced_diversity_col = env_chr("NG_BALANCED_DIVERSITY_COL", "var_simple_cal"),
+  balanced_gain_col = env_chr("NG_BALANCED_GAIN_COL", "usefulness_vpm_gebv"),
+  balanced_diversity_col = env_chr("NG_BALANCED_DIVERSITY_COL", "parent_distance_cal"),
   balanced_gain_weight = env_num("NG_BALANCED_GAIN_WEIGHT", 1.0),
   balanced_diversity_weight = env_num("NG_BALANCED_DIVERSITY_WEIGHT", 0.30),
   balanced_pair_kinship_weight = env_num("NG_BALANCED_PAIR_KINSHIP_WEIGHT", 0.10),
@@ -1949,16 +1945,16 @@ cfg <- list(
   portfolio_min_history_n = env_int("NG_PORTFOLIO_MIN_HISTORY_N", 20L),
   adaptive_score_cols = env_csv(
     "NG_ADAPTIVE_SCORE_COLS",
-    "uc_recomb_gebv,etk_dh_recomb_var_gebv_cal,etk_dh_recomb_var_blend_cal,etk_dh_pmv_var_blend_cal,etk_var_simple_cal"
+    "usefulness_vpm_gebv,etk_vpm_gebv_cal,etk_vpm_blend_cal,etk_pmv_blend_cal,etk_parent_distance_cal"
   ),
   adaptive_target = env_chr("NG_ADAPTIVE_TARGET", "realized_top10"),
   adaptive_min_history_n = env_int("NG_ADAPTIVE_MIN_HISTORY_N", 20L),
   adaptive_history_weight = env_num("NG_ADAPTIVE_HISTORY_WEIGHT", NA_real_),
-  adaptive_fallback_col = env_chr("NG_ADAPTIVE_FALLBACK_COL", "etk_var_simple_cal"),
+  adaptive_fallback_col = env_chr("NG_ADAPTIVE_FALLBACK_COL", "etk_parent_distance_cal"),
   adaptive_fallback_max_weight = env_num("NG_ADAPTIVE_FALLBACK_MAX_WEIGHT", 0.35),
   meta_score_cols = env_csv(
     "NG_META_SCORE_COLS",
-    "ng_adaptive_score,uc_recomb_gebv,etk_dh_pmv_var_blend_cal,etk_var_simple_cal,popvar_uc,simple_usefa"
+    "ng_adaptive_score,usefulness_vpm_gebv,etk_pmv_blend_cal,etk_parent_distance_cal,popvar_uc,simple_usefa"
   ),
   meta_target = env_chr("NG_META_TARGET", "realized_top10"),
   meta_min_history_n = env_int("NG_META_MIN_HISTORY_N", 20L),
@@ -2001,10 +1997,10 @@ cfg <- list(
   external_tail_prop = env_num("NG_EXTERNAL_TAIL_PROP", 0.10),
   external_shortlist_n = env_int("NG_EXTERNAL_SHORTLIST_N", NA_integer_),
   external_shortlist_multiplier = env_num("NG_EXTERNAL_SHORTLIST_MULTIPLIER", NA_real_),
-  external_shortlist_score_col = env_chr("NG_EXTERNAL_SHORTLIST_SCORE_COL", "etk_dh_pmv_var_blend_cal,uc_dh_blend,var_simple,mpv"),
+  external_shortlist_score_col = env_chr("NG_EXTERNAL_SHORTLIST_SCORE_COL", "etk_pmv_blend_cal,usefulness_pmv_blend,parent_distance,mid_parent_value"),
   alphamate_executable = env_chr("NG_ALPHAMATE_EXE", ng_alphamate_default_executable()),
   alphamate_runtime_path = env_chr("NG_ALPHAMATE_RUNTIME_PATH", ""),
-  alphamate_criterion_cols = env_csv("NG_ALPHAMATE_CRITERION_COLS", "cross_mean_adjusted_pheno,cross_mean_blend,cross_mean_gebv,cross_mean"),
+  alphamate_criterion_cols = env_csv("NG_ALPHAMATE_CRITERION_COLS", "cross_mean_adj,cross_mean_blend,cross_mean_gebv,cross_mean"),
   alphamate_target_degree = env_num("NG_ALPHAMATE_TARGET_DEGREE", 45),
   alphamate_max_contributions = env_int("NG_ALPHAMATE_MAX_CONTRIBUTIONS", NA_integer_),
   alphamate_number_of_parents = env_int("NG_ALPHAMATE_NUMBER_OF_PARENTS", NA_integer_),
@@ -2240,7 +2236,7 @@ rep_results <- lapply(seq_len(cfg$reps), function(rep_id) {
       score_cache[[group_id]] <- list(
         scores = scores,
         effects = effects,
-        parent_K = ng_parent_kinship(geno),
+        parent_kinship = ng_parent_kinship(geno),
         shared_ids = shared_ids,
         elapsed_effects = t_eff,
         elapsed_score = t_score,
@@ -2255,12 +2251,12 @@ rep_results <- lapply(seq_len(cfg$reps), function(rep_id) {
       group_size <- length(bundle$group_methods)
       effects <- bundle$effects
       scores <- remap_score_parent_ids(bundle$scores, bundle$shared_ids, input$ids)
-      parent_K <- rename_kinship_ids(bundle$parent_K, input$ids)
+      parent_kinship <- rename_kinship_ids(bundle$parent_kinship, input$ids)
       t_eff <- bundle$elapsed_effects / group_size
       t_score <- bundle$elapsed_score / group_size
 
       t_select <- system.time({
-        selected <- select_branch(method, scores, cfg, parent_K)
+        selected <- select_branch(method, scores, cfg, parent_kinship)
       })[["elapsed"]]
       plan_summary <- attr(selected, "summary")
       pp <- method_parent_penalty(method, cfg$lambda_parent_use, cfg$lambda_parent_use_mode)
@@ -2269,7 +2265,7 @@ rep_results <- lapply(seq_len(cfg$reps), function(rep_id) {
       selected$cycle <- cycle
       selected$method <- method
       selected_out[[paste(rep_id, method, cycle, sep = "_")]] <- selected
-      selected_counts <- ng_parent_counts(selected, rownames(parent_K))
+      selected_counts <- ng_parent_counts(selected, rownames(parent_kinship))
       selected_contrib <- selected_counts / sum(selected_counts)
       selection_summary_out[[paste(rep_id, method, cycle, sep = "_")]] <- data.frame(
         rep = rep_id,
@@ -2279,7 +2275,7 @@ rep_results <- lapply(seq_len(cfg$reps), function(rep_id) {
         unique_parents = sum(selected_counts > 0),
         max_parent_use = max(selected_counts),
         parent_use_sq = sum(selected_contrib * selected_contrib),
-        group_coancestry = ng_group_coancestry(selected_counts, parent_K),
+        group_coancestry = ng_group_coancestry(selected_counts, parent_kinship),
         mean_pair_kinship = mean(selected$pair_kinship, na.rm = TRUE),
         lambda_parent_use = if (!is.null(plan_summary)) plan_summary$lambda_parent_use else if (grepl("ocs", method)) pp$value else NA_real_,
         lambda_parent_use_input = if (!is.null(plan_summary)) plan_summary$lambda_parent_use_input else if (grepl("ocs", method)) pp$value else NA_real_,
@@ -2484,18 +2480,18 @@ calibration <- if (nrow(families)) {
   do.call(rbind, by(families, list(families$method, families$cycle), function(d) {
     out <- ng_validate_metric_calibration(
       scores = data.frame(parent1 = d$parent1, parent2 = d$parent2,
-                          var_simple = d$pred_var_simple,
-                          dh_recomb_var = d$pred_dh_recomb_var,
-                          dh_pmv_var = d$pred_dh_pmv_var,
-                          var_simple_cal = d$pred_var_simple_cal,
-                          dh_recomb_var_cal = d$pred_dh_recomb_var_cal,
-                          dh_pmv_var_cal = d$pred_dh_pmv_var_cal),
+                          parent_distance = d$pred_parent_distance,
+                          vpm = d$pred_vpm,
+                          pmv = d$pred_pmv,
+                          parent_distance_cal = d$pred_parent_distance_cal,
+                          vpm_cal = d$pred_vpm_cal,
+                          pmv_cal = d$pred_pmv_cal),
       realized = data.frame(parent1 = d$parent1, parent2 = d$parent2,
                             realized_var = d$realized_var,
                             realized_mean = d$realized_mean),
       pred_cols = c(
-        "var_simple", "dh_recomb_var", "dh_pmv_var",
-        "var_simple_cal", "dh_recomb_var_cal", "dh_pmv_var_cal"
+        "parent_distance", "vpm", "pmv",
+        "parent_distance_cal", "vpm_cal", "pmv_cal"
       )
     )
     out$method <- d$method[1]
@@ -2510,8 +2506,8 @@ timing_summary <- if (nrow(timings)) {
 
 family_summary <- if (nrow(families)) {
   summary_cols <- c(
-    "pred_var", "pred_var_simple", "pred_dh_recomb_var", "pred_dh_pmv_var",
-    "pred_var_simple_cal", "pred_dh_recomb_var_cal", "pred_dh_pmv_var_cal",
+    "pred_var", "pred_parent_distance", "pred_vpm", "pred_pmv",
+    "pred_parent_distance_cal", "pred_vpm_cal", "pred_pmv_cal",
     "pred_balanced_usefulness_score", "pred_ng_adaptive_score", "pred_ng_adaptive_score_raw",
     "pred_ng_adaptive_var", "pred_ng_adaptive_fallback_weight",
     "pred_ng_meta_score", "pred_ng_meta_var", "pred_ng_meta_method_history_weight",

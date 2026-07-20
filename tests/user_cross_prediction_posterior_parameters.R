@@ -72,15 +72,15 @@ result <- ng_run_cross_prediction(
   ril_mode = "infinite",
   run_posterior_prediction = TRUE,
   posterior_method = "closed_form",
-  nIter = 8,
-  burnIn = 3,
+  n_iter = 8,
+  burn_in = 3,
   use_parallel = FALSE,
   progeny = "DH",
-  recombination_model = "haldane",
+  recomb_model = "haldane",
   selection_prop = 0.20,
   duplicate_action = "none",
   n_crosses = 4,
-  max_uses_per_parent = 3,
+  max_crosses_per_parent = 3,
   optimizer = "greedy_local",
   allocation_method = "ocs",
   use_ocs = TRUE,
@@ -96,8 +96,8 @@ stopifnot(identical(result$settings$method_varPMV, "full_posterior"))
 stopifnot(identical(result$settings$ril_mode, "infinite"))
 stopifnot(isTRUE(result$settings$run_posterior_prediction))
 stopifnot(identical(result$settings$posterior_method, "closed_form"))
-stopifnot(identical(result$settings$nIter, 8L))
-stopifnot(identical(result$settings$burnIn, 3L))
+stopifnot(identical(result$settings$n_iter, 8L))
+stopifnot(identical(result$settings$burn_in, 3L))
 stopifnot(identical(result$settings$posterior_n_draws, 5L))
 stopifnot(identical(result$settings$use_parallel, FALSE))
 
@@ -146,10 +146,10 @@ for (trait in names(result$posterior_predictions)) {
   stopifnot(identical(posterior_attr$n_draws, 5L))
   stopifnot(identical(posterior_attr$method, "closed_form"))
   stopifnot(all(c(
-    "dh_pmv_var_post_mean",
-    "dh_pmv_var_post_lower",
-    "dh_pmv_var_post_upper",
-    "uc_dh_gebv_post_mean"
+    "pmv_post_mean",
+    "pmv_post_lower",
+    "pmv_post_upper",
+    "usefulness_pmv_gebv_post_mean"
   ) %in% names(posterior_scores)))
 }
 
@@ -174,7 +174,7 @@ bad_ril_mode <- tryCatch(
     ril_mode = "finite",
     duplicate_action = "none",
     n_crosses = 2,
-    max_uses_per_parent = 2,
+    max_crosses_per_parent = 2,
     write_outputs = FALSE,
     seed = 1
   ),

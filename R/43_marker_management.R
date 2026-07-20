@@ -137,7 +137,7 @@ ng_apply_marker_management <- function(scores,
                                        marker_target_spec = NULL,
                                        lethal_spec = NULL,
                                        ploidy = 2,
-                                       gain_col = "uc_dh_gebv",
+                                       gain_col = "usefulness_pmv_gebv",
                                        lambda_marker = 0,
                                        drop_lethal_carrier_crosses = TRUE) {
   scores <- as.data.frame(scores, stringsAsFactors = FALSE)

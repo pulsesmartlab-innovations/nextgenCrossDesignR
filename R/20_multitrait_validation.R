@@ -172,7 +172,7 @@ ng_run_multitrait_validation <- function(scores = NULL,
                                          seed = 1L,
                                          methods = ng_multitrait_validation_default_methods(),
                                          allocator = c("topn", "ocs"),
-                                         parent_K = NULL,
+                                         parent_kinship = NULL,
                                          ocs_lambda_group = 0.05,
                                          ocs_lambda_mating = 0,
                                          output_dir = NULL,
@@ -194,18 +194,18 @@ ng_run_multitrait_validation <- function(scores = NULL,
   if (!is.finite(n_crosses) || n_crosses < 1L) ng_stop("n_crosses must be positive")
 
   parent_ids <- sort(unique(c(scores$parent1, scores$parent2)))
-  if (is.null(parent_K)) {
-    parent_K <- diag(length(parent_ids))
-    rownames(parent_K) <- colnames(parent_K) <- parent_ids
+  if (is.null(parent_kinship)) {
+    parent_kinship <- diag(length(parent_ids))
+    rownames(parent_kinship) <- colnames(parent_kinship) <- parent_ids
   } else {
-    parent_K <- as.matrix(parent_K)
-    storage.mode(parent_K) <- "double"
-    if (is.null(rownames(parent_K)) || is.null(colnames(parent_K))) {
-      ng_stop("parent_K must have row and column names")
+    parent_kinship <- as.matrix(parent_kinship)
+    storage.mode(parent_kinship) <- "double"
+    if (is.null(rownames(parent_kinship)) || is.null(colnames(parent_kinship))) {
+      ng_stop("parent_kinship must have row and column names")
     }
-    missing_k <- setdiff(parent_ids, intersect(rownames(parent_K), colnames(parent_K)))
-    if (length(missing_k)) ng_stop("parent_K missing parents: ", paste(missing_k, collapse = ", "))
-    parent_K <- parent_K[parent_ids, parent_ids, drop = FALSE]
+    missing_k <- setdiff(parent_ids, intersect(rownames(parent_kinship), colnames(parent_kinship)))
+    if (length(missing_k)) ng_stop("parent_kinship missing parents: ", paste(missing_k, collapse = ", "))
+    parent_kinship <- parent_kinship[parent_ids, parent_ids, drop = FALSE]
   }
 
   selected <- vector("list", length(methods))
@@ -219,7 +219,7 @@ ng_run_multitrait_validation <- function(scores = NULL,
         scores = scores,
         traits = traits,
         n_crosses = n_crosses,
-        parent_K = parent_K,
+        parent_kinship = parent_kinship,
         multitrait_method = method,
         optimizer_method = "greedy_local",
         max_crosses_per_parent = max(2L, ceiling(n_crosses / 2)),

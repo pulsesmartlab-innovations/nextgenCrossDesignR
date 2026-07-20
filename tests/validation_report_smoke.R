@@ -51,7 +51,7 @@ write_fixture("diagnostic_allocator_5k_winner_summary.csv", data.frame(
 write_fixture("diagnostic_family_5k_metric_summary_avg.csv", data.frame(
   n_parents = c(20L, 20L, 30L),
   target = c("realized_top10", "realized_var", "realized_top10"),
-  score = c("uc_dh", "dh_pmv_var", "uc_dh"),
+  score = c("usefulness_pmv", "pmv", "usefulness_pmv"),
   spearman = c(0.91, 0.55, 0.89),
   top_overlap = c(0.82, 0.35, 0.80)
 ))

@@ -14,7 +14,7 @@ R.
   `allocation_method = "alphamate_style"`, and checks the output.
 - `03_variance_method_comparison.R`: self-contained method comparison that
   runs the same input files with `var_complex`, `uc`, `pmv`, `vpm`,
-  `var_simple`, and `mean` trait-value settings, then writes a concise
+  `le`, and `mean` trait-value settings, then writes a concise
   summary table.
 - `04_alphamate_executable_user_run.R`: self-contained external AlphaMate
   example. It shows the exact `allocation_method = "alphamate_executable"`
@@ -29,7 +29,7 @@ R.
   dependency for the MIP optimizers.
 - `07_trait_value_metric_parameter_guide.R`: self-contained guide for
   `trait_value_metric`, `method_varPMV`, `ril_mode`,
-  `run_posterior_prediction`, `posterior_method`, `nIter`, `burnIn`, and
+  `run_posterior_prediction`, `posterior_method`, `n_iter`, `burn_in`, and
   `use_parallel`. It runs several metrics and includes a small posterior
   prediction row so the settings are exercised through the package wrapper.
 - `08_prediction_mode_trait_by_trait.R`: first prediction-mode example. Use
@@ -90,7 +90,7 @@ R.
   cost/`budget` + management constraints (`min_crosses_per_parent`, `parent_group` /
   `group_permission`, `lambda_progeny_inbreeding`) all in one `ng_run_cross_prediction()` run.
 - `28_polyploid_mate_design.R`: any-ploidy polyploid mate design in one call --
-  `ng_design_crosses_poly()` takes an allele-dosage matrix (0..ploidy) + effects or phenotype,
+  `ng_polyploid_design_crosses()` takes an allele-dosage matrix (0..ploidy) + effects or phenotype,
   runs ploidy-aware QC (`ng_polyploid_qc`), scores (mid-parent GEBV + a correct allele-frequency
   polyploid GRM, `ng_polyploid_grm`), and runs the full native control suite (strategy dial,
   committed matings, ...).
@@ -98,11 +98,11 @@ R.
   relationship matrices -- additive `ng_polyploid_grm(method = "vanraden" | "yang")` and digenic
   dominance `ng_polyploid_dominance_grm()`.
 - `30_polyploid_additive_dominance_effects.R`: additive + dominance genomic prediction --
-  `ng_fit_polyploid_effects(model = "additive_dominance")` and `ng_predict_polyploid_value(type =
+  `ng_polyploid_fit_effects(model = "additive_dominance")` and `ng_polyploid_predict_value(type =
   "genotypic" | "breeding")`. Select clones on genotypic value, parents on breeding value.
 - `31_polyploid_dominance_crossing.R`: dominance-aware mate design for clonal/heterosis crops
-  (cassava, sugarcane) -- `ng_score_crosses_poly_dominance()` (heterosis mean + within-family
-  variance) and `ng_design_crosses_poly(dominance = TRUE, gain =, double_reduction =, grm_method =)`.
+  (cassava, sugarcane) -- `ng_polyploid_score_crosses_dominance()` (heterosis mean + within-family
+  variance) and `ng_polyploid_design_crosses(dominance = TRUE, gain =, double_reduction =, grm_method =)`.
 - `32_exact_cross_trait_covariance.R`: exact recombination-aware within-family cross-trait
   covariance `ng_cross_trait_within_family_cov()` (a_t' R a_s) feeding the multi-trait threshold
   probability via `ng_add_p_superior_progeny_multitrait(cross_trait_cov = ...)`, versus the
