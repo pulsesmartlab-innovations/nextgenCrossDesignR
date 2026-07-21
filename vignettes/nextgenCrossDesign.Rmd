@@ -98,9 +98,13 @@ n_chr     <- 6
 ids     <- sprintf("P%03d", seq_len(n_parents))
 markers <- sprintf("SNP_%03d", seq_len(n_markers))
 
-# 1. GENOTYPE — parents in rows, markers in columns, diploid dosage 0/1/2.
+# 1. GENOTYPE — parents in rows, markers in columns. These are inbred DH/RIL
+# lines, so each parent is homozygous at every marker (dosage 0 or 2, no 1s);
+# 2 * rbinom(., 1, p) draws the fixed allele. The recombination-variance kernel
+# assumes inbred parents, so generating 0/1/2 outbred dosages here would be
+# rejected by QC.
 freq <- runif(n_markers, 0.1, 0.9)
-dose <- vapply(freq, function(p) rbinom(n_parents, 2, p), numeric(n_parents))
+dose <- vapply(freq, function(p) 2L * rbinom(n_parents, 1, p), numeric(n_parents))
 geno <- data.frame(NAME = ids, dose, check.names = FALSE)
 names(geno)[-1] <- markers
 
@@ -142,9 +146,9 @@ id_col <- "NAME"
 The four tables look like this (small excerpts):
 
 ```text
-# genotype (geno)
+# genotype (geno) — inbred lines are homozygous (0/2)
 NAME,SNP_001,SNP_002,SNP_003
-P001,0,2,1
+P001,0,2,2
 P002,2,2,0
 
 # marker map (map)
@@ -188,6 +192,7 @@ result_from_files <- ng_run_cross_prediction(
   direction_file  = file.path(data_dir, "direction.csv"),
   phenotype_id_col = "NAME", genotype_id_col = "NAME",
   map_position_unit = "bp", bp_per_cm = 1e6,
+  progeny = "RIL",                      # same inbred-line system as the main runner
   n_crosses = 100, optimizer = "evolution"
 )
 ```
@@ -216,7 +221,7 @@ result <- ng_run_cross_prediction(
   multi_trait_method = "auto",         # equal weights from trait directions
 
   n_crosses           = 100,           # size of the crossing plan
-  max_uses_per_parent = 20,            # cap a parent's appearances
+  max_crosses_per_parent = 20,            # cap a parent's appearances
   optimizer           = "evolution",   # recommended allocator (Part 2)
   allocation_method   = "ocs",         # coancestry-constrained OCS
 
@@ -392,6 +397,22 @@ tables; the training-only individuals are whoever is in the `training_*` tables*
 excludes them from candidate crosses, allocation, priority, and every output.
 
 ```{r}
+# Extra training-only individuals: inbred (0/2), same markers as `geno`, new IDs,
+# and the same trait columns as `pheno`. Trait values here are illustrative; in
+# practice these are your genotyped + phenotyped non-candidates.
+n_extra    <- 40
+extra_ids  <- sprintf("T%03d", seq_len(n_extra))
+extra_dose <- vapply(freq, function(p) 2L * rbinom(n_extra, 1, p), numeric(n_extra))
+extra_geno <- data.frame(NAME = extra_ids, extra_dose, check.names = FALSE)
+names(extra_geno)[-1] <- markers
+extra_pheno <- data.frame(
+  NAME    = extra_ids,
+  yield   = rnorm(n_extra, 60, 5),
+  protein = rnorm(n_extra, 12, 1),
+  disease = rnorm(n_extra,  3, 1),
+  stringsAsFactors = FALSE
+)
+
 result <- ng_run_cross_prediction(
   phenotype = pheno, genotype = geno, marker_map = map, trait_direction = direction,
   id_col = "NAME", map_position_unit = "bp", bp_per_cm = 1e6,
@@ -439,14 +460,14 @@ choice is available on `ng_design_crosses()` (Part 6) and the polyploid path
 ## Progeny type: DH or RIL
 
 `progeny` must match your real system, because it changes the within-family variance and therefore
-the usefulness ranking. `recombination_model` picks the map function.
+the usefulness ranking. `recomb_model` picks the map function.
 
 ```{r}
 result <- ng_run_cross_prediction(
   phenotype = pheno, genotype = geno, marker_map = map, trait_direction = direction,
   id_col = "NAME", map_position_unit = "bp", bp_per_cm = 1e6,
   progeny = "RIL",                  # "DH" or "RIL"
-  recombination_model = "kosambi",  # "haldane" or "kosambi"
+  recomb_model = "kosambi",  # "haldane" or "kosambi"
   assume_inbred = FALSE
 )
 ```
@@ -503,7 +524,7 @@ result <- ng_run_cross_prediction(
   id_col = "NAME", map_position_unit = "bp", bp_per_cm = 1e6,
   allocation_method   = "ocs",
   n_crosses           = 100,   # how many crosses to make
-  max_uses_per_parent = 20,    # a parent may appear in at most this many crosses
+  max_crosses_per_parent = 20,    # a parent may appear in at most this many crosses
   max_pair_kinship    = 0.25,  # forbid matings between parents more related than this
   min_unique_parents  = 40     # force at least this many distinct parents into the plan
 )
@@ -535,13 +556,13 @@ This uses the scored candidate table and a parent relationship matrix from the P
 cand     <- result$candidate_crosses
 geno_mat <- as.matrix(geno[, setdiff(names(geno), "NAME")])
 rownames(geno_mat) <- geno$NAME
-parent_K <- ng_parent_kinship(geno_mat)
+parent_kinship <- ng_parent_kinship(geno_mat)
 
 curve <- ng_optimize_mating_plan_curve(
   scores = cand,
   K_range = seq(50, 200, by = 10),
   gain_col = "multi_trait_score",
-  parent_K = parent_K,
+  parent_kinship = parent_kinship,
   max_crosses_per_parent = 20,
   min_unique_parents = 40,
   lambda_group = 0.05,
@@ -558,14 +579,20 @@ attr(curve, "elbow_K")
 Other stopping criteria target an effective population size or a coancestry budget:
 
 ```{r}
+# Pass the same allocation constraints as the elbow curve above; without them the
+# allocator uses unconstrained defaults that cannot build a feasible plan here.
 curve_ne <- ng_optimize_mating_plan_curve(
   cand, K_range = seq(50, 200, by = 10), gain_col = "multi_trait_score",
-  parent_K = parent_K, criterion = "ne_target", ne_min = 30
+  parent_kinship = parent_kinship, max_crosses_per_parent = 20, min_unique_parents = 40,
+  lambda_group = 0.05, lambda_mating = 0.02, method = "evolution",
+  criterion = "ne_target", ne_min = 30
 )
 
 curve_budget <- ng_optimize_mating_plan_curve(
   cand, K_range = seq(50, 200, by = 10), gain_col = "multi_trait_score",
-  parent_K = parent_K, criterion = "coancestry_budget", coancestry_max = 0.05
+  parent_kinship = parent_kinship, max_crosses_per_parent = 20, min_unique_parents = 40,
+  lambda_group = 0.05, lambda_mating = 0.02, method = "evolution",
+  criterion = "coancestry_budget", coancestry_max = 0.05
 )
 
 ng_plot_diminishing_returns(curve)
@@ -669,8 +696,10 @@ Avoid carrier-by-carrier matings at a deleterious recessive locus:
 
 ```{r lethal_guarding}
 lspec <- ng_lethal_recessive_spec("SNP_012", risk_allele = "alt")
+# The guard forbids carrier x carrier matings, which shrinks the feasible set, so
+# request fewer crosses here than in the unconstrained plan above.
 r <- ng_run_cross_prediction(phenotype = pheno, genotype = geno, marker_map = map,
-  trait_direction = direction, id_col = "NAME", use_ocs = TRUE, n_crosses = 100,
+  trait_direction = direction, id_col = "NAME", use_ocs = TRUE, n_crosses = 60,
   lethal_spec = lspec)
 ```
 
@@ -728,7 +757,7 @@ multi-trait `direction` table and `multi_trait_method`. This part shows how to s
 
 For practical workflows, build the objective with `ng_breeder_selection_objective()`. It requires
 trait directions by default and records **why** a method was chosen. It combines the per-trait
-predictions (columns like `pred_yield`) that the pipeline produces into one `multi_trait_score`.
+predictions (columns like `yield_value`) that the pipeline produces into one `multi_trait_score`.
 
 The trait specification is a small data frame — one row per trait, giving the prediction column and
 direction (and optional weights/thresholds). The runner builds it for you as
@@ -737,7 +766,7 @@ direction (and optional weights/thresholds). The runner builds it for you as
 ```{r}
 trait_spec <- data.frame(
   trait     = c("yield", "protein", "disease"),
-  column    = c("pred_yield", "pred_protein", "pred_disease"),
+  column    = c("yield_value", "protein_value", "disease_value"),
   direction = c("increase", "increase", "decrease"),
   weight    = NA_real_,
   stringsAsFactors = FALSE
@@ -876,16 +905,18 @@ priority_summary
 
 **Add a decision-ready probability.** `ng_add_p_superior_progeny()` appends the probability that a
 cross throws at least one progeny above a target — a number breeders can act on directly. It reads
-`cross_mean_blend` and `pmv` by default:
+`cross_mean_blend` and `pmv` by default; in a multi-trait plan point it at one trait's mean and
+within-family variance columns (here yield):
 
 ```{r}
 plan_priority <- ng_add_p_superior_progeny(
   plan_priority,
+  mean_col = "yield_mean", var_col = "yield_pmv",  # per-trait columns in a multi-trait plan
   tau_superior = 65,     # target value the best progeny should clear
   k_progeny = 100        # progeny per cross assumed
 )
 head(plan_priority[, c("parent1", "parent2", "multi_trait_score",
-                       "cross_priority", "p_superior_progeny")])
+                       "priority_tier", "p_superior_progeny")])
 ```
 
 Draw all candidate crosses and overlay the selected plan colored by priority:
@@ -939,9 +970,24 @@ tables <- ng_cross_priority_workbook_tables(
 )
 names(tables)
 
+# This older workbook takes a per-LINE candidate table (a `line` id, a `cross`/family
+# label, and trait columns) plus a `criteria` table, then selects the top parents by a
+# weighted selection index and proposes crosses among them.
+plan_candidates <- data.frame(
+  line  = pheno$NAME,
+  cross = paste0("F", ((seq_len(nrow(pheno)) - 1L) %/% 5L) + 1L),  # illustrative family labels
+  yield = pheno$yield, protein = pheno$protein, disease = pheno$disease,
+  stringsAsFactors = FALSE
+)
+plan_criteria <- data.frame(
+  trait     = c("yield", "protein", "disease"),
+  weight    = c(0.5, 0.3, 0.2),
+  direction = c("increase", "increase", "decrease"),
+  stringsAsFactors = FALSE
+)
 ng_write_crossing_plan_workbook(
   output_path = file.path(tempdir(), "top_parent_crossing_plan.xlsx"),
-  candidates = result$candidate_crosses, criteria = NULL, top_n = 25, cross_n = 100
+  candidates = plan_candidates, criteria = plan_criteria, top_n = 25, cross_n = 100
 )
 ```
 
@@ -1014,7 +1060,7 @@ trait_direction_low <- data.frame(
   stringsAsFactors = FALSE
 )
 
-parent_K <- ng_parent_kinship(geno_matrix)
+parent_kinship <- ng_parent_kinship(geno_matrix)
 ```
 
 ### Fit effects and score crosses
@@ -1116,7 +1162,7 @@ plan <- ng_optimize_breeder_selection_plan(
   scores = cross_table,
   objective = objective,
   n_crosses = 100,
-  parent_K = parent_K,
+  parent_kinship = parent_kinship,
   optimizer_method = "evolution",
   max_crosses_per_parent = 20,
   min_unique_parents = 40,
@@ -1136,7 +1182,7 @@ directly (and the same cost/logistic knobs from Part 3):
 ```{r}
 plan_direct <- ng_optimize_mating_plan(
   scores = scored, n_crosses = 100, gain_col = "multi_trait_score",
-  parent_K = parent_K, max_crosses_per_parent = 20, min_unique_parents = 40,
+  parent_kinship = parent_kinship, max_crosses_per_parent = 20, min_unique_parents = 40,
   lambda_group = 0.05, lambda_mating = 0.02, method = "evolution"
 )
 ```
@@ -1145,9 +1191,10 @@ The scores-level marker-management helper (the equivalent of the runner's `marke
 
 ```{r}
 mspec <- ng_marker_target_spec("SNP_001", direction = "increase", weight = 1)
+# gain_col is the base gain to steer; here `scored` carries multi_trait_score.
 aug <- ng_apply_marker_management(scored, geno = geno_matrix, marker_target_spec = mspec,
-                                  gain_col = "usefulness_pmv_gebv", lambda_marker = 0.5)
-plan_marker <- ng_optimize_mating_plan(aug, n_crosses = 100, parent_K = parent_K,
+                                  gain_col = "multi_trait_score", lambda_marker = 0.5)
+plan_marker <- ng_optimize_mating_plan(aug, n_crosses = 100, parent_kinship = parent_kinship,
                                        gain_col = "marker_adjusted_gain")
 ```
 
@@ -1156,16 +1203,28 @@ plan_marker <- ng_optimize_mating_plan(aug, n_crosses = 100, parent_K = parent_K
 ```{r}
 balanced_plan <- ng_optimize_balanced_usefulness(
   scores = yield_scores, n_crosses = 100, gain_col = "usefulness_pmv_gebv",
-  diversity_col = "parent_distance", parent_K = parent_K,
+  diversity_col = "parent_distance", parent_kinship = parent_kinship,
   max_crosses_per_parent = 20, min_unique_parents = "auto",
   lambda_group = 1.0, lambda_parent_use = 2.0, method = "evolution"
 )
 
-robust_plan <- ng_optimize_robust_mating_plan(scores = scored, n_crosses = 100, parent_K = parent_K)
+# The robust allocator selects on a pessimistic posterior quantile, so it needs a
+# posterior-predicted table: run_posterior_prediction = TRUE adds the *_post_* columns
+# it reads. posterior_predictions holds one table per trait; use the first (yield).
+post_run <- ng_run_cross_prediction(
+  phenotype = pheno, genotype = geno, marker_map = map, trait_direction = direction,
+  id_col = "NAME", progeny = "RIL", n_crosses = 100,
+  run_posterior_prediction = TRUE, posterior_method = "closed_form"
+)
+posterior_scores <- post_run$posterior_predictions[[1]]
+robust_plan <- ng_optimize_robust_mating_plan(
+  posterior_scores = posterior_scores, n_crosses = 100, parent_kinship = parent_kinship,
+  gain_col = "usefulness_pmv_gebv", method = "greedy_local"
+)
 
 pareto <- ng_pareto_mate_allocation(
-  scores = scored, n_crosses = 100, parent_K = parent_K,
-  lambda_group_grid = c(0, 0.01, 0.05, 0.10)
+  scores = yield_scores, n_crosses = 100, gain_col = "usefulness_pmv_gebv",
+  parent_kinship = parent_kinship, lambdas = c(0, 0.01, 0.05, 0.10)
 )
 ```
 
@@ -1186,18 +1245,26 @@ correct allele-frequency-based additive GRM generalized to ploidy (`method = "va
 digenic dominance relationship (`inst/examples/29_*`).
 
 ```{r polyploid_qc_grm}
+# Autotetraploid (ploidy 4) allele-dosage matrix (values 0..4), parents in rows and
+# markers in columns, plus a per-parent single-trait phenotype as a *named numeric
+# vector* (the format the polyploid design call expects).
+dosage <- matrix(rbinom(n_parents * n_markers, 4, 0.5), n_parents, n_markers,
+                 dimnames = list(pheno$NAME, markers))
+poly_pheno <- setNames(as.numeric(dosage %*% rnorm(n_markers)) + rnorm(n_parents, 0, 2),
+                       pheno$NAME)
+
 qc <- ng_polyploid_qc(dosage, ploidy = 4, min_maf = 0.05)   # cleaned dosage in qc$clean
 G  <- ng_polyploid_grm(qc$clean, ploidy = 4, method = "vanraden")   # or method = "yang"
 Gd <- ng_polyploid_dominance_grm(qc$clean, ploidy = 4)             # digenic dominance GRM
 ```
 
-**One-call mate design.** `ng_design_crosses_poly()` runs QC -> effects -> scoring -> allocation and
+**One-call mate design.** `ng_polyploid_design_crosses()` runs QC -> effects -> scoring -> allocation and
 forwards every native control (strategy dial, `target_coancestry`, committed matings, ...). It is
 **additive by default**:
 
 ```{r polyploid_design}
-plan <- ng_design_crosses_poly(dosage, n_crosses = 20, ploidy = 4,
-  phenotype = pheno,                 # or effects = <per-marker additive effects>
+plan <- ng_polyploid_design_crosses(dosage, n_crosses = 20, ploidy = 4,
+  phenotype = poly_pheno,                 # or effects = <per-marker additive effects>
   grm_method = "vanraden",           # or "yang"
   gain = "mean",                     # or "usefulness" (mean + i*within-family SD)
   strategy = "balanced")             # any native control forwards through ...
@@ -1205,14 +1272,14 @@ plan <- ng_design_crosses_poly(dosage, n_crosses = 20, ploidy = 4,
 
 **Optional dominance (clonal / heterosis crops: cassava, sugarcane, potato).** Because a clone
 carries its dominance deviation, select clones on **total genotypic value**
-(`ng_fit_polyploid_effects` + `ng_predict_polyploid_value`, `inst/examples/30_*`), and design
+(`ng_polyploid_fit_effects` + `ng_polyploid_predict_value`, `inst/examples/30_*`), and design
 crosses on a **heterosis-inclusive** mean and **within-family additive+dominance variance**
-(`ng_score_crosses_poly_dominance`, `inst/examples/31_*`). Set `double_reduction > 0` for
+(`ng_polyploid_score_crosses_dominance`, `inst/examples/31_*`). Set `double_reduction > 0` for
 autopolyploid double reduction (ploidy >= 4). Dominance is off by default; turn it on only when
 non-additive variance is substantial and well estimated.
 
 ```{r polyploid_dominance}
-plan <- ng_design_crosses_poly(dosage, n_crosses = 20, ploidy = 4, phenotype = pheno,
+plan <- ng_polyploid_design_crosses(dosage, n_crosses = 20, ploidy = 4, phenotype = poly_pheno,
   dominance = TRUE,                  # estimate additive + dominance marker effects
   gain = "usefulness",               # dominance-aware usefulness = mean(+heterosis) + i*SD
   double_reduction = 0.08)           # autopolyploid double reduction (ignored for diploids)
@@ -1221,8 +1288,9 @@ plan$heterosis                       # expected progeny dominance per chosen cro
 
 The diploid DH/RIL path is the main production path; polyploid workflows are validated for research
 and should be checked for your crop, ploidy model, marker density, and scheme before production use.
-Autotetraploid (`ng_poly4x_*`) and disomic-subgenome (`ng_poly_subgenome_*`) research helpers are
-listed in the API map.
+Disomic-subgenome research helpers (`ng_polyploid_subgenome_*`) are exported and listed in the API
+map. Autotetraploid simulation helpers used only for benchmarking are kept internal and are not part
+of the public API.
 
 ## Posterior prediction and P(superior progeny)
 
@@ -1230,6 +1298,19 @@ Probability that progeny exceed a threshold, and expected excess above it (note 
 `mu`, `sigma`/`sd`, `tau`, `k_progeny`):
 
 ```{r}
+# A per-trait scored table for the posterior demos: single-trait scoring gives the
+# `pmv` within-family variance and `cross_mean_blend` mean these functions read; add
+# each trait's predicted mean for the multi-trait call below.
+.score_trait <- function(tr) {
+  yy <- setNames(as.numeric(pheno[[tr]]), ids)
+  ng_score_crosses(geno = geno_matrix, effects = ng_fit_ridge_effects(geno_matrix, yy, ids),
+    marker_map = marker_map, ids = ids, pairs = pairs, adjusted_pheno = yy,
+    target = "DH", assume_inbred = FALSE)
+}
+scored <- .score_trait("yield")
+scored$pred_yield   <- scored$cross_mean_blend
+scored$pred_disease <- .score_trait("disease")$cross_mean_blend
+
 sigma <- sqrt(pmax(scored$pmv, 0))
 
 p_superior <- ng_p_superior_progeny(
@@ -1302,9 +1383,9 @@ posterior <- ng_posterior_cross_predict(
   ids = ids, pairs = pairs, target = "DH"
 )
 
-G_hat <- ng_estimate_genetic_covariance(
-  values = pheno[, direction$Trait], traits = direction$Trait
-)
+Y_traits <- as.matrix(pheno[, direction$Trait])
+rownames(Y_traits) <- pheno$NAME
+G_hat <- ng_estimate_genetic_covariance(geno = geno_matrix, Y = Y_traits)
 ```
 
 ## Calibration and validation
@@ -1312,19 +1393,45 @@ G_hat <- ng_estimate_genetic_covariance(
 Compare predicted cross metrics with realized family outcomes (supply your own `realized_families`
 and `historical_crosses` tables):
 
+Calibration compares predictions against outcomes you have observed, so it needs two of **your**
+tables — matched to the candidate crosses by parent pair. Keep the column names and fill the values
+from your program; here we synthesize them from the predictions so the vignette runs end to end.
+
 ```{r}
+# ---- Replace these two tables with your own trial data --------------------------
+n_sc <- nrow(scored)
+# realized_families: one row per evaluated cross, with the family mean/variance you observed.
+realized_families <- data.frame(
+  parent1 = scored$parent1, parent2 = scored$parent2,
+  realized_mean            = scored$cross_mean_blend + rnorm(n_sc, 0, 1),
+  realized_family_variance = pmax(scored$pmv * runif(n_sc, 0.6, 1.4), 1e-6)
+)
+# historical_crosses: past crosses with the metric you predicted (pred_*) and the variance you
+# later realized, so a calibrator can learn the predicted -> realized mapping.
+historical_crosses <- data.frame(
+  parent1 = scored$parent1, parent2 = scored$parent2,
+  pred_parent_distance     = scored$parent_distance,
+  pred_pmv                 = scored$pmv,
+  realized_family_variance = pmax(scored$pmv * runif(n_sc, 0.6, 1.4), 1e-6)
+)
+# --------------------------------------------------------------------------------
+
 cal <- ng_validate_metric_calibration(
   scores = scored, realized = realized_families,
   pred_cols = c("parent_distance", "vpm", "pmv"),
   realized_var_col = "realized_family_variance"
 )
 
+# pred_map names your score columns and points each at its predicted column in `history`.
 calibrators <- ng_fit_family_variance_calibrators(
   history = historical_crosses,
-  score_cols = c("parent_distance", "pmv"),
+  pred_map = c(parent_distance = "pred_parent_distance", pmv = "pred_pmv"),
   realized_col = "realized_family_variance"
 )
-scored_cal <- ng_apply_family_variance_calibrators(scores = scored, calibrators = calibrators)
+scored_cal <- ng_apply_family_variance_calibrators(
+  scores = scored, calibrators = calibrators,
+  n_progeny = 100, mean_col = "cross_mean_blend"
+)
 
 ng_family_metric_summary(scored)
 ```
@@ -1338,7 +1445,7 @@ adding hard dependencies. All operate on the Part-6 `yield_scores`/`scored`/`eff
 # PopVar-style usefulness (var_complex is the native wrapper metric; see Part 2)
 popvar_scores <- ng_popvar_style_scores(
   scores = yield_scores, mean_col = "cross_mean_gebv", var_col = "vpm",
-  selection_prop = 0.10, out_col = "popvar_uc"
+  selection_prop = 0.10, out_prefix = "popvar"
 )
 
 # SimpleMating-style thinning + selection
@@ -1347,7 +1454,8 @@ scored_simple <- ng_add_simplemating_scores(
   engine = "native"
 )
 simple_plan <- ng_simplemating_select_crosses_native(
-  scores = scored, n_crosses = 100, max_crosses_per_parent = 20, parent_K = parent_K
+  scores = scored_simple, score_col = "usefulness_pmv_gebv", n_crosses = 100,
+  max_crosses_per_parent = 20, parent_kinship = parent_kinship, method = "greedy_local"
 )
 
 # genomicMateSelectR-style VPM score
@@ -1357,8 +1465,9 @@ gms_scores <- ng_add_gms_vpm_scores(
 
 # AlphaMate-style (native) selection
 alpha_style <- ng_alphamate_style_select(
-  scores = scored, criterion_col = "multi_trait_score", n_crosses = 100,
-  parent_K = parent_K, mode = "ModeOptTarget1", target_degree = 45, max_contributions = 20
+  scores = yield_scores, criterion_col = "usefulness_pmv_gebv", n_crosses = 100,
+  parent_kinship = parent_kinship, mode = "ModeOptTarget1", target_degree = 45,
+  max_contributions = 20, method = "greedy_local"
 )
 ```
 
@@ -1371,13 +1480,20 @@ baseline_scores <- ng_add_external_baseline_scores(
   methods = c("popvar", "simplemating")
 )
 
-result_external <- ng_run_cross_prediction(
-  phenotype = pheno, genotype = geno, marker_map = map, trait_direction = direction,
-  id_col = "NAME", map_position_unit = "bp", bp_per_cm = 1e6,
-  allocation_method = "alphamate_executable",
-  alphamate_executable = Sys.getenv("NG_ALPHAMATE_EXE"),
-  alphamate_runtime_path = Sys.getenv("NG_ALPHAMATE_RUNTIME_PATH", unset = "")
-)
+# The external allocator shells out to an AlphaMate binary; run it only when one is
+# configured. Set NG_ALPHAMATE_EXE to your AlphaMate executable to enable this path.
+alphamate_exe <- Sys.getenv("NG_ALPHAMATE_EXE", unset = "")
+if (nzchar(alphamate_exe) && file.exists(alphamate_exe)) {
+  result_external <- ng_run_cross_prediction(
+    phenotype = pheno, genotype = geno, marker_map = map, trait_direction = direction,
+    id_col = "NAME", map_position_unit = "bp", bp_per_cm = 1e6,
+    allocation_method = "alphamate_executable",
+    alphamate_executable = alphamate_exe,
+    alphamate_runtime_path = Sys.getenv("NG_ALPHAMATE_RUNTIME_PATH", unset = "")
+  )
+} else {
+  message("Set NG_ALPHAMATE_EXE to an AlphaMate binary to run the external allocator.")
+}
 ```
 
 ## Policy selection and benchmark reports
@@ -1385,31 +1501,46 @@ result_external <- ng_run_cross_prediction(
 Policy functions choose among method families based on available score columns, parent-count bands,
 crop metadata, or validation evidence.
 
-```{r}
-policy <- ng_frontier_policy_from_spec(ng_frontier_default_policy())
-frontier <- ng_frontier_policy_select(
-  scores = scored, n_crosses = 100, parent_K = parent_K, policy = policy
-)
+Policy selectors map a **parent count** (and optional crop metadata) to a recommended method family
+— they choose *how* to allocate, they do not allocate crosses themselves.
 
+```{r}
+policy <- ng_frontier_default_policy()   # validated parent-band -> method table (a data frame)
+frontier <- ng_frontier_policy_select(nrow(geno), policy = policy)
+
+# Crop-aware routing reads a crop scenario (crop, ploidy, harness model) from the
+# built-in genome catalog; here a diploid barley scenario.
+barley <- ng_crop_genome_select("barley_like")
 crop_policy <- ng_crop_aware_policy_select(
-  scores = scored, n_crosses = 100, parent_K = parent_K,
-  crop_env = ng_crop_genome_env(crop = "barley", ploidy = 2)
+  n_parents        = nrow(geno),
+  crop_scenario    = barley$scenario[[1]],
+  crop             = barley$crop[[1]],
+  harness_model    = barley$harness_model[[1]],
+  validation_scope = barley$validation_scope[[1]]
 )
 ```
 
-Head-to-head benchmarking and the frontend capability registry:
+The frontend capability registry lists the methods and modules a frontend can offer:
 
 ```{r}
-bench <- ng_run_head_to_head_benchmark(methods = ng_head_to_head_default_methods(), n_rep = 10)
-summary <- ng_head_to_head_compare_summary(bench)
-
-ng_write_head_to_head_dashboard_json(
-  bench, output_path = file.path(tempdir(), "head_to_head_dashboard.json")
-)
-
 registry <- ng_backend_capability_registry()
 ng_write_backend_capability_registry_json(
   output_path = file.path(tempdir(), "backend_capabilities.json")
+)
+```
+
+Head-to-head benchmarking (`ng_run_head_to_head_benchmark()`) is a **developer / validation tool**:
+it runs `AlphaSimR` simulations to compare methods under a common seed and is **not** part of a
+user's prediction workflow. It is shown for reference only (it requires the suggested `AlphaSimR`
+package and the runners under `tools/`).
+
+```{r, eval = FALSE, purl = FALSE}
+bench <- ng_run_head_to_head_benchmark(
+  methods = ng_head_to_head_default_methods(), reps = 10
+)
+summary <- ng_head_to_head_compare_summary(bench)
+ng_write_head_to_head_dashboard_json(
+  bench, output_path = file.path(tempdir(), "head_to_head_dashboard.json")
 )
 ```
 
@@ -1437,7 +1568,7 @@ This table groups the exported functions so you can find the right entry point.
 
 | Area | Functions |
 | --- | --- |
-| Main runner and one-call design | `ng_run_cross_prediction()`, `ng_design_crosses()`, `ng_design_crosses_poly()` |
+| Main runner and one-call design | `ng_run_cross_prediction()`, `ng_design_crosses()`, `ng_polyploid_design_crosses()` |
 | Loading and core helpers | `ng_load()`, `ng_load_cpp()`, `ng_make_pairs()`, `ng_parent_kinship()`, `ng_prepare_marker_map()`, `ng_predict_gebv()` |
 | Data QC and duplicates | `ng_preflight_input_tables()`, `ng_write_data_preflight_json()`, `ng_detect_putative_duplicates()`, `ng_plot_putative_duplicates()` |
 | LD pruning | `ng_ld_prune_geno()`, `ng_ld_prune_markers()` |
@@ -1454,8 +1585,8 @@ This table groups the exported functions so you can find the right entry point.
 | Native external-method compatibility | `ng_popvar_style_scores()`, `ng_add_popvar_scores()`, `ng_simplemating_relate_thinning()`, `ng_simplemating_build_crosses()`, `ng_simplemating_past_thinning()`, `ng_simplemating_select_crosses_native()`, `ng_simplemating_style_select()`, `ng_add_simplemating_scores()`, `ng_add_gms_vpm_scores()`, `ng_alphamate_default_executable()`, `ng_run_alphamate()`, `ng_select_alphamate()`, `ng_alphamate_style_select()`, `ng_add_external_baseline_scores()`, `ng_external_methods_needed()` |
 | Policy and validation runners | `ng_frontier_default_policy()`, `ng_frontier_policy_from_spec()`, `ng_frontier_policy_select()`, `ng_multitrait_policy_select()`, `ng_multitrait_validation_scenario()`, `ng_multitrait_validation_default_methods()`, `ng_run_multitrait_validation()`, `ng_run_multitrait_validation_grid()`, `ng_multitrait_crop_validation_scenario()`, `ng_run_multitrait_crop_validation_grid()`, `ng_crop_aware_policy_select()`, `ng_crop_genome_env()`, `ng_crop_genome_scenarios()`, `ng_crop_genome_select()` |
 | Head-to-head reports and frontend metadata | `ng_head_to_head_default_methods()`, `ng_run_head_to_head_benchmark()`, `ng_head_to_head_compare_summary()`, `ng_head_to_head_dashboard_payload()`, `ng_write_head_to_head_dashboard_json()`, `ng_write_head_to_head_visual_report()`, `ng_backend_capability_registry()`, `ng_write_backend_capability_registry_json()` |
-| Polyploid GRM, QC, and (optional) dominance design | `ng_polyploid_qc()`, `ng_polyploid_grm()`, `ng_polyploid_dominance_grm()`, `ng_polyploid_allele_freq()`, `ng_fit_polyploid_effects()`, `ng_predict_polyploid_value()`, `ng_poly_score_crosses()`, `ng_score_crosses_poly_dominance()`, `ng_poly_progeny_moment_table()`, `ng_design_crosses_poly()` |
-| Polyploid and subgenome research workflows | `ng_poly4x_as_dosage_matrix()`, `ng_poly4x_make_parent_pop()`, `ng_poly4x_parent_relationship()`, `ng_poly4x_score_crosses()`, `ng_poly4x_ocs()`, `ng_poly4x_policy()`, `ng_poly4x_policy_modes()`, `ng_poly4x_scenarios()`, `ng_poly4x_select_scenario()`, `ng_poly4x_select_topn()`, `ng_poly_model_select()`, `ng_poly_policy()`, `ng_poly_policy_modes()`, `ng_poly_subgenome_as_dosage_list()`, `ng_poly_subgenome_parent_relationship()`, `ng_poly_subgenome_score_crosses()` |
+| Polyploid GRM, QC, and (optional) dominance design | `ng_polyploid_qc()`, `ng_polyploid_grm()`, `ng_polyploid_dominance_grm()`, `ng_polyploid_allele_freq()`, `ng_polyploid_fit_effects()`, `ng_polyploid_predict_value()`, `ng_polyploid_score_crosses()`, `ng_polyploid_score_crosses_dominance()`, `ng_polyploid_progeny_moment_table()`, `ng_polyploid_design_crosses()` |
+| Polyploid and subgenome research workflows | `ng_polyploid_as_dosage_matrix()`, `ng_polyploid_model_select()`, `ng_polyploid_policy()`, `ng_polyploid_policy_modes()`, `ng_polyploid_subgenome_as_dosage_list()`, `ng_polyploid_subgenome_grm()`, `ng_polyploid_subgenome_score_crosses()` |
 
 ## Practical recommendations
 
@@ -1465,7 +1596,7 @@ Start from the Part 1 quick start, then change **one setting group at a time** a
 1. QC: duplicate threshold and action (Part 1).
 2. Metric and relationship matrix: `trait_value_metric`, `grm_method` (Part 2).
 3. Cross scoring: DH vs RIL, Haldane vs Kosambi (Part 2).
-4. Allocation: `n_crosses`, `max_uses_per_parent`, `min_unique_parents`, `max_pair_kinship`,
+4. Allocation: `n_crosses`, `max_crosses_per_parent`, `min_unique_parents`, `max_pair_kinship`,
    `optimizer` (Part 2).
 5. Diversity and constraints: strategy dial / `target_coancestry`, mating constraints, cost
    (Part 3).
