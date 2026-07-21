@@ -15,8 +15,28 @@ registry <- ng_backend_capability_registry(
   generated_at = as.POSIXct("2026-05-07 00:00:00", tz = "UTC")
 )
 
-stopifnot(identical(registry$schema_version, "ng_backend_capabilities.v1"))
+stopifnot(identical(registry$schema_version, "ng_backend_capabilities.v2"))
 stopifnot(identical(registry$generated_at, "2026-05-07T00:00:00Z"))
+
+# controls section: enumerable UI controls the frontend renders dropdowns from
+stopifnot(is.list(registry$controls), length(registry$controls) >= 15L)
+for (ctl in registry$controls) {
+  stopifnot(all(c("id", "label", "group", "type", "default", "choices") %in% names(ctl)))
+  stopifnot(is.list(ctl$choices), length(ctl$choices) >= 2L)
+  for (cho in ctl$choices) stopifnot(all(c("value", "label") %in% names(cho)))
+}
+ctl_ids <- vapply(registry$controls, function(x) x$id, character(1))
+stopifnot(all(c("trait_value_metric", "multi_trait_method", "optimizer",
+                "allocation_method", "progeny") %in% ctl_ids))
+# the choice list must be exhaustive: multi_trait_method includes every backend method
+mtm <- registry$controls[[which(ctl_ids == "multi_trait_method")]]
+mtm_vals <- vapply(mtm$choices, function(x) x$value, character(1))
+stopifnot(all(c("auto", "weighted", "economic_index", "desired_gain", "threshold") %in% mtm_vals))
+# defaults must be valid choices
+for (ctl in registry$controls) {
+  vals <- vapply(ctl$choices, function(x) x$value, character(1))
+  stopifnot(ctl$default %in% vals)
+}
 stopifnot(is.data.frame(registry$data_qc))
 stopifnot(is.data.frame(registry$breeding_systems))
 stopifnot(is.data.frame(registry$method_families))
@@ -92,7 +112,7 @@ returned <- ng_write_backend_capability_registry_json(
 stopifnot(identical(normalizePath(returned, winslash = "/", mustWork = TRUE),
                     normalizePath(out_path, winslash = "/", mustWork = TRUE)))
 payload <- jsonlite::fromJSON(out_path, simplifyVector = FALSE)
-stopifnot(identical(payload$schema_version, "ng_backend_capabilities.v1"))
+stopifnot(identical(payload$schema_version, "ng_backend_capabilities.v2"))
 stopifnot(length(payload$data_qc) >= length(qc_ids))
 
 cli_out <- file.path(tmp, "cli_backend_capabilities.json")
