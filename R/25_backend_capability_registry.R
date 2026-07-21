@@ -2,6 +2,76 @@ ng_backend_registry_timestamp <- function(generated_at = Sys.time()) {
   format(as.POSIXct(generated_at, tz = "UTC"), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
 }
 
+# Enumerable user-facing controls: the authoritative choice lists + defaults a frontend
+# should render its dropdowns from, so new/renamed methods appear without editing the UI.
+# `group` maps to a workbench panel; `capability` links to method_families; `depends_on`
+# gates visibility. Values mirror ng_run_cross_prediction()'s match.arg() choices.
+ng_backend_controls <- function() {
+  ch <- function(x) unname(Map(function(v, l) list(value = v, label = unname(l)), names(x), x))
+  enum <- function(id, label, group, default, x, capability = NA_character_,
+                   depends_on = NA_character_) {
+    list(id = id, label = label, group = group, type = "enum", default = default,
+         capability = capability, depends_on = depends_on, choices = ch(x))
+  }
+  list(
+    enum("map_position_unit", "Map position unit", "data", "bp",
+      c(bp = "Base pairs (bp)", cM = "centiMorgans (cM)")),
+    enum("prediction_mode", "Prediction mode", "objective", "trait_by_trait",
+      c(trait_by_trait = "Trait by trait", index_as_trait = "Index as a single trait")),
+    enum("multi_trait_method", "Multi-trait method", "objective", "auto",
+      c(auto = "Auto (equal weights from directions)", weighted = "Weighted index",
+        economic_index = "Economic index", desired_gain = "Desired gain",
+        threshold = "Threshold (soft by default)"), capability = "multitrait_auto"),
+    enum("threshold_policy", "Threshold policy", "objective", "soft",
+      c(soft = "Soft (penalty)", strict = "Strict (hard cutoff)"),
+      depends_on = "multi_trait_method=threshold"),
+    enum("trait_value_metric", "Cross-scoring metric", "scoring", "usefulness",
+      c(usefulness = "Usefulness (mean + i * within-family SD)",
+        pmv = "Usefulness via PMV variance", vpm = "Usefulness via VPM (recombination) variance",
+        le = "Relationship-distance proxy (screening only)",
+        var_complex = "var_complex (native PopVar-style usefulness)",
+        mean = "Cross mean only"), capability = "dh_ril_pmv_scoring"),
+    enum("uc_variance_source", "Usefulness variance source", "scoring", "pmv",
+      c(pmv = "PMV", vpm = "VPM (recombination)", le = "Relationship distance"),
+      depends_on = "trait_value_metric=usefulness"),
+    enum("method_varPMV", "PMV method", "scoring", "fast",
+      c(fast = "Fast (point estimate)", full_posterior = "Full posterior")),
+    enum("progeny", "Progeny system", "scoring", "DH",
+      c(DH = "DH (doubled haploid)", DHs = "DHs", RIL = "RIL", RILs = "RILs")),
+    enum("ril_mode", "RIL selfing model", "scoring", "infinite",
+      c(infinite = "Infinite (F-infinity)", finite = "Finite selfing"),
+      depends_on = "progeny=RIL|RILs"),
+    enum("recomb_model", "Recombination map function", "scoring", "haldane",
+      c(haldane = "Haldane", kosambi = "Kosambi")),
+    enum("grm_method", "GRM method", "scoring", "vanraden",
+      c(vanraden = "VanRaden", yang = "Yang")),
+    enum("duplicate_action", "Duplicate handling", "qc", "remove",
+      c(remove = "Remove duplicates", report = "Report only", none = "Ignore")),
+    enum("ld_backend", "LD-pruning backend", "qc", "auto",
+      c(auto = "Auto", cpp = "C++", r = "R")),
+    enum("optimizer", "Optimizer", "allocation", "auto",
+      c(auto = "Auto", evolution = "Evolution (recommended)", greedy_local = "Greedy local",
+        repair_local = "Repair local", mip_linear = "MIP (linear)",
+        mip_contribution = "MIP (contribution)"), capability = "ocs_allocation"),
+    enum("allocation_method", "Allocation method", "allocation", "ocs",
+      c(ocs = "OCS (coancestry-constrained)", alphamate_style = "AlphaMate-style (native)",
+        alphamate_executable = "AlphaMate executable (external)"), capability = "ocs_allocation"),
+    enum("strategy", "Gain-diversity strategy", "allocation", "balanced",
+      c(balanced = "Balanced", high_gain = "High gain", diversity = "High diversity"),
+      capability = "gain_diversity_balance"),
+    enum("lambda_parent_use_mode", "Parent-use penalty mode", "allocation", "absolute",
+      c(absolute = "Absolute", adaptive = "Adaptive")),
+    enum("cross_sweep_criterion", "Cross-number recommendation rule", "allocation", "elbow_relative",
+      c(elbow_relative = "Diminishing returns (relative)", elbow_kneedle = "Diminishing returns (kneedle)",
+        ne_target = "Effective population size target", coancestry_budget = "Coancestry budget")),
+    enum("alphamate_mode", "AlphaMate mode", "allocation", "ModeOptTarget1",
+      c(ModeOptTarget1 = "Optimize to a target degree", ModeMaxCriterion = "Maximize criterion",
+        ModeMinCoancestry = "Minimize coancestry"), depends_on = "allocation_method=alphamate_style|alphamate_executable"),
+    enum("posterior_method", "Posterior method", "advanced", "mcmc",
+      c(mcmc = "MCMC", closed_form = "Closed form"), depends_on = "run_posterior_prediction=true")
+  )
+}
+
 ng_backend_capability_registry <- function(generated_at = Sys.time()) {
   data_qc <- data.frame(
     id = c(
@@ -378,7 +448,7 @@ ng_backend_capability_registry <- function(generated_at = Sys.time()) {
   )
 
   list(
-    schema_version = "ng_backend_capabilities.v1",
+    schema_version = "ng_backend_capabilities.v2",
     generated_at = ng_backend_registry_timestamp(generated_at),
     product_position = list(
       primary_scope = "validated diploid DH/RIL cross design with explicit experimental polyploid modules",
@@ -391,7 +461,8 @@ ng_backend_capability_registry <- function(generated_at = Sys.time()) {
     method_families = method_families,
     workflows = workflows,
     external_integrations = external_integrations,
-    navigation = navigation
+    navigation = navigation,
+    controls = ng_backend_controls()
   )
 }
 

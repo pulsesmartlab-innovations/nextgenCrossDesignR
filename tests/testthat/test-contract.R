@@ -9,7 +9,20 @@
 
 test_that("the capability registry keeps its schema version", {
   reg <- ng_backend_capability_registry()
-  expect_identical(reg$schema_version, "ng_backend_capabilities.v1")
+  expect_identical(reg$schema_version, "ng_backend_capabilities.v2")
+})
+
+test_that("the controls section enumerates dropdowns with valid defaults", {
+  reg <- ng_backend_capability_registry()
+  expect_true(is.list(reg$controls) && length(reg$controls) >= 15L)
+  ids <- vapply(reg$controls, function(x) x$id, character(1))
+  expect_true(all(c("trait_value_metric", "multi_trait_method", "optimizer",
+                    "allocation_method", "progeny") %in% ids))
+  for (ctl in reg$controls) {
+    expect_true(all(c("id", "label", "group", "type", "default", "choices") %in% names(ctl)))
+    vals <- vapply(ctl$choices, function(x) x$value, character(1))
+    expect_true(length(vals) >= 2L && ctl$default %in% vals)
+  }
 })
 
 test_that("the capability registry keeps the sections the frontend reads", {
