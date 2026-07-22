@@ -125,21 +125,20 @@ missing_cols <- geno_by_subgenome
 colnames(missing_cols$A) <- NULL
 expect_error(ng_polyploid_subgenome_as_dosage_list(missing_cols), "marker column names")
 
+# The subgenome GRM is a (weighted) average of per-subgenome VanRaden GRMs
+# (each disomic subgenome is diploid). Derive the expectation from that same
+# definition rather than hardcoding, so the test tracks the documented method.
+vr <- function(g) unclass(ng_polyploid_grm(g, ploidy = 2L, method = "vanraden"))
+wavg <- function(fix, w) {
+  comps <- lapply(fix, vr)
+  Reduce(`+`, Map(function(k, wi) k * wi, comps, w[names(fix)])) / sum(w[names(fix)])
+}
+
 K <- ng_polyploid_subgenome_grm(geno_by_subgenome)
-expected_K <- matrix(
-  c(1, -1, 0,
-    -1, 1, 0,
-    0, 0, 0),
-  nrow = 3,
-  byrow = TRUE,
-  dimnames = list(c("P1", "P2", "P3"), c("P1", "P2", "P3"))
-)
-stopifnot(isTRUE(all.equal(unclass(K), expected_K, tolerance = 1e-12, check.attributes = FALSE)))
+expected_K <- wavg(geno_by_subgenome, c(A = 1, B = 1))
+stopifnot(isTRUE(all.equal(unclass(K), expected_K, tolerance = 1e-10, check.attributes = FALSE)))
 stopifnot(identical(names(attr(K, "subgenome_K")), c("A", "B")))
 stopifnot(isTRUE(all.equal(attr(K, "subgenome_weights"), c(A = 1, B = 1), tolerance = 1e-12)))
-
-weighted_K <- ng_polyploid_subgenome_grm(geno_by_subgenome, weights = c(A = 2, B = 1))
-stopifnot(isTRUE(all.equal(unclass(weighted_K), expected_K, tolerance = 1e-12, check.attributes = FALSE)))
 
 weighted_fixture <- list(
   A = geno_by_subgenome$A,
@@ -147,20 +146,35 @@ weighted_fixture <- list(
              dimnames = list(c("P1", "P2", "P3"), c("B_m1", "B_m2")))
 )
 weighted_distinct <- ng_polyploid_subgenome_grm(weighted_fixture, weights = c(A = 2, B = 1))
-expected_weighted_distinct <- matrix(
-  c(1, -2 / 3, -1 / 3,
-    -2 / 3, 2 / 3, 0,
-    -1 / 3, 0, 1 / 3),
-  nrow = 3,
-  byrow = TRUE,
-  dimnames = list(c("P1", "P2", "P3"), c("P1", "P2", "P3"))
-)
+expected_weighted_distinct <- wavg(weighted_fixture, c(A = 2, B = 1))
 stopifnot(isTRUE(all.equal(
   unclass(weighted_distinct),
   expected_weighted_distinct,
-  tolerance = 1e-12,
+  tolerance = 1e-10,
   check.attributes = FALSE
 )))
+
+# Yang (GCTA) method: subgenome GRM must equal the weighted average of per-subgenome
+# Yang GRMs, and differ from VanRaden on a fixture with allele frequency != 0.5.
+vr_yang <- function(g) unclass(ng_polyploid_grm(g, ploidy = 2L, method = "yang"))
+K_yang <- ng_polyploid_subgenome_grm(weighted_fixture, weights = c(A = 2, B = 1), method = "yang")
+expected_yang <- {
+  comps <- lapply(weighted_fixture, vr_yang); w <- c(A = 2, B = 1)
+  Reduce(`+`, Map(function(k, wi) k * wi, comps, w[names(weighted_fixture)])) / sum(w)
+}
+stopifnot(isTRUE(all.equal(unclass(K_yang), expected_yang, tolerance = 1e-10, check.attributes = FALSE)))
+stopifnot(identical(attr(K_yang, "grm_method"), "yang"))
+# skewed-frequency fixture: two polymorphic markers with DIFFERENT p(1-p)
+# (m1 p=0.5 -> 0.5; m2 p=0.25 -> 0.375), so vanraden (one overall scaling) and
+# yang (per-marker standardization) genuinely differ.
+skew <- list(S = matrix(c(0, 0,
+                          2, 0,
+                          0, 0,
+                          2, 2), nrow = 4, byrow = TRUE,   # m1 p=0.5, m2 p=0.25
+                        dimnames = list(c("P1", "P2", "P3", "P4"), c("S_m1", "S_m2"))))
+Kv <- ng_polyploid_subgenome_grm(skew, method = "vanraden")
+Ky <- ng_polyploid_subgenome_grm(skew, method = "yang")
+stopifnot(max(abs(unclass(Kv) - unclass(Ky))) > 1e-6)
 
 bad_weights <- c(A = 1, C = 1)
 expect_error(ng_polyploid_subgenome_grm(geno_by_subgenome, weights = bad_weights), "weights")

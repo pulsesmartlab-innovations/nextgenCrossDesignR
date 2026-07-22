@@ -191,7 +191,7 @@ ng_backend_capability_registry <- function(generated_at = Sys.time()) {
       "Primary diploid recombinant inbred line target using the same scoring API.",
       "Crop portability stress screen for wheat, potato, cassava, and sugarcane approximations.",
       "True AlphaSimR 4x dosage workflow for potato/cassava-like autotetraploid experiments.",
-      "Named subgenome disomic dosage workflow for wheat-like allopolyploid experiments.",
+      "Named subgenome disomic dosage workflow for true allopolyploids; recombination-aware within-family variance (per-subgenome a'Ra) when a chromosome+cM map is supplied, else the linkage-equilibrium approximation.",
       "Complex or aneuploid polyploids are guarded until an empirical generator is supplied."
     ),
     stringsAsFactors = FALSE
