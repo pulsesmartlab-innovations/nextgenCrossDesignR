@@ -39,11 +39,14 @@ ng_backend_controls <- function() {
       depends_on = "trait_value_metric=usefulness"),
     enum("method_varPMV", "PMV method", "scoring", "fast",
       c(fast = "Fast (point estimate)", full_posterior = "Full posterior")),
+    # Two genetic progeny-variance models only (DH, RIL); the plural spellings
+    # DHs/RILs are accepted backend aliases (ng_run_cp_target) but not offered as
+    # separate dropdown choices, since they resolve to the same DH/RIL kernels.
     enum("progeny", "Progeny system", "scoring", "DH",
-      c(DH = "DH (doubled haploid)", DHs = "DHs", RIL = "RIL", RILs = "RILs")),
+      c(DH = "Doubled haploid (DH)", RIL = "Recombinant inbred line (RIL)")),
     enum("ril_mode", "RIL selfing model", "scoring", "infinite",
       c(infinite = "Infinite (F-infinity)", finite = "Finite selfing"),
-      depends_on = "progeny=RIL|RILs"),
+      depends_on = "progeny=RIL"),
     enum("recomb_model", "Recombination map function", "scoring", "haldane",
       c(haldane = "Haldane", kosambi = "Kosambi")),
     enum("grm_method", "GRM method", "scoring", "vanraden",
