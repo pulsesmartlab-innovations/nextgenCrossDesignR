@@ -75,13 +75,19 @@ err <- tryCatch(run(training_genotype = bad_geno, training_phenotype = train_phe
                 error = function(e) conditionMessage(e))
 stopifnot(is.character(err), grepl("marker", err, ignore.case = TRUE))
 
-## 5. le does not use marker effects, so supplying training data warns (and is inert).
+## 5. parent_distance does not use marker effects, so supplying training data warns (and is inert).
 w <- tryCatch(
   withCallingHandlers(
-    run(trait_value_metric = "le",
+    run(trait_value_metric = "parent_distance",
         training_genotype = train_geno, training_phenotype = train_pheno),
     warning = function(cnd) { message("caught: ", conditionMessage(cnd)); invokeRestart("muffleWarning") }
   ), error = function(e) e)
-stopifnot(!inherits(w, "error"))                        # le + training still runs
+stopifnot(!inherits(w, "error"))                        # parent_distance + training still runs
+
+## 5b. "le" is kept as a deprecated alias for parent_distance (back-compat, <= 0.9.0).
+w2 <- tryCatch(withCallingHandlers(
+    run(trait_value_metric = "le", training_genotype = train_geno, training_phenotype = train_pheno),
+    warning = function(cnd) invokeRestart("muffleWarning")), error = function(e) e)
+stopifnot(!inherits(w2, "error"))                       # le alias still runs
 
 cat("runner_training_set.R: PASS\n")

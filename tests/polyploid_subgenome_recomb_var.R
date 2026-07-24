@@ -12,7 +12,7 @@ helper <- c(file.path("tests", "helper_load.R"), "helper_load.R",
             file.path("..", "tests", "helper_load.R"))
 source(helper[file.exists(helper)][[1L]])
 
-## ---- 1. Backward compatibility: no map => linkage_equilibrium, value unchanged ----
+## ---- 1. Backward compatibility: no map => unlinked, value unchanged ----
 geno_by_subgenome <- list(
   A = matrix(c(2, 0, 2, 0,
                0, 2, 0, 2,
@@ -32,8 +32,8 @@ pairs <- data.frame(parent1 = c("P1", "P1", "P2"),
 
 le <- ng_polyploid_subgenome_score_crosses(geno_by_subgenome, effects_by_subgenome,
                                            candidate_pairs = pairs)
-stopifnot(identical(unique(le$poly_variance_model), "linkage_equilibrium"))
-stopifnot(identical(attr(le, "variance_model"), "linkage_equilibrium"))
+stopifnot(identical(unique(le$poly_variance_model), "unlinked"))
+stopifnot(identical(attr(le, "variance_model"), "unlinked"))
 # hand LE variance for cross 1 (P1 vs P2)
 le_manual <- 0
 for (sg in names(geno_by_subgenome)) {
