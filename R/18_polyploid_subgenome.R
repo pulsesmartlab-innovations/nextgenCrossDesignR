@@ -240,9 +240,10 @@ ng_polyploid_subgenome_score_crosses <- function(geno_by_subgenome,
   #     (ng_dh_recomb_variance_pairs), so the math is identical, applied per
   #     subgenome.
   #
-  #   * "linkage_equilibrium" (default, no map): the R = I limit
-  #     sigma^2 = sum_m a_m^2 (d1_m - d2_m)^2 / 4. This drops the (signed)
-  #     within-chromosome linkage covariance and is a first-order approximation.
+  #   * "unlinked" (default, no map): the R = I limit
+  #     sigma^2 = sum_m a_m^2 (d1_m - d2_m)^2 / 4. Markers treated as unlinked; this
+  #     drops the (signed) within-chromosome linkage covariance (first-order).
+  #     NOTE distinct from the "parent_distance" metric (GRM genomic distance).
   #
   # The cross MEAN (poly_gain) is model-independent (mid-parent GEBV per
   # subgenome, summed).
@@ -291,7 +292,7 @@ ng_polyploid_subgenome_score_crosses <- function(geno_by_subgenome,
       variance <- variance + rowSums(contrast^2) / 4
     }
   }
-  variance_model <- if (recombination_aware) "recombination_aware" else "linkage_equilibrium"
+  variance_model <- if (recombination_aware) "recombination_aware" else "unlinked"
 
   out <- data.frame(
     parent1 = candidate_pairs$parent1,

@@ -472,13 +472,15 @@ ng_run_cp_variance_col <- function(trait_value_metric,
     return(ng_run_cp_pmv_col(scored_trait, method_varPMV))
   }
   if (identical(metric, "vpm")) return("vpm")
-  if (identical(metric, "le")) return("parent_distance")
+  # "parent_distance" is the canonical name for the parental genomic-distance
+  # variance; "le" is kept as a deprecated alias for callers/results from <= 0.9.0.
+  if (metric %in% c("parent_distance", "le")) return("parent_distance")
   if (identical(metric, "var_complex")) {
     if (is.null(scored_trait)) return("pmv")
     return(ng_run_cp_var_complex_col(scored_trait, method_varPMV))
   }
   if (identical(metric, "mean")) return(NA_character_)
-  ng_stop("trait_value_metric must be one of: usefulness, pmv, vpm, le, var_complex, mean")
+  ng_stop("trait_value_metric must be one of: usefulness, pmv, vpm, parent_distance, var_complex, mean")
 }
 
 ng_run_cp_var_complex_col <- function(scored_trait, method_varPMV = "fast") {
@@ -653,8 +655,8 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
                                     traits_to_use = NULL,
                                     index_col = NULL,
                                     index_direction = "increase",
-                                    trait_value_metric = c("usefulness", "pmv", "vpm", "le", "var_complex", "mean"),
-                                    uc_variance_source = c("pmv", "vpm", "le"),
+                                    trait_value_metric = c("usefulness", "pmv", "vpm", "parent_distance", "le", "var_complex", "mean"),
+                                    uc_variance_source = c("pmv", "vpm", "parent_distance", "le"),
                                     multi_trait_method = "auto",
                                     trait_weights = NULL,
                                     threshold_policy = c("soft", "strict"),
@@ -891,8 +893,8 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
     training_genotype_id_col = tg_idcol, training_phenotype_id_col = tp_idcol,
     parent_ids = ids, parent_markers = colnames(geno), trait_columns = trait_spec$column
   )
-  if (!is.null(training_set) && identical(trait_value_metric, "le")) {
-    warning("trait_value_metric = 'le' does not use marker effects; the supplied ",
+  if (!is.null(training_set) && trait_value_metric[[1L]] %in% c("parent_distance", "le")) {
+    warning("trait_value_metric = 'parent_distance' does not use marker effects; the supplied ",
             "training set will not change the selected metric or the crossing plan.", call. = FALSE)
   }
   training_only_count <- if (is.null(training_set)) 0L else length(training_set$ids)

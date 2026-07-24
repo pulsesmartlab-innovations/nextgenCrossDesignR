@@ -27,12 +27,15 @@ ng_backend_controls <- function() {
       depends_on = "multi_trait_method=threshold"),
     enum("trait_value_metric", "Cross-scoring metric", "scoring", "usefulness",
       c(usefulness = "Usefulness (mean + i * within-family SD)",
-        pmv = "Usefulness via PMV variance", vpm = "Usefulness via VPM (recombination) variance",
-        le = "Relationship-distance proxy (screening only)",
-        var_complex = "var_complex (native PopVar-style usefulness)",
+        vpm = "Recombination-aware family variance",
+        pmv = "Recombination-aware family variance (robust)",
+        parent_distance = "Parental genetic distance (screening only)",
+        var_complex = "Full within-family variance",
         mean = "Cross mean only"), capability = "dh_ril_pmv_scoring"),
     enum("uc_variance_source", "Usefulness variance source", "scoring", "pmv",
-      c(pmv = "PMV", vpm = "VPM (recombination)", le = "Relationship distance"),
+      c(pmv = "Recombination-aware family variance (robust)",
+        vpm = "Recombination-aware family variance",
+        parent_distance = "Parental genetic distance"),
       depends_on = "trait_value_metric=usefulness"),
     enum("method_varPMV", "PMV method", "scoring", "fast",
       c(fast = "Fast (point estimate)", full_posterior = "Full posterior")),
@@ -191,7 +194,7 @@ ng_backend_capability_registry <- function(generated_at = Sys.time()) {
       "Primary diploid recombinant inbred line target using the same scoring API.",
       "Crop portability stress screen for wheat, potato, cassava, and sugarcane approximations.",
       "True AlphaSimR 4x dosage workflow for potato/cassava-like autotetraploid experiments.",
-      "Named subgenome disomic dosage workflow for true allopolyploids; recombination-aware within-family variance (per-subgenome a'Ra) when a chromosome+cM map is supplied, else the linkage-equilibrium approximation.",
+      "Named subgenome disomic dosage workflow for true allopolyploids; recombination-aware within-family variance (per-subgenome a'Ra) when a chromosome+cM map is supplied, else the unlinked approximation.",
       "Complex or aneuploid polyploids are guarded until an empirical generator is supplied."
     ),
     stringsAsFactors = FALSE
@@ -328,7 +331,7 @@ ng_backend_capability_registry <- function(generated_at = Sys.time()) {
       "Optional per-cross cost (soft penalty + hard budget) and logistic/geographic penalty folded into the allocation objective.",
       "Correct allele-frequency-based polyploid additive and dominance GRMs (VanRaden or Yang/GCTA, generalized to ploidy) plus ploidy-aware QC (0..ploidy range, missingness, MAF, monomorphic, duplicates); replaces the diploid-oriented kinship.",
       "Any-ploidy one-call mate design with optional additive+dominance modelling for clonal/heterosis crops (cassava, sugarcane, potato): genotypic-value parent selection, heterosis-inclusive cross mean + within-family additive+dominance variance, optional double reduction, C++-accelerated. Additive-only is the default.",
-      "Enlarge the marker-effect training set with extra genotyped+phenotyped individuals that are NOT candidate parents (the parents are the main genotype/phenotype tables). Improves effect-based metrics (mean/usefulness/pmv/vpm/var_complex), not le. The result reports training_only_count, effect_training_n, and training_ids so the frontend can display 'trained on N, crossing K parents'."
+      "Enlarge the marker-effect training set with extra genotyped+phenotyped individuals that are NOT candidate parents (the parents are the main genotype/phenotype tables). Improves effect-based metrics (mean/usefulness/pmv/vpm/var_complex), not parent_distance. The result reports training_only_count, effect_training_n, and training_ids so the frontend can display 'trained on N, crossing K parents'."
     ),
     stringsAsFactors = FALSE
   )
@@ -431,7 +434,7 @@ ng_backend_capability_registry <- function(generated_at = Sys.time()) {
       "ng_alphamate_style_select"
     ),
     evidence = c(
-      "Native var_complex is preferred for user workflows; exact PopVar-style outputs are optional when package support is available.",
+      "Native usefulness (var_complex) is preferred for user workflows; exact external PopVar outputs are optional when package support is available.",
       "Exact SimpleMating-style outputs when package support is available; style proxies are labeled.",
       "Official executable integration when configured, with target-degree AlphaMate methods; native alphamate_style is available without the executable."
     ),
