@@ -67,6 +67,14 @@ ng_backend_controls <- function() {
       capability = "gain_diversity_balance"),
     enum("lambda_parent_use_mode", "Parent-use penalty mode", "allocation", "absolute",
       c(absolute = "Absolute", adaptive = "Adaptive")),
+    # Per-cross relatedness (axis B) — one mutually-exclusive control; the raw lambda_mating /
+    # lambda_progeny_inbreeding are collinear and setting both is a hard error (use this instead).
+    # Distinct from lambda_group / the diversity strategy, which are plan-wide (axis A).
+    enum("mate_relatedness", "Mate relatedness (per-cross)", "allocation", "off",
+      c(off = "Off",
+        avoid_inbreeding = "Avoid inbreeding (penalize related parents)",
+        favor_complementarity = "Favor complementary parents"),
+      capability = "gain_diversity_balance"),
     enum("cross_sweep_criterion", "Cross-number recommendation rule", "allocation", "elbow_relative",
       c(elbow_relative = "Diminishing returns (relative)", elbow_kneedle = "Diminishing returns (kneedle)",
         ne_target = "Effective population size target", coancestry_budget = "Coancestry budget")),

@@ -90,10 +90,10 @@ stopifnot(!("inbreeding" %in% opt_args))            # no ambiguous bare name
 stopifnot("lambda_progeny_inbreeding" %in% opt_args) # progeny penalty is fully qualified
 stopifnot(!("assume_inbred" %in% opt_args))          # parent-state flag not leaked here
 
-# --- 5. intended-use overlap with the pre-existing lambda_mating is handled honestly ---
+# --- 5. the two collinear per-cross penalties must NOT stack ---
 # expected_progeny_inbreeding = max(0, pair_kinship/2), so lambda_progeny_inbreeding and
-# lambda_mating act on the SAME parent-pair axis and add. Setting both must (a) flag the
-# overlap in the summary and (b) warn once.
+# lambda_mating act on the SAME parent-pair axis and add. Setting BOTH is now a PREVENTIVE
+# hard error (was a one-time warning); use the unified mate_relatedness control instead.
 set.seed(112)
 no <- 18L; po <- sprintf("P%02d", seq_len(no))
 cbo <- t(utils::combn(no, 2L))
@@ -104,16 +104,16 @@ diag(Go) <- diag(Go) + 1; dimnames(Go) <- list(po, po)
 so$pair_kinship <- Go[cbind(match(so$parent1, po), match(so$parent2, po))]
 so$expected_progeny_inbreeding <- pmax(0, so$pair_kinship / 2)
 
-options(ngcd.warned_relatedness_overlap = NULL)  # reset session-once guard
-got_warn <- FALSE
-both <- withCallingHandlers(
-  ng_optimize_mating_plan(so, 10L, parent_kinship = Go, lambda_mating = 1,
-                          lambda_progeny_inbreeding = 10),
-  warning = function(w) { if (grepl("both penalize parent-pair", conditionMessage(w))) got_warn <<- TRUE; invokeRestart("muffleWarning") })
-stopifnot(got_warn)
-stopifnot(isTRUE(attr(both, "summary")$relatedness_penalty_overlap))
-# using only one knob does NOT flag overlap
+err <- tryCatch(ng_optimize_mating_plan(so, 10L, parent_kinship = Go, lambda_mating = 1,
+                                        lambda_progeny_inbreeding = 10),
+                error = function(e) conditionMessage(e))
+stopifnot(is.character(err), grepl("both penalize parent-pair", err))
+# using only one knob works and does NOT flag overlap
 one <- ng_optimize_mating_plan(so, 10L, parent_kinship = Go, lambda_progeny_inbreeding = 10)
 stopifnot(isFALSE(attr(one, "summary")$relatedness_penalty_overlap))
+# the unified control maps to exactly one lambda (never both)
+uni <- ng_optimize_mating_plan(so, 10L, parent_kinship = Go,
+                               mate_relatedness = "avoid_inbreeding", mate_relatedness_weight = 10)
+stopifnot(isFALSE(attr(uni, "summary")$relatedness_penalty_overlap))
 
 cat("progeny inbreeding test passed\n")

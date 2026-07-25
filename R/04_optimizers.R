@@ -18,6 +18,8 @@ ng_optimize_mating_plan <- function(scores,
                                     lambda_group = 0,
                                     lambda_mating = 0,
                                     lambda_progeny_inbreeding = 0,
+                                    mate_relatedness = c("off", "avoid_inbreeding", "favor_complementarity"),
+                                    mate_relatedness_weight = 0,
                                     lambda_parent_use = 0,
                                     lambda_parent_use_mode = c("absolute", "adaptive"),
                                     method = c("auto", "greedy_local", "repair_local", "mip_linear", "mip_contribution", "evolution"),
@@ -50,6 +52,36 @@ ng_optimize_mating_plan <- function(scores,
     rownames(parent_kinship) <- colnames(parent_kinship) <- parents
   } else {
     parent_kinship <- parent_kinship[parents, parents, drop = FALSE]
+  }
+  # Per-cross relatedness (axis B) — resolved ONCE here, before any dispatch, so both the
+  # frontier/strategy handoff below and the direct objective use the same resolved lambdas.
+  # The unified `mate_relatedness` control drives EXACTLY ONE of the two collinear lambdas,
+  # so stacking is impossible by construction:
+  #   off                    -> neither (raw lambda_mating/lambda_progeny_inbreeding pass
+  #                             through as an advanced escape hatch)
+  #   avoid_inbreeding       -> lambda_progeny_inbreeding (one-sided inbreeding penalty)
+  #   favor_complementarity  -> lambda_mating (two-sided; also rewards complementary pairs)
+  if (!is.finite(lambda_progeny_inbreeding) || lambda_progeny_inbreeding < 0) lambda_progeny_inbreeding <- 0
+  if (!is.finite(lambda_mating) || lambda_mating < 0) lambda_mating <- 0
+  mate_relatedness <- match.arg(mate_relatedness)
+  mrw <- suppressWarnings(as.numeric(mate_relatedness_weight)[[1L]])
+  if (!is.finite(mrw) || mrw < 0) mrw <- 0
+  if (!identical(mate_relatedness, "off")) {
+    if (lambda_mating > 0 || lambda_progeny_inbreeding > 0) {
+      ng_stop("Set per-cross relatedness via EITHER mate_relatedness OR the raw ",
+              "lambda_mating / lambda_progeny_inbreeding, not both.")
+    }
+    if (identical(mate_relatedness, "avoid_inbreeding"))      lambda_progeny_inbreeding <- mrw
+    if (identical(mate_relatedness, "favor_complementarity")) lambda_mating <- mrw
+  }
+  # Preventive guard (upgraded from a warning to a hard stop): the two raw per-cross
+  # relatedness penalties are collinear (differ only by the 1/2 scale) and ADD, so they
+  # must never both be > 0.
+  if (lambda_mating > 0 && lambda_progeny_inbreeding > 0) {
+    ng_stop("lambda_mating and lambda_progeny_inbreeding both penalize parent-pair relatedness ",
+            "(immediate progeny inbreeding) and their effects add. Set only one, or use ",
+            "mate_relatedness = 'avoid_inbreeding' | 'favor_complementarity'. ",
+            "lambda_group controls population-level coancestry separately.")
   }
   # Gain-diversity balancing dispatch: when the caller asks for a strategy label or a
   # diversity_emphasis instead of a raw lambda_group, hand off to the frontier-navigation
@@ -103,15 +135,6 @@ ng_optimize_mating_plan <- function(scores,
     pmax(0, as.numeric(scores$pair_kinship) / 2)
   }
   epi[!is.finite(epi)] <- 0
-  if (!is.finite(lambda_progeny_inbreeding) || lambda_progeny_inbreeding < 0) lambda_progeny_inbreeding <- 0
-  if (lambda_mating > 0 && lambda_progeny_inbreeding > 0 &&
-      !isTRUE(getOption("ngcd.warned_relatedness_overlap"))) {
-    warning("lambda_mating and lambda_progeny_inbreeding both penalize parent-pair ",
-            "relatedness (immediate progeny inbreeding) and their effects add; prefer ",
-            "setting one. lambda_group controls population-level coancestry separately.",
-            call. = FALSE)
-    options(ngcd.warned_relatedness_overlap = TRUE)
-  }
   scores$.linear_gain <- scores[[gain_col]] - lambda_mating * scores$pair_kinship -
     lambda_progeny_inbreeding * epi
   # Optional per-cross logistic / operational factors folded into the same per-cross
