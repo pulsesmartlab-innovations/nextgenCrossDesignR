@@ -79,6 +79,7 @@ envelope <- list(
   objective       = if (!is.null(res$objective)) res$objective$diagnostics else NULL,
   plan_summary    = res$plan_summary,
   constraint_diagnostics = res$constraint_diagnostics,
+  priority_risk_diagnostics = res$priority_risk_diagnostics,
   candidate_crosses = res$candidate_crosses,
   selected_crosses  = res$selected_crosses,
   ld_pruning_report = res$ld_pruning_report,

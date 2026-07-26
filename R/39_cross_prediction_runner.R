@@ -907,6 +907,8 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
   posterior_effects_list <- list()
   posterior_predictions_list <- list()
   cross_table <- NULL
+  priority_beta_cov <- NULL
+  priority_marker_mean <- NULL
   set.seed(seed)
 
   run_trait_job <- function(i) {
@@ -930,12 +932,17 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
       }
     }
     n_effect_training <- length(fit_ids)
+    # Also request the full beta covariance (used for the mid-parent PEV / cross-priority
+    # risk annotation, Task 3) whenever the marker count is tractable, even outside the
+    # full_posterior PMV path.
+    want_beta_cov <- identical(method_varPMV, "full_posterior") ||
+      (length(trait_spec$column) == 1L && ncol(geno) <= 6000L)
     fit <- ng_fit_ridge_effects(
       geno = fit_geno,
       y = fit_y,
       ids = fit_ids,
       seed = seed + i - 1L,
-      return_beta_cov_full = identical(method_varPMV, "full_posterior")
+      return_beta_cov_full = want_beta_cov
     )
     posterior_cov_full <- if (identical(method_varPMV, "full_posterior")) fit$beta_cov_full else NULL
     scored_trait <- ng_score_crosses(
@@ -1048,11 +1055,18 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
     cross_table[[paste0(clean_trait, "_pmv_full_posterior")]] <- scored_trait$pmv_full_posterior
     cross_table[[paste0(clean_trait, "_pmv_used")]] <- scored_trait[[item$pmv_used_col]]
     cross_table[[paste0(clean_trait, "_vpm")]] <- scored_trait$vpm
+    cross_table[[paste0(clean_trait, "_mean_gebv")]] <- scored_trait$cross_mean_gebv
     cross_table[[paste0(clean_trait, "_parent_distance")]] <- scored_trait$parent_distance
     cross_table[[paste0(clean_trait, "_var_complex")]] <- scored_trait[[item$var_complex_col]]
     cross_table[[paste0(clean_trait, "_reliability")]] <- scored_trait$effect_reliability
     effects_list[[trait]] <- item$fit
     trait_scores[[trait]] <- scored_trait
+    # Cross-priority risk annotation (Task 5) needs Sigma_beta + the marker centering used to
+    # fit it; single-trait runs only ever populate this from the one trait, but for multi-trait
+    # jobs the last trait to be folded in here simply wins (annotation itself is single-trait
+    # only, gated below).
+    priority_beta_cov <- item$fit$beta_cov_full
+    priority_marker_mean <- item$fit$marker_mean
     if (isTRUE(run_posterior_prediction)) {
       posterior_effects_list[[trait]] <- item$posterior_effects
       posterior_predictions_list[[trait]] <- item$posterior_scores
@@ -1238,6 +1252,45 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
   )
   attr(selected, "summary") <- attr(plan, "summary")
 
+  # Cross-priority portfolio + risk annotation (Tasks 1-4): attaches cross_level/cross_upside/
+  # cross_confidence/risk_bin/confidence_method/portfolio_profile to the selected and candidate
+  # tables, plus a summary diagnostics block. Single-trait only for now (deferred for multi-trait
+  # runs, where "level" and "vpm" would need to be resolved through the blended objective).
+  priority_risk_diagnostics <- NULL
+  if (length(trait_spec$column) == 1L) {
+    clean1 <- ng_run_cp_clean_trait_name(trait_spec$trait[[1L]])
+    lvl_col <- paste0(clean1, "_mean_gebv")
+    vpm_col <- paste0(clean1, "_vpm")
+    # The merit's sqrt(X) term is effect-based (i.e. draws on marker-effect estimation error,
+    # not just the mid-parent mean) for every metric except mean/parent_distance, and for
+    # usefulness only when its variance source isn't the effect-free parent_distance proxy.
+    effect_based_x <- !(trait_value_metric %in% c("mean", "parent_distance", "le")) &&
+      !(identical(trait_value_metric, "usefulness") &&
+        uc_variance_source %in% c("parent_distance", "le"))
+    ann_one <- function(tbl) {
+      if (!nrow(tbl)) return(tbl)
+      if (!all(c(lvl_col, vpm_col, "parent1", "parent2") %in% names(tbl))) return(tbl)
+      pev <- ng_midparent_pev(geno, tbl[, c("parent1", "parent2")],
+                              priority_beta_cov, priority_marker_mean)
+      ng_annotate_cross_priority(tbl, level = tbl[[lvl_col]], vpm = tbl[[vpm_col]],
+                                 pev = pev, effect_based_x = effect_based_x)
+    }
+    selected <- ann_one(selected)
+    scored_crosses <- ann_one(scored_crosses)
+    if (nrow(selected) > 0L && "confidence_method" %in% names(selected)) {
+      cm1 <- selected$confidence_method[[1L]]
+      priority_risk_diagnostics <- list(
+        confidence_method = if (is.null(cm1)) NA_character_ else cm1,
+        n_by_risk    = as.list(table(selected$risk_bin)),
+        n_by_profile = as.list(table(selected$portfolio_profile)),
+        top_tier_high_risk = sum(as.character(selected$priority_tier) ==
+                                   levels(selected$priority_tier)[[1L]] &
+                                 as.character(selected$risk_bin) == "high", na.rm = TRUE),
+        posterior_used = FALSE
+      )
+    }
+  }
+
   # Constraint / marker-management / cost diagnostics: a single structured record of what
   # the breeder knobs actually did to the plan, so the frontend can surface visible run
   # notes (plan shrink, min-unique relaxation, lethal-carrier drops, marker steering, budget
@@ -1332,6 +1385,7 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
     objective = objective,
     plan_summary = attr(plan, "summary"),
     constraint_diagnostics = constraint_diagnostics,
+    priority_risk_diagnostics = priority_risk_diagnostics,
     output_files = output_files,
     settings = list(
       trait_value_metric = trait_value_metric,
