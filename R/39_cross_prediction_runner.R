@@ -584,7 +584,8 @@ ng_run_cp_output_files <- function(output_dir,
                                    qc,
                                    write_outputs,
                                    write_figures,
-                                   n_crosses) {
+                                   n_crosses,
+                                   include_trait_gebv = FALSE) {
   files <- list()
   if (!isTRUE(write_outputs) && !isTRUE(write_figures)) return(files)
   if (is.null(output_dir) || !nzchar(as.character(output_dir[[1L]]))) {
@@ -617,7 +618,8 @@ ng_run_cp_output_files <- function(output_dir,
       parent_use = ng_run_cp_parent_use(selected_crosses),
       duplicate_pairs = if (!is.null(qc$putative_duplicates)) qc$putative_duplicates$pairs else NULL,
       figures = figures,
-      n_crosses_requested = n_crosses
+      n_crosses_requested = n_crosses,
+      include_trait_gebv = isTRUE(include_trait_gebv)
     )
   }
   files
@@ -715,6 +717,10 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
                                     logistic_col = NULL,
                                     lambda_logistic = 0,
                                     lethal_spec = NULL,
+                                    trait_checks = NULL,
+                                    check_basis = "gebv",
+                                    exclude_threshold_violators = FALSE,
+                                    include_trait_gebv = FALSE,
                                     marker_target_spec = NULL,
                                     lambda_marker = 0,
                                     marker_ploidy = 2,
@@ -1127,6 +1133,67 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
       scores = cross_table, geno = geno, lethal_spec = lethal_spec,
       ploidy = marker_ploidy, drop_lethal_carrier_crosses = drop_lethal_carrier_crosses)
   }
+
+  # Per-trait check-threshold veto (Module: trait checks): flag (and optionally exclude) crosses
+  # whose per-trait mid-parent value is on the wrong side of a breeder-chosen check line. Runs
+  # after the lethal guard, on the fully-populated cross_table (parent1/parent2 + all per-trait
+  # value/mean/pmv/... columns already attached above).
+  trait_check_diagnostics <- NULL
+  if (!is.null(trait_checks)) {
+    if (!identical(prediction_mode, "trait_by_trait")) {
+      ng_stop("trait_checks requires prediction_mode = 'trait_by_trait' (checks are keyed by trait)")
+    }
+    if (!(inherits(trait_checks, "data.frame") && all(c("trait", "check") %in% names(trait_checks)))) {
+      ng_stop("trait_checks must be a data.frame with trait + check columns")
+    }
+    # Resolve NA per-check directions from the breeding direction map. direction_canonical (built
+    # above from trait_direction/direction_file) carries the RAW increase/decrease strings the
+    # breeder supplied -- trait_spec$direction has already been normalized by ng_multitrait_direction
+    # to maximize/minimize, which ng_trait_check_spec does not understand, so it is NOT the source here.
+    tdir <- stats::setNames(direction_canonical$direction, direction_canonical$trait)
+    tc_direction <- if (is.null(trait_checks$direction)) NA else trait_checks$direction
+    tc_basis <- if (is.null(trait_checks$basis)) check_basis else trait_checks$basis
+    tc_spec <- ng_trait_check_spec(trait_checks$trait, trait_checks$check,
+                                   direction = tc_direction, basis = tc_basis,
+                                   trait_direction = tdir)
+    # v1 requires each check line to be a genotyped candidate parent (geno = parents); a check
+    # id that isn't among rownames(geno) would otherwise silently make every cross non-evaluable
+    # for that trait (trait_values[[tr]][[basis]][ck] resolves to NA).
+    bad <- which(!(tc_spec$check %in% rownames(geno)))
+    if (length(bad)) {
+      ng_stop(paste(sprintf(
+        "trait check for '%s': check line '%s' is not among the candidate parents (v1 requires the check to be a genotyped parent)",
+        tc_spec$trait[bad], tc_spec$check[bad]), collapse = "; "))
+    }
+    # Per-trait per-id value lookups: GEBV is always available (predicted from the fitted marker
+    # effects); phenotype is only available when the trait's raw column is on the input phenotype.
+    trait_values <- list()
+    for (tr in unique(tc_spec$trait)) {
+      col <- trait_spec$column[match(tr, trait_spec$trait)]
+      if (is.na(col) || !(tr %in% names(effects_list))) {
+        ng_stop("trait_checks references a trait not present in trait_direction/effects: ", tr)
+      }
+      gv <- stats::setNames(ng_predict_gebv(geno, effects_list[[tr]]), rownames(geno))
+      pv <- if (col %in% names(pheno)) {
+        stats::setNames(suppressWarnings(as.numeric(pheno[[col]])), rownames(pheno))
+      } else NULL
+      trait_values[[tr]] <- list(gebv = gv, phenotype = pv)
+    }
+    n_candidates_pre_trait_checks <- nrow(cross_table)
+    cross_table <- ng_apply_trait_checks(cross_table, tc_spec, trait_values,
+                                         exclude = isTRUE(exclude_threshold_violators))
+    trait_check_diagnostics <- attr(cross_table, "trait_check_diagnostics")
+    attr(cross_table, "trait_check_diagnostics") <- NULL
+    # Only attribute the zero-survivors condition to trait checks when exclusion is actually on
+    # AND there were candidates going into this block -- otherwise an already-empty cross_table
+    # (e.g. emptied upstream by the lethal guard) would be misreported as caused by trait checks.
+    if (isTRUE(exclude_threshold_violators) && n_candidates_pre_trait_checks > 0L && !nrow(cross_table)) {
+      ng_stop("trait_checks with exclude_threshold_violators = TRUE removed every candidate ",
+              "cross; relax the check threshold(s) or set exclude_threshold_violators = FALSE ",
+              "to only flag (not drop) violators.")
+    }
+  }
+
   scored_crosses <- ng_score_breeder_objective(
     cross_table,
     objective,
@@ -1343,7 +1410,8 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
     qc = qc,
     write_outputs = write_outputs,
     write_figures = write_figures,
-    n_crosses = n_crosses
+    n_crosses = n_crosses,
+    include_trait_gebv = include_trait_gebv
   )
 
   result <- list(
@@ -1385,6 +1453,7 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
     objective = objective,
     plan_summary = attr(plan, "summary"),
     constraint_diagnostics = constraint_diagnostics,
+    trait_check_diagnostics = trait_check_diagnostics,
     priority_risk_diagnostics = priority_risk_diagnostics,
     output_files = output_files,
     settings = list(

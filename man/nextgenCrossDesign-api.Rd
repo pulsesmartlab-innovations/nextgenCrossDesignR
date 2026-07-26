@@ -11,6 +11,8 @@
 \alias{ng_marker_target_scores}
 \alias{ng_lethal_recessive_spec}
 \alias{ng_lethal_recessive_cross_risk}
+\alias{ng_trait_check_spec}
+\alias{ng_apply_trait_checks}
 \alias{ng_frontier_export_payload}
 \alias{ng_write_frontier_json}
 \alias{ng_write_progeny_inbreeding_histogram_json}
