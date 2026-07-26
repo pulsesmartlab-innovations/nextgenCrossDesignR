@@ -1105,6 +1105,9 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
 
   # Lethal-allele guarding (Module 4): drop carrier x carrier matings at the nominated
   # deleterious recessive loci before scoring/allocation, so they never enter the plan.
+  # Record the candidate count before filtering so the number dropped is recoverable for
+  # the run diagnostics (ng_apply_marker_management returns the filtered frame only).
+  n_candidates_pre_lethal <- nrow(cross_table)
   if (!is.null(lethal_spec)) {
     cross_table <- ng_apply_marker_management(
       scores = cross_table, geno = geno, lethal_spec = lethal_spec,
@@ -1235,6 +1238,49 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
   )
   attr(selected, "summary") <- attr(plan, "summary")
 
+  # Constraint / marker-management / cost diagnostics: a single structured record of what
+  # the breeder knobs actually did to the plan, so the frontend can surface visible run
+  # notes (plan shrink, min-unique relaxation, lethal-carrier drops, marker steering, budget
+  # binding) instead of leaving these effects buried in stderr messages.
+  ps <- attr(plan, "summary")
+  `%||%` <- function(a, b) if (is.null(a)) b else a
+  is_ocs <- identical(allocation_method, "ocs")
+  n_delivered <- nrow(selected)
+  lethal_dropped <- if (!is.null(lethal_spec)) max(0L, n_candidates_pre_lethal - nrow(cross_table)) else 0L
+  cost_vals <- if (!is.null(cost_col) && cost_col %in% names(selected)) suppressWarnings(as.numeric(selected[[cost_col]])) else NULL
+  constraint_diagnostics <- list(
+    allocation_method = allocation_method,
+    # (2) breeder mating constraints
+    n_crosses_requested = as.integer(n_crosses),
+    n_crosses_delivered = as.integer(n_delivered),
+    constraints_reduced_plan = isTRUE(ps$constraints_reduced_plan),
+    n_committed = as.integer(ps$n_committed %||% 0L),
+    min_use_if_used = ps$min_use_if_used %||% NA_integer_,
+    min_unique_requested = ps$balanced_min_unique_requested %||% NA_integer_,
+    min_unique_used = ps$balanced_min_unique_used %||% NA_integer_,
+    min_unique_relaxation_attempts = as.integer(ps$balanced_min_unique_relaxation_attempts %||% 0L),
+    group_quota_active = !is.null(group_quota) && length(group_quota) > 0L,
+    group_permission_active = !is.null(group_permission),
+    max_pair_kinship = if (is.null(max_pair_kinship)) NA_real_ else as.numeric(max_pair_kinship),
+    # (3) marker steering & lethal guarding
+    lethal_active = !is.null(lethal_spec),
+    lethal_n_loci = if (!is.null(lethal_spec)) nrow(as.data.frame(lethal_spec)) else 0L,
+    lethal_candidates_pre = as.integer(n_candidates_pre_lethal),
+    lethal_dropped = as.integer(lethal_dropped),
+    lethal_dropped_from_plan = isTRUE(drop_lethal_carrier_crosses),
+    marker_steering_active = !is.null(marker_target_spec),
+    marker_n_loci = if (!is.null(marker_target_spec)) nrow(as.data.frame(marker_target_spec)) else 0L,
+    marker_lambda = as.numeric(lambda_marker),
+    marker_blended = identical(allocation_criterion_col, "marker_adjusted_gain"),
+    # (4) cost & logistics
+    budget_active = is.finite(budget) && is_ocs,
+    budget = as.numeric(budget),
+    plan_total_cost = if (!is.null(cost_vals)) sum(cost_vals[is.finite(cost_vals)]) else NA_real_,
+    cost_emphasis = as.numeric(lambda_cost),
+    logistic_emphasis = as.numeric(lambda_logistic),
+    logistic_active = !is.null(logistic_col)
+  )
+
   output_files <- ng_run_cp_output_files(
     output_dir = output_dir,
     output_file = output_file,
@@ -1285,6 +1331,7 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
     selected_crosses = selected,
     objective = objective,
     plan_summary = attr(plan, "summary"),
+    constraint_diagnostics = constraint_diagnostics,
     output_files = output_files,
     settings = list(
       trait_value_metric = trait_value_metric,
