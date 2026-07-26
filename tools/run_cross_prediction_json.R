@@ -80,6 +80,7 @@ envelope <- list(
   plan_summary    = res$plan_summary,
   constraint_diagnostics = res$constraint_diagnostics,
   priority_risk_diagnostics = res$priority_risk_diagnostics,
+  trait_check_diagnostics = res$trait_check_diagnostics,
   candidate_crosses = res$candidate_crosses,
   selected_crosses  = res$selected_crosses,
   ld_pruning_report = res$ld_pruning_report,

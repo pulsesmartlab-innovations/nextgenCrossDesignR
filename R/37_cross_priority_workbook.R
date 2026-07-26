@@ -123,7 +123,20 @@ ng_cpw_parent_use_flag <- function(crosses, parent_use) {
   out
 }
 
-ng_cpw_make_selected <- function(crosses, trait_info, parent_use, duplicate_pairs, block_size) {
+# Per-trait mid-parent GEBV columns ride on the cross table as `<trait>_mean_gebv` (R/39). They
+# are excluded from the workbook by default to keep it lean; `include_trait_gebv = TRUE` (R/39
+# runner formal, threaded through ng_write_cross_priority_workbook) opts them back in, relabelled
+# so breeders see them as mid-parent GEBV rather than the internal column name.
+ng_cpw_gebv_cols <- function(data) {
+  grep("_mean_gebv$", names(data), value = TRUE)
+}
+
+ng_cpw_gebv_label <- function(col) {
+  sub("_mean_gebv$", "_mid_parent_gebv", col)
+}
+
+ng_cpw_make_selected <- function(crosses, trait_info, parent_use, duplicate_pairs, block_size,
+                                 include_trait_gebv = FALSE) {
   crosses <- as.data.frame(crosses, stringsAsFactors = FALSE, check.names = FALSE)
   if (!("priority_rank" %in% names(crosses)) || !("priority_tier" %in% names(crosses))) {
     crosses <- ng_rank_cross_priority(crosses)
@@ -172,10 +185,14 @@ ng_cpw_make_selected <- function(crosses, trait_info, parent_use, duplicate_pair
   trait_cols <- trait_info$column[trait_info$available]
   trait_cols <- trait_cols[trait_cols %in% names(crosses)]
   for (col in trait_cols) out[[col]] <- crosses[[col]]
+  if (isTRUE(include_trait_gebv)) {
+    gebv_cols <- ng_cpw_gebv_cols(crosses)
+    for (col in gebv_cols) out[[ng_cpw_gebv_label(col)]] <- ng_cpw_numeric(crosses[[col]])
+  }
   out
 }
 
-ng_cpw_candidate_table <- function(scored, selected) {
+ng_cpw_candidate_table <- function(scored, selected, include_trait_gebv = FALSE) {
   if (is.null(scored)) return(data.frame())
   scored <- as.data.frame(scored, stringsAsFactors = FALSE, check.names = FALSE)
   if (!nrow(scored)) return(data.frame())
@@ -199,7 +216,12 @@ ng_cpw_candidate_table <- function(scored, selected) {
   pred_cols <- grep("^pred_", names(scored), value = TRUE)
   keep <- unique(c(keep, pred_cols))
   keep <- keep[keep %in% names(scored)]
-  cbind(out, scored[, keep, drop = FALSE])
+  out <- cbind(out, scored[, keep, drop = FALSE])
+  if (isTRUE(include_trait_gebv)) {
+    gebv_cols <- ng_cpw_gebv_cols(scored)
+    for (col in gebv_cols) out[[ng_cpw_gebv_label(col)]] <- ng_cpw_numeric(scored[[col]])
+  }
+  out
 }
 
 ng_cpw_dashboard <- function(selected, scored, trait_info, parent_use, duplicate_pairs, n_crosses_requested) {
@@ -269,14 +291,16 @@ ng_cross_priority_workbook_tables <- function(crosses,
                                               duplicate_pairs = NULL,
                                               figures = NULL,
                                               n_crosses_requested = NULL,
-                                              block_size = 10L) {
+                                              block_size = 10L,
+                                              include_trait_gebv = FALSE) {
   crosses <- as.data.frame(crosses, stringsAsFactors = FALSE, check.names = FALSE)
   if (!nrow(crosses)) ng_stop("crosses must contain at least one selected cross")
   if (!all(c("parent1", "parent2") %in% names(crosses))) {
     ng_stop("crosses must contain parent1 and parent2 columns")
   }
   trait_info <- ng_cpw_trait_table(trait_directions, crosses)
-  selected <- ng_cpw_make_selected(crosses, trait_info, parent_use, duplicate_pairs, block_size)
+  selected <- ng_cpw_make_selected(crosses, trait_info, parent_use, duplicate_pairs, block_size,
+                                   include_trait_gebv = include_trait_gebv)
   out <- list(
     Dashboard = ng_cpw_dashboard(selected, scored, trait_info, parent_use, duplicate_pairs, n_crosses_requested),
     Scoring_Method = ng_cpw_scoring_method(),
@@ -289,7 +313,7 @@ ng_cross_priority_workbook_tables <- function(crosses,
     idx <- tolower(selected$priority_tier) == tier
     out[[sheet]] <- selected[idx, , drop = FALSE]
   }
-  out$Candidate_Crosses <- ng_cpw_candidate_table(scored, selected)
+  out$Candidate_Crosses <- ng_cpw_candidate_table(scored, selected, include_trait_gebv = include_trait_gebv)
   out$Parent_Use_QC <- if (is.null(parent_use)) data.frame() else as.data.frame(parent_use, stringsAsFactors = FALSE)
   out$Duplicate_QC <- if (is.null(duplicate_pairs)) data.frame() else as.data.frame(duplicate_pairs, stringsAsFactors = FALSE)
   if (!is.null(figures)) out$Figure_Index <- as.data.frame(figures, stringsAsFactors = FALSE)
@@ -334,7 +358,8 @@ ng_write_cross_priority_workbook <- function(output_path,
                                              duplicate_pairs = NULL,
                                              figures = NULL,
                                              n_crosses_requested = NULL,
-                                             block_size = 10L) {
+                                             block_size = 10L,
+                                             include_trait_gebv = FALSE) {
   if (!requireNamespace("openxlsx", quietly = TRUE)) {
     ng_stop("openxlsx is required to write cross priority workbooks")
   }
@@ -349,7 +374,8 @@ ng_write_cross_priority_workbook <- function(output_path,
     duplicate_pairs = duplicate_pairs,
     figures = figures,
     n_crosses_requested = n_crosses_requested,
-    block_size = block_size
+    block_size = block_size,
+    include_trait_gebv = include_trait_gebv
   )
   wb <- openxlsx::createWorkbook(creator = "nextgenCrossDesign")
   for (sheet in names(tables)) {
