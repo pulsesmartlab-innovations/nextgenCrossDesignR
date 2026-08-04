@@ -66,7 +66,7 @@ result <- ng_run_cross_prediction(
   map_position_unit = "bp",
   bp_per_cm = 1e6,
   prediction_mode = "trait_by_trait",
-  trait_value_metric = "pmv",
+  trait_value_metric = "usefulness",
   uc_variance_source = "pmv",
   method_varPMV = "full_posterior",
   ril_mode = "infinite",

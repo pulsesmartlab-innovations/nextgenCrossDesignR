@@ -6,16 +6,21 @@
 #
 # WHICH trait_value_metric SHOULD I USE? (from the package's own simulation studies;
 # config-scoped, directional -- see docs/BACKEND_USER_GUIDE.md "Choosing A Trait-Value Metric")
-#   * Default: "var_complex" (PMV-based usefulness). Never much worse than the best; clearly
-#     best for oligogenic traits with good training + heritability. "pmv" and "vpm" rank
-#     crosses almost identically -- treat as interchangeable.
+#   * Default: "var_complex" (a deprecated alias for trait_value_metric = "usefulness" +
+#     uc_variance_source = "pmv", i.e. mean +/- i * SD). Never much worse than the best; clearly
+#     best for oligogenic traits with good training + heritability.
+#   * As a TOP-LEVEL trait_value_metric, "vpm" (friendly name: family_variance) and "pmv"
+#     (friendly name: reliable_family_variance) rank crosses by the predicted family VARIANCE
+#     itself -- segregating variation only, no mean term, direction-agnostic. They are NOT
+#     merit/usefulness rankings on their own. To combine mean + variance (the old usefulness
+#     behavior), use trait_value_metric = "usefulness" with uc_variance_source = "vpm" or "pmv".
 #   * "mean": competitive when the trait is highly polygenic OR training is small / low-h2
 #     (the within-family variance term adds little there and can add noise).
 #   * "le": a linkage-equilibrium diversity/relatedness proxy, NOT a merit metric -- do not select on it.
 #   * Long-term recurrent selection: manage diversity EXPLICITLY (lambda_group, or the
 #     strategy dial / target_coancestry) on top of a good merit metric, because pure
 #     usefulness metrics exhaust genetic variance and gain plateaus. See example 21.
-# Prediction accuracy is similar across these metrics; they differ in variance modelling.
+# Prediction accuracy is similar across the usefulness-style metrics; they differ in variance modelling.
 
 library(nextgenCrossDesign)
 
@@ -159,7 +164,7 @@ parameter_notes <- data.frame(
     "TRUE, FALSE"
   ),
   when_to_use = c(
-    "Choose the cross-value formula. var_complex is the practical default; mean ignores within-family variance.",
+    "Choose the cross-value formula. var_complex is a deprecated alias for usefulness + pmv (the practical default). As a top-level metric, vpm/pmv now rank crosses by the predicted family variance alone (no mean term); pair trait_value_metric = 'usefulness' with uc_variance_source to combine mean + variance instead. mean ignores within-family variance entirely.",
     "Used only when trait_value_metric = 'usefulness'. Use pmv for marker-effect uncertainty, vpm for recombination variance, or le for a diversity proxy.",
     "Controls selection intensity in mean +/- i * SD. Smaller values emphasize the upper tail more strongly.",
     "Choose DH for doubled haploids or RIL for recombinant inbred lines.",
@@ -310,8 +315,8 @@ metric_grid <- data.frame(
     "Practical default: PMV-first usefulness with fallback columns.",
     "Usefulness criterion using PMV.",
     "Usefulness criterion using recombination variance only.",
-    "Uses dense full beta covariance in PMV; best for shortlists.",
-    "Uses RIL infinite-selfing variance approximation.",
+    "Pure-variance ranking (no mean term): dense full-posterior PMV itself, not a merit score.",
+    "Pure-variance ranking (no mean term): RIL infinite-selfing family variance itself, not a merit score.",
     "Relationship-distance proxy, not a true progeny variance.",
     "Ranks crosses by mean only.",
     "Returns posterior interval columns in result$posterior_predictions."

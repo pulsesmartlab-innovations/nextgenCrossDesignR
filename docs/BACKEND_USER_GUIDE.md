@@ -338,31 +338,42 @@ as the lower-level API, so the end-to-end runner reaches them without dropping t
 - `ld_pruning = TRUE` (with `ld_r2_threshold`, `ld_maf_threshold`, ...) prunes
   redundant markers before scoring and returns `result$ld_pruning_report`.
 
-`trait_value_metric = "var_complex"` is the native PopVar-inspired option for
-multi-trait user runs. It does not call PopVar. It uses oriented cross mean
-plus or minus selection intensity times within-family standard deviation,
-preferring PMV variance when available and falling back to recombination
-variance or `var_simple`.
+`trait_value_metric = "var_complex"` is a **deprecated alias** kept for backward
+compatibility; prefer `trait_value_metric = "usefulness"` with
+`uc_variance_source = "reliable_family_variance"`, which is exactly equivalent.
+It does not call PopVar. It scores oriented cross mean plus or minus selection
+intensity times within-family standard deviation, using the reliable
+(uncertainty-aware) family variance.
 
 ### Choosing A Trait-Value Metric
 
 The metrics differ in how they score a cross:
 
-- `mean` -- mid-parent GEBV only (expected progeny mean, no within-family variance).
-- `vpm` / `uc` (with `uc_variance_source = "vpm"`) -- usefulness = mean +/- i * SD using
-  the recombination-aware within-family variance.
-- `pmv` / `var_complex` (default) -- usefulness using PMV, which adds marker-effect
-  estimation uncertainty to the recombination variance.
+- `mean` (`mid_parent_mean`) -- mid-parent GEBV only (expected progeny mean, no
+  within-family variance).
+- `usefulness` with `uc_variance_source = "family_variance"` (raw token `vpm`) --
+  usefulness = mean +/- i * SD using the recombination-aware within-family variance.
+- `usefulness` with `uc_variance_source = "reliable_family_variance"` (raw token
+  `pmv`; this is the default) -- usefulness using the reliable variance, which adds
+  marker-effect estimation uncertainty to the recombination variance.
+- Bare `family_variance` / `reliable_family_variance` (raw tokens `vpm` / `pmv` passed
+  directly as `trait_value_metric`) are pure-variance metrics -- they rank crosses by
+  the variance value itself, with no mean term. Use these only when variance alone
+  (not usefulness) is what you want to rank on.
 - `var_simple` -- a relationship-DISTANCE metric (how unrelated the two parents are). It is a
   diversity/QC proxy, NOT a cross-merit predictor.
+- `var_complex` is a **deprecated alias** for `usefulness` + `uc_variance_source =
+  "reliable_family_variance"` (see above); prefer the explicit spelling in new code.
 
 Evidence-based guidance (from the package's own simulation studies,
 `tools/run_metric_merit_study.R` single-generation and
 `tools/run_ril_breeding_program_benchmark.R` recurrent; config-scoped, directional):
 
-- Default: **`var_complex`** (PMV-based usefulness). It is never much worse than the best
-  and is clearly best for oligogenic traits with adequate training and heritability. `vpm`
-  and `pmv` rank crosses almost identically to it, so treat them as interchangeable choices.
+- Default: **`usefulness`** with **`uc_variance_source = "reliable_family_variance"`**
+  (PMV-based usefulness). It is never much worse than the best and is clearly best for
+  oligogenic traits with adequate training and heritability. `family_variance` and
+  `reliable_family_variance` as the usefulness source rank crosses almost identically,
+  so treat them as interchangeable choices.
 - Use **`mean`** when the trait is highly polygenic OR your training set is small / low
   heritability -- there the within-family variance term adds little and can add noise, so the
   cheaper mean-only metric is competitive.
@@ -374,7 +385,7 @@ Evidence-based guidance (from the package's own simulation studies,
   metrics exhaust genetic variance and gain plateaus. Manage diversity EXPLICITLY instead --
   set a coancestry penalty (`lambda_group`), or use the strategy dial
   (`strategy` / `diversity_emphasis`) or an inbreeding target (`target_coancestry`), on top
-  of a good merit metric like `var_complex`. See
+  of a good merit metric like `usefulness` + `reliable_family_variance`. See
   `inst/examples/21_gain_diversity_balance_and_target_coancestry.R`.
 
 Prediction accuracy is similar across all these metrics; the differences are about how they
@@ -793,10 +804,12 @@ nursery capacity, and cycle.
 These are native additions to `nextgenCrossDesign`. They do not require the old
 tools.
 
-### Native var_complex Usefulness
+### Native var_complex Usefulness (deprecated alias)
 
-Use the one-call workflow when users want PopVar-like usefulness without adding
-PopVar as a package dependency:
+`var_complex` is a **deprecated alias** for `trait_value_metric = "usefulness"`
+with `uc_variance_source = "reliable_family_variance"`; prefer that spelling in
+new code. The one-call workflow below is still accepted for backward
+compatibility:
 
 ```r
 result <- ng_run_cross_prediction(
@@ -809,8 +822,9 @@ result <- ng_run_cross_prediction(
 ```
 
 `var_complex` is native code in this package. It does not call PopVar and it is
-not a copy-paste dependency. It uses the package's cross means and the best
-available within-family variance column for the trait-value calculation.
+not a copy-paste dependency. It uses the package's cross means and the reliable
+(uncertainty-aware) within-family variance column for the trait-value
+calculation.
 
 ### AlphaMate-Style Target-Degree Allocation
 
