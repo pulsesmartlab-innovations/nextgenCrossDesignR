@@ -501,6 +501,17 @@ ng_run_cp_trait_value <- function(scored_trait,
   metric <- trimws(tolower(as.character(trait_value_metric[[1L]])))
   mean_value <- suppressWarnings(as.numeric(scored_trait$cross_mean_blend))
   if (identical(metric, "mean")) return(mean_value)
+  # Pure-variance objectives rank crosses by the predicted family variance
+  # itself (PopVar-style), not by mean + i*SD. The usefulness path
+  # (trait_value_metric = "usefulness") still combines this variance with the
+  # mean. Variance magnitude is direction-agnostic, so no sign is applied.
+  if (metric %in% c("vpm", "pmv")) {
+    var_col <- ng_run_cp_variance_col(metric, uc_variance_source, scored_trait, method_varPMV)
+    if (!(var_col %in% names(scored_trait))) {
+      ng_stop("scored trait table is missing variance column: ", var_col)
+    }
+    return(pmax(suppressWarnings(as.numeric(scored_trait[[var_col]])), 0))
+  }
   var_col <- if (identical(metric, "var_complex")) {
     ng_run_cp_var_complex_col(scored_trait, method_varPMV)
   } else {
@@ -625,163 +636,74 @@ ng_run_cp_output_files <- function(output_dir,
   files
 }
 
-ng_run_cross_prediction <- function(phenotype_file = NULL,
-                                    genotype_file = NULL,
-                                    map_file = NULL,
-                                    direction_file = NULL,
-                                    phenotype = NULL,
-                                    genotype = NULL,
-                                    marker_map = NULL,
-                                    trait_direction = NULL,
-                                    id_col = NULL,
-                                    training_genotype = NULL,
-                                    training_phenotype = NULL,
-                                    training_genotype_file = NULL,
-                                    training_phenotype_file = NULL,
-                                    training_genotype_id_col = NULL,
-                                    training_phenotype_id_col = NULL,
-                                    phenotype_id_col = NULL,
-                                    genotype_id_col = NULL,
-                                    direction_trait_col = NULL,
-                                    direction_column_col = NULL,
-                                    direction_direction_col = NULL,
-                                    map_marker_col = NULL,
-                                    map_chr_col = NULL,
-                                    map_pos_col = NULL,
-                                    map_pos_cm_col = NULL,
-                                    map_pos_bp_col = NULL,
-                                    map_position_unit = c("bp", "cM"),
-                                    bp_per_cm = NULL,
-                                    map_pos_cm_divisor = 1,
-                                    prediction_mode = c("trait_by_trait", "index_as_trait"),
-                                    traits_to_use = NULL,
-                                    index_col = NULL,
-                                    index_direction = "increase",
-                                    trait_value_metric = c("usefulness", "pmv", "vpm", "parent_distance", "le", "var_complex", "mean"),
-                                    uc_variance_source = c("pmv", "vpm", "parent_distance", "le"),
-                                    multi_trait_method = "auto",
-                                    trait_weights = NULL,
-                                    threshold_policy = c("soft", "strict"),
-                                    threshold_penalty_weight = 1.0,
-                                    threshold_penalty_autoscale = TRUE,
-                                    progeny = "DH",
-                                    recomb_model = c("haldane", "kosambi"),
-                                    selection_prop = 0.10,
-                                    min_effect_reliability = 0.35,
-                                    grm_method = c("vanraden", "yang"),
-                                    method_varPMV = c("fast", "full_posterior"),
-                                    ril_mode = "infinite",
-                                    run_posterior_prediction = FALSE,
-                                    posterior_method = c("mcmc", "closed_form"),
-                                    n_iter = 5000L,
-                                    burn_in = 500L,
-                                    use_parallel = FALSE,
-                                    n_threads = NULL,
-                                    duplicate_action = c("remove", "report", "none"),
-                                    duplicate_threshold = 0.995,
-                                    duplicate_maf_min = 0.01,
-                                    duplicate_max_missing_prop = 0.40,
-                                    duplicate_min_compared_markers = 100L,
-                                    ld_pruning = FALSE,
-                                    ld_window = 100L,
-                                    ld_r2_threshold = 0.9,
-                                    ld_maf_threshold = 0.01,
-                                    ld_ploidy = 2,
-                                    ld_backend = c("auto", "cpp", "r"),
-                                    n_crosses = 100,
-                                    max_crosses_per_parent = 6,
-                                    min_unique_parents = NULL,
-                                    max_pair_kinship = Inf,
-                                    optimizer = "auto",
-                                    allocation_method = "ocs",
-                                    use_ocs = TRUE,
-                                    lambda_group = 0.05,
-                                    lambda_mating = 0,
-                                    lambda_parent_use = 0,
-                                    lambda_parent_use_mode = c("absolute", "adaptive"),
-                                    lambda_progeny_inbreeding = 0,
-                                    mate_relatedness = c("off", "avoid_inbreeding", "favor_complementarity"),
-                                    mate_relatedness_weight = 0,
-                                    strategy = NULL,
-                                    diversity_emphasis = NULL,
-                                    target_coancestry = NULL,
-                                    min_crosses_per_parent = 0,
-                                    committed_crosses = NULL,
-                                    parent_group = NULL,
-                                    group_permission = NULL,
-                                    group_quota = NULL,
-                                    cross_cost = NULL,
-                                    cost_col = NULL,
-                                    budget = Inf,
-                                    lambda_cost = 0,
-                                    logistic_col = NULL,
-                                    lambda_logistic = 0,
-                                    lethal_spec = NULL,
-                                    trait_checks = NULL,
-                                    check_basis = "gebv",
-                                    exclude_threshold_violators = FALSE,
-                                    include_trait_gebv = FALSE,
-                                    marker_target_spec = NULL,
-                                    lambda_marker = 0,
-                                    marker_ploidy = 2,
-                                    drop_lethal_carrier_crosses = TRUE,
-                                    local_iter = 2000,
-                                    ocs_iter = 5L,
-                                    evol_solutions = 100L,
-                                    evol_iterations = 200L,
-                                    evol_stop = 40L,
-                                    evol_seed = NULL,
-                                    alphamate_mode = c("ModeOptTarget1", "ModeMaxCriterion", "ModeMinCoancestry"),
-                                    alphamate_target_degree = 45,
-                                    alphamate_max_contributions = NULL,
-                                    alphamate_number_of_parents = NULL,
-                                    alphamate_lambda_group = NULL,
-                                    alphamate_lambda_grid = NULL,
-                                    alphamate_executable = NULL,
-                                    alphamate_runtime_path = Sys.getenv("NG_ALPHAMATE_RUNTIME_PATH", unset = ""),
-                                    alphamate_workdir = NULL,
-                                    alphamate_keep_files = FALSE,
-                                    alphamate_evol_solutions = 100L,
-                                    alphamate_evol_iterations = 1000L,
-                                    alphamate_evol_stop = 200L,
-                                    alphamate_n_threads = 1L,
-                                    priority_breaks = c(0.10, 0.35, 0.70, 1.00),
-                                    priority_labels = c("highly_priority", "priority", "medium_priority", "low_priority"),
-                                    priority_score_weight = 1.0,
-                                    priority_kinship_weight = 0.15,
-                                    priority_threshold_weight = 1.0,
-                                    output_dir = NULL,
-                                    output_file = "crossing_plan.xlsx",
-                                    write_outputs = FALSE,
-                                    write_figures = FALSE,
-                                    assume_inbred = TRUE,
-                                    use_cpp = TRUE,
-                                    seed = 1L) {
-  prediction_mode <- match.arg(prediction_mode)
-  map_position_unit <- match.arg(map_position_unit)
-  trait_value_metric <- match.arg(trait_value_metric)
-  uc_variance_source <- match.arg(uc_variance_source)
-  threshold_policy <- match.arg(threshold_policy)
-  recomb_model <- match.arg(recomb_model)
-  grm_method <- match.arg(grm_method)
-  ld_backend <- match.arg(ld_backend)
-  method_varPMV <- ng_run_cp_method_varPMV(method_varPMV)
-  ril_mode <- ng_run_cp_ril_mode(ril_mode)
-  posterior_method <- match.arg(posterior_method)
-  duplicate_action <- match.arg(duplicate_action)
-  lambda_parent_use_mode <- match.arg(lambda_parent_use_mode)
-  alphamate_mode <- match.arg(alphamate_mode)
-  target <- ng_run_cp_target(progeny)
-  optimizer_method <- ng_run_cp_optimizer(optimizer)
-  allocation_method <- ng_run_cp_allocation_method(allocation_method)
-  run_posterior_prediction <- ng_run_cp_logical(run_posterior_prediction, "run_posterior_prediction")
-  use_parallel <- ng_run_cp_logical(use_parallel, "use_parallel")
-  n_iter <- ng_run_cp_integer(n_iter, "n_iter", min_value = 1L)
-  burn_in <- ng_run_cp_integer(burn_in, "burn_in", min_value = 0L)
-  posterior_n_draws <- max(1L, n_iter - burn_in)
-  n_crosses <- suppressWarnings(as.integer(n_crosses[[1L]]))
-  if (!is.finite(n_crosses) || n_crosses < 1L) ng_stop("n_crosses must be a positive integer")
 
+# ---------------------------------------------------------------------------
+# Staged pipeline: ng_run_cross_prediction is decomposed into internal stage
+# functions over a shared `ctx` list. The public runner is a thin driver that
+# builds ctx and calls the stages in order; a later resumable ng_run_stage
+# calls the SAME stage functions so staged execution is byte-identical.
+# ---------------------------------------------------------------------------
+
+ng_cp_stage_order <- function() c("qc", "predict", "index", "allocate", "rank")
+
+# Map breeder-facing metric names to the canonical tokens the pipeline uses.
+# Friendly names are additive aliases; canonical tokens keep working unchanged.
+ng_normalize_metric_token <- function(x) {
+  token <- trimws(tolower(as.character(x[[1L]])))
+  switch(token,
+    mid_parent_mean          = "mean",
+    family_variance          = "vpm",
+    reliable_family_variance = "pmv",
+    token)
+}
+
+ng_cp__build_ctx <- function(config) {
+  ctx <- config
+  ctx$prediction_mode <- match.arg(ctx$prediction_mode, c("trait_by_trait", "index_as_trait"))
+  ctx$map_position_unit <- match.arg(ctx$map_position_unit, c("bp", "cM"))
+  # Accept breeder-facing metric names as aliases of the canonical tokens.
+  # var_complex is a deprecated alias for usefulness + reliable (pmv) variance,
+  # so it maps to BOTH fields to preserve its exact (UC-PMV) behavior.
+  # Preserve the user's ORIGINAL choices so result$settings echoes what they
+  # supplied (e.g. "var_complex"/"family_variance"), not the normalized token.
+  ctx$trait_value_metric_input <- ctx$trait_value_metric
+  ctx$uc_variance_source_input <- ctx$uc_variance_source
+  .tv <- ng_normalize_metric_token(ctx$trait_value_metric)
+  if (identical(.tv, "var_complex")) {
+    ctx$trait_value_metric <- "usefulness"
+    ctx$uc_variance_source <- "pmv"
+  } else {
+    ctx$trait_value_metric <- .tv
+    ctx$uc_variance_source <- ng_normalize_metric_token(ctx$uc_variance_source)
+  }
+  ctx$trait_value_metric <- match.arg(ctx$trait_value_metric, c("usefulness", "pmv", "vpm", "parent_distance", "le", "var_complex", "mean"))
+  ctx$uc_variance_source <- match.arg(ctx$uc_variance_source, c("pmv", "vpm", "parent_distance", "le"))
+  ctx$threshold_policy <- match.arg(ctx$threshold_policy, c("soft", "strict"))
+  ctx$recomb_model <- match.arg(ctx$recomb_model, c("haldane", "kosambi"))
+  ctx$grm_method <- match.arg(ctx$grm_method, c("vanraden", "yang"))
+  ctx$ld_backend <- match.arg(ctx$ld_backend, c("auto", "cpp", "r"))
+  ctx$method_varPMV <- ng_run_cp_method_varPMV(ctx$method_varPMV)
+  ctx$ril_mode <- ng_run_cp_ril_mode(ctx$ril_mode)
+  ctx$posterior_method <- match.arg(ctx$posterior_method, c("mcmc", "closed_form"))
+  ctx$duplicate_action <- match.arg(ctx$duplicate_action, c("remove", "report", "none"))
+  ctx$lambda_parent_use_mode <- match.arg(ctx$lambda_parent_use_mode, c("absolute", "adaptive"))
+  ctx$alphamate_mode <- match.arg(ctx$alphamate_mode, c("ModeOptTarget1", "ModeMaxCriterion", "ModeMinCoancestry"))
+  ctx$target <- ng_run_cp_target(ctx$progeny)
+  ctx$optimizer_method <- ng_run_cp_optimizer(ctx$optimizer)
+  ctx$allocation_method <- ng_run_cp_allocation_method(ctx$allocation_method)
+  ctx$run_posterior_prediction <- ng_run_cp_logical(ctx$run_posterior_prediction, "run_posterior_prediction")
+  ctx$use_parallel <- ng_run_cp_logical(ctx$use_parallel, "use_parallel")
+  ctx$n_iter <- ng_run_cp_integer(ctx$n_iter, "n_iter", min_value = 1L)
+  ctx$burn_in <- ng_run_cp_integer(ctx$burn_in, "burn_in", min_value = 0L)
+  ctx$posterior_n_draws <- max(1L, ctx$n_iter - ctx$burn_in)
+  ctx$n_crosses <- suppressWarnings(as.integer(ctx$n_crosses[[1L]]))
+  if (!is.finite(ctx$n_crosses) || ctx$n_crosses < 1L) ng_stop("n_crosses must be a positive integer")
+  ctx
+}
+
+ng_cp__stage_qc <- function(ctx) {
+  list2env(ctx, environment())
+  direction_canonical <- ctx$direction_canonical
   phenotype_raw <- if (is.null(phenotype)) ng_run_cp_read_csv(phenotype_file, "phenotype") else phenotype
   genotype_raw <- if (is.null(genotype)) ng_run_cp_read_csv(genotype_file, "genotype") else genotype
   map_raw <- if (is.null(marker_map)) ng_run_cp_read_csv(map_file, "marker_map") else marker_map
@@ -841,12 +763,16 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
     duplicate_max_missing_prop = duplicate_max_missing_prop,
     duplicate_min_compared_markers = duplicate_min_compared_markers
   )
+  # NOTE: on a blocker, the ORIGINAL monolith threw right here, before the
+  # clean/align block below ever ran. The staged path must not throw (the
+  # frontend needs to persist qc.json with status="blocker" + issues), so we
+  # set ctx$qc and return early instead -- clean/align is still skipped on a
+  # blocker, exactly as before. The one-shot driver (ng_run_cross_prediction)
+  # re-introduces the throw, with this exact message, immediately after this
+  # stage returns -- see the stage loop below.
+  ctx$qc <- qc
   if (any(qc$issues$severity == "blocker")) {
-    blockers <- qc$issues$message[qc$issues$severity == "blocker"]
-    ng_stop(
-      "Input QC found blocker issues before cross prediction: ",
-      paste(utils::head(blockers, 5L), collapse = " | ")
-    )
+    return(ctx)
   }
 
   cleaned <- if (!is.null(qc$cleaned_tables)) qc$cleaned_tables else list(
@@ -870,7 +796,21 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
     )
   }
   marker_map_std <- ng_run_cp_align_marker_map(geno, cleaned$marker_map)
+  ctx$phenotype_id_col_used <- phenotype_id_col_used
+  ctx$genotype_id_col_used <- genotype_id_col_used
+  ctx$trait_spec <- trait_spec
+  ctx$direction_columns <- direction_columns
+  ctx$direction_canonical <- direction_canonical
+  ctx$marker_map_std <- marker_map_std
+  ctx$qc <- qc
+  ctx$geno <- geno
+  ctx$pheno <- pheno
+  ctx$ids <- ids
+  ctx
+}
 
+ng_cp__stage_predict <- function(ctx) {
+  list2env(ctx, environment())
   # Optional LD pruning of the marker matrix (same capability as ng_design_crosses): drop
   # redundant/low-MAF markers before scoring. Per-trait effects are fit from `geno` inside
   # the loop below, so pruning here keeps effects, geno, and the map aligned automatically.
@@ -1079,7 +1019,28 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
     }
     effect_summary[[j]] <- item$effect_summary
   }
+  ctx$ld_pruning_report <- ld_pruning_report
+  ctx$geno <- geno
+  ctx$marker_map_std <- marker_map_std
+  ctx$ids <- ids
+  ctx$training_only_count <- training_only_count
+  ctx$training_ids <- training_ids
+  ctx$effects_list <- effects_list
+  ctx$trait_scores <- trait_scores
+  ctx$posterior_effects_list <- posterior_effects_list
+  ctx$posterior_predictions_list <- posterior_predictions_list
+  ctx$cross_table <- cross_table
+  ctx$priority_beta_cov <- priority_beta_cov
+  ctx$priority_marker_mean <- priority_marker_mean
+  ctx$parallel_backend <- parallel_backend
+  ctx$parallel_cores_used <- parallel_cores_used
+  ctx$effect_summary <- effect_summary
+  ctx
+}
 
+ng_cp__stage_index <- function(ctx) {
+  list2env(ctx, environment())
+  direction_canonical <- ctx$direction_canonical
   # Per-cross COST / LOGISTICS: candidate crosses are generated internally, so a breeder who
   # wants cost/budget/logistic-aware allocation supplies cross_cost -- a data frame with
   # parent1/parent2 + one numeric column per factor (e.g. cost, distance). Joined onto the
@@ -1214,6 +1175,17 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
       allocation_criterion_col <- "marker_adjusted_gain"
     }
   }
+  ctx$cross_table <- cross_table
+  ctx$objective <- objective
+  ctx$n_candidates_pre_lethal <- n_candidates_pre_lethal
+  ctx$trait_check_diagnostics <- trait_check_diagnostics
+  ctx$scored_crosses <- scored_crosses
+  ctx$allocation_criterion_col <- allocation_criterion_col
+  ctx
+}
+
+ng_cp__stage_allocate <- function(ctx) {
+  list2env(ctx, environment())
   parent_kinship <- if (isTRUE(use_ocs) || !identical(allocation_method, "ocs")) ng_parent_kinship(geno, method = grm_method) else NULL
   if (identical(allocation_method, "ocs")) {
     # The mate-selection module knobs (strategy / diversity_emphasis, progeny inbreeding,
@@ -1251,7 +1223,7 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
       lambda_group = if (isTRUE(use_ocs)) lambda_group else 0,
       lambda_mating = if (isTRUE(use_ocs)) lambda_mating else 0,
       lambda_progeny_inbreeding = if (isTRUE(use_ocs)) lambda_progeny_inbreeding else 0,
-      mate_relatedness = if (isTRUE(use_ocs)) match.arg(mate_relatedness) else "off",
+      mate_relatedness = if (isTRUE(use_ocs)) match.arg(mate_relatedness, c("off", "avoid_inbreeding", "favor_complementarity")) else "off",
       mate_relatedness_weight = if (isTRUE(use_ocs)) mate_relatedness_weight else 0,
       lambda_parent_use = if (isTRUE(use_ocs)) lambda_parent_use else 0,
       lambda_parent_use_mode = lambda_parent_use_mode,
@@ -1305,6 +1277,14 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
   plan_summary <- attr(plan, "summary")
   plan_summary$allocation_method <- allocation_method
   attr(plan, "summary") <- plan_summary
+  ctx$plan <- plan
+  ctx
+}
+
+ng_cp__stage_rank <- function(ctx) {
+  list2env(ctx, environment())
+  priority_beta_cov <- ctx$priority_beta_cov
+  priority_marker_mean <- ctx$priority_marker_mean
   selected <- ng_rank_cross_priority(
     crosses = plan,
     score_col = "multi_trait_score",
@@ -1413,7 +1393,68 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
     n_crosses = n_crosses,
     include_trait_gebv = include_trait_gebv
   )
+  ctx$selected <- selected
+  ctx$scored_crosses <- scored_crosses
+  ctx$priority_risk_diagnostics <- priority_risk_diagnostics
+  ctx$constraint_diagnostics <- constraint_diagnostics
+  ctx$output_files <- output_files
+  ctx
+}
 
+# The ng_cp__* stage functions unpack the shared ctx list into their local
+# environment via list2env(); codetools cannot see those injected bindings, so
+# declare the union of ctx fields they read as package globals to keep R CMD
+# check clean. Regenerate with codetools::findGlobals over the ng_cp__* fns if
+# ctx gains fields.
+utils::globalVariables(c(
+  "allocation_criterion_col", "allocation_method", "alphamate_evol_iterations", "alphamate_evol_solutions",
+  "alphamate_evol_stop", "alphamate_executable", "alphamate_keep_files", "alphamate_lambda_grid",
+  "alphamate_lambda_group", "alphamate_max_contributions", "alphamate_mode", "alphamate_n_threads",
+  "alphamate_number_of_parents", "alphamate_runtime_path", "alphamate_target_degree", "alphamate_workdir",
+  "assume_inbred", "bp_per_cm", "budget", "burn_in",
+  "check_basis", "committed_crosses", "constraint_diagnostics", "cost_col",
+  "cross_cost", "cross_table", "direction_column_col", "direction_columns",
+  "direction_direction_col", "direction_file", "direction_trait_col", "diversity_emphasis",
+  "drop_lethal_carrier_crosses", "duplicate_action", "duplicate_maf_min", "duplicate_max_missing_prop",
+  "duplicate_min_compared_markers", "duplicate_threshold", "effect_summary", "effects_list",
+  "evol_iterations", "evol_seed", "evol_solutions", "evol_stop",
+  "exclude_threshold_violators", "geno", "genotype", "genotype_file",
+  "genotype_id_col_used", "grm_method", "group_permission", "group_quota",
+  "id_col", "ids", "include_trait_gebv", "index_col",
+  "index_direction", "lambda_cost", "lambda_group", "lambda_logistic",
+  "lambda_marker", "lambda_mating", "lambda_parent_use", "lambda_parent_use_mode",
+  "lambda_progeny_inbreeding", "ld_backend", "ld_maf_threshold", "ld_ploidy",
+  "ld_pruning", "ld_r2_threshold", "ld_window", "lethal_spec",
+  "local_iter", "logistic_col", "map_chr_col", "map_file",
+  "map_marker_col", "map_pos_bp_col", "map_pos_cm_col", "map_pos_cm_divisor",
+  "map_pos_col", "map_position_unit", "marker_map", "marker_map_std",
+  "marker_ploidy", "marker_target_spec", "mate_relatedness", "mate_relatedness_weight",
+  "max_crosses_per_parent", "max_pair_kinship", "method_varPMV", "min_crosses_per_parent",
+  "min_effect_reliability", "min_unique_parents", "multi_trait_method", "n_candidates_pre_lethal",
+  "n_crosses", "n_iter", "n_threads", "objective",
+  "ocs_iter", "optimizer", "optimizer_method", "output_dir",
+  "output_file", "output_files", "parallel_backend", "parallel_cores_used",
+  "parent_group", "pheno", "phenotype", "phenotype_file",
+  "phenotype_id_col_used", "plan", "posterior_effects_list", "posterior_method",
+  "posterior_n_draws", "posterior_predictions_list", "prediction_mode", "priority_breaks",
+  "priority_kinship_weight", "priority_labels", "priority_score_weight", "priority_threshold_weight",
+  "qc", "recomb_model", "ril_mode", "run_posterior_prediction",
+  "scored_crosses", "seed", "selected", "selection_prop",
+  "strategy", "target", "target_coancestry", "threshold_penalty_autoscale",
+  "threshold_penalty_weight", "threshold_policy", "training_genotype", "training_genotype_file",
+  "training_genotype_id_col", "training_ids", "training_only_count", "training_phenotype",
+  "training_phenotype_file", "training_phenotype_id_col", "trait_checks", "trait_direction",
+  "trait_scores", "trait_spec", "trait_value_metric", "trait_value_metric_input",
+  "uc_variance_source_input", "trait_weights",
+  "traits_to_use", "uc_variance_source", "use_cpp", "use_ocs",
+  "use_parallel", "write_figures", "write_outputs"
+))
+
+ng_cp__assemble_result <- function(ctx) {
+  list2env(ctx, environment())
+  ld_pruning_report <- ctx$ld_pruning_report
+  trait_check_diagnostics <- ctx$trait_check_diagnostics
+  priority_risk_diagnostics <- ctx$priority_risk_diagnostics
   result <- list(
     prediction_mode = prediction_mode,
     qc = qc,
@@ -1457,8 +1498,8 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
     priority_risk_diagnostics = priority_risk_diagnostics,
     output_files = output_files,
     settings = list(
-      trait_value_metric = trait_value_metric,
-      uc_variance_source = uc_variance_source,
+      trait_value_metric = trait_value_metric_input,
+      uc_variance_source = uc_variance_source_input,
       method_varPMV = method_varPMV,
       multi_trait_method = multi_trait_method,
       progeny = target,
@@ -1486,4 +1527,165 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
   )
   class(result) <- c("ng_cross_prediction_result", "list")
   result
+}
+
+ng_cp_pipeline <- list(
+  qc = ng_cp__stage_qc,
+  predict = ng_cp__stage_predict,
+  index = ng_cp__stage_index,
+  allocate = ng_cp__stage_allocate,
+  rank = ng_cp__stage_rank
+)
+
+ng_run_cross_prediction <- function(phenotype_file = NULL,
+                                    genotype_file = NULL,
+                                    map_file = NULL,
+                                    direction_file = NULL,
+                                    phenotype = NULL,
+                                    genotype = NULL,
+                                    marker_map = NULL,
+                                    trait_direction = NULL,
+                                    id_col = NULL,
+                                    training_genotype = NULL,
+                                    training_phenotype = NULL,
+                                    training_genotype_file = NULL,
+                                    training_phenotype_file = NULL,
+                                    training_genotype_id_col = NULL,
+                                    training_phenotype_id_col = NULL,
+                                    phenotype_id_col = NULL,
+                                    genotype_id_col = NULL,
+                                    direction_trait_col = NULL,
+                                    direction_column_col = NULL,
+                                    direction_direction_col = NULL,
+                                    map_marker_col = NULL,
+                                    map_chr_col = NULL,
+                                    map_pos_col = NULL,
+                                    map_pos_cm_col = NULL,
+                                    map_pos_bp_col = NULL,
+                                    map_position_unit = c("bp", "cM"),
+                                    bp_per_cm = NULL,
+                                    map_pos_cm_divisor = 1,
+                                    prediction_mode = c("trait_by_trait", "index_as_trait"),
+                                    traits_to_use = NULL,
+                                    index_col = NULL,
+                                    index_direction = "increase",
+                                    trait_value_metric = c("usefulness", "pmv", "vpm", "parent_distance", "le", "var_complex", "mean"),
+                                    uc_variance_source = c("pmv", "vpm", "parent_distance", "le"),
+                                    multi_trait_method = "auto",
+                                    trait_weights = NULL,
+                                    threshold_policy = c("soft", "strict"),
+                                    threshold_penalty_weight = 1.0,
+                                    threshold_penalty_autoscale = TRUE,
+                                    progeny = "DH",
+                                    recomb_model = c("haldane", "kosambi"),
+                                    selection_prop = 0.10,
+                                    min_effect_reliability = 0.35,
+                                    grm_method = c("vanraden", "yang"),
+                                    method_varPMV = c("fast", "full_posterior"),
+                                    ril_mode = "infinite",
+                                    run_posterior_prediction = FALSE,
+                                    posterior_method = c("mcmc", "closed_form"),
+                                    n_iter = 5000L,
+                                    burn_in = 500L,
+                                    use_parallel = FALSE,
+                                    n_threads = NULL,
+                                    duplicate_action = c("remove", "report", "none"),
+                                    duplicate_threshold = 0.995,
+                                    duplicate_maf_min = 0.01,
+                                    duplicate_max_missing_prop = 0.40,
+                                    duplicate_min_compared_markers = 100L,
+                                    ld_pruning = FALSE,
+                                    ld_window = 100L,
+                                    ld_r2_threshold = 0.9,
+                                    ld_maf_threshold = 0.01,
+                                    ld_ploidy = 2,
+                                    ld_backend = c("auto", "cpp", "r"),
+                                    n_crosses = 100,
+                                    max_crosses_per_parent = 6,
+                                    min_unique_parents = NULL,
+                                    max_pair_kinship = Inf,
+                                    optimizer = "auto",
+                                    allocation_method = "ocs",
+                                    use_ocs = TRUE,
+                                    lambda_group = 0.05,
+                                    lambda_mating = 0,
+                                    lambda_parent_use = 0,
+                                    lambda_parent_use_mode = c("absolute", "adaptive"),
+                                    lambda_progeny_inbreeding = 0,
+                                    mate_relatedness = c("off", "avoid_inbreeding", "favor_complementarity"),
+                                    mate_relatedness_weight = 0,
+                                    strategy = NULL,
+                                    diversity_emphasis = NULL,
+                                    target_coancestry = NULL,
+                                    min_crosses_per_parent = 0,
+                                    committed_crosses = NULL,
+                                    parent_group = NULL,
+                                    group_permission = NULL,
+                                    group_quota = NULL,
+                                    cross_cost = NULL,
+                                    cost_col = NULL,
+                                    budget = Inf,
+                                    lambda_cost = 0,
+                                    logistic_col = NULL,
+                                    lambda_logistic = 0,
+                                    lethal_spec = NULL,
+                                    trait_checks = NULL,
+                                    check_basis = "gebv",
+                                    exclude_threshold_violators = FALSE,
+                                    include_trait_gebv = FALSE,
+                                    marker_target_spec = NULL,
+                                    lambda_marker = 0,
+                                    marker_ploidy = 2,
+                                    drop_lethal_carrier_crosses = TRUE,
+                                    local_iter = 2000,
+                                    ocs_iter = 5L,
+                                    evol_solutions = 100L,
+                                    evol_iterations = 200L,
+                                    evol_stop = 40L,
+                                    evol_seed = NULL,
+                                    alphamate_mode = c("ModeOptTarget1", "ModeMaxCriterion", "ModeMinCoancestry"),
+                                    alphamate_target_degree = 45,
+                                    alphamate_max_contributions = NULL,
+                                    alphamate_number_of_parents = NULL,
+                                    alphamate_lambda_group = NULL,
+                                    alphamate_lambda_grid = NULL,
+                                    alphamate_executable = NULL,
+                                    alphamate_runtime_path = Sys.getenv("NG_ALPHAMATE_RUNTIME_PATH", unset = ""),
+                                    alphamate_workdir = NULL,
+                                    alphamate_keep_files = FALSE,
+                                    alphamate_evol_solutions = 100L,
+                                    alphamate_evol_iterations = 1000L,
+                                    alphamate_evol_stop = 200L,
+                                    alphamate_n_threads = 1L,
+                                    priority_breaks = c(0.10, 0.35, 0.70, 1.00),
+                                    priority_labels = c("highly_priority", "priority", "medium_priority", "low_priority"),
+                                    priority_score_weight = 1.0,
+                                    priority_kinship_weight = 0.15,
+                                    priority_threshold_weight = 1.0,
+                                    output_dir = NULL,
+                                    output_file = "crossing_plan.xlsx",
+                                    write_outputs = FALSE,
+                                    write_figures = FALSE,
+                                    assume_inbred = TRUE,
+                                    use_cpp = TRUE,
+                                    seed = 1L) {
+  config <- mget(names(formals()))
+  ctx <- ng_cp__build_ctx(config)
+  for (s in ng_cp_stage_order()) {
+    ctx <- ng_cp_pipeline[[s]](ctx)
+    # The qc stage (R/39 ng_cp__stage_qc) no longer throws on a blocker --
+    # it returns ctx with ctx$qc$status == "blocker" so the staged runner
+    # (R/45 ng_run_stage) can persist qc.json for the frontend. The one-shot
+    # driver reinstates the original throw-on-blocker behavior here, at the
+    # exact original point (right after qc, before predict), with the exact
+    # original message.
+    if (identical(s, "qc") && identical(ctx$qc$status, "blocker")) {
+      blockers <- ctx$qc$issues$message[ctx$qc$issues$severity == "blocker"]
+      ng_stop(
+        "Input QC found blocker issues before cross prediction: ",
+        paste(utils::head(blockers, 5L), collapse = " | ")
+      )
+    }
+  }
+  ng_cp__assemble_result(ctx)
 }

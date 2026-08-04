@@ -1,0 +1,17 @@
+helper <- c(file.path("tests", "helper_load.R"), "helper_load.R", file.path("nextgen_cross_design", "tests", "helper_load.R"), file.path("..", "tests", "helper_load.R"))
+source(helper[file.exists(helper)][[1L]])
+
+reg <- ng_backend_controls()
+byid <- function(id) Filter(function(e) e$id == id, reg)[[1]]
+tvm <- byid("trait_value_metric")
+vals <- vapply(tvm$choices, function(c) c$value, "")
+stopifnot(setequal(vals, c("mid_parent_mean","family_variance","reliable_family_variance","usefulness","parent_distance")))
+ucs <- byid("uc_variance_source")
+uvals <- vapply(ucs$choices, function(c) c$value, "")
+stopifnot(setequal(uvals, c("family_variance","reliable_family_variance")))
+stopifnot(ucs$default == "reliable_family_variance")
+stopifnot(ucs$depends_on == "trait_value_metric=usefulness")
+mv <- byid("method_varPMV")
+mlabels <- vapply(mv$choices, function(c) c$label, "")
+stopifnot(any(grepl("fast", tolower(mlabels))), any(grepl("full", tolower(mlabels))))
+cat("registry metric controls OK\n")

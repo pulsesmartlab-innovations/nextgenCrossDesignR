@@ -131,6 +131,7 @@
 \alias{ng_write_data_preflight_json}
 \alias{ng_write_head_to_head_dashboard_json}
 \alias{ng_write_head_to_head_visual_report}
+\alias{ng_run_stage}
 \title{Public NextGen Cross Design Backend API}
 \description{
 Public backend functions for cross scoring, mate allocation, multi-trait
@@ -205,5 +206,14 @@ editable because final rationale differs by breeding program.
 Use \code{ng_plot_priority_score_vs_kinship()} to show all candidate crosses in
 score-versus-relatedness space and overlay the selected crossing plan colored by
 priority tier.
+
+Use \code{ng_run_stage()} to drive the cross-prediction pipeline one stage at a
+time (\code{qc}, \code{predict}, \code{index}, \code{allocate}, \code{rank}),
+persisting each stage's accumulated context to a run directory so a caller such
+as a front end can compute each stage once and resume from any completed stage.
+Driving all stages in order is byte-identical to a single
+\code{ng_run_cross_prediction()} call because both paths run the same internal
+pipeline; QC blockers are returned as a stage status and refuse downstream
+stages until resolved.
 }
 \keyword{methods}
