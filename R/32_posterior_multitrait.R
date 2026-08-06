@@ -49,7 +49,8 @@ ng_posterior_multitrait_cross_predict <- function(geno,
                                                   recomb_model = c("haldane", "kosambi"),
                                                   window_cm = Inf,
                                                   use_cpp = TRUE,
-                                                  assume_inbred = TRUE,
+                                                  parent_type = c("inbred", "dh", "ril"),
+                                                  assume_inbred = NULL,
                                                   tau_lower_vec = NULL,
                                                   tau_upper_vec = NULL,
                                                   threshold_k_progeny = 100L,
@@ -62,6 +63,7 @@ ng_posterior_multitrait_cross_predict <- function(geno,
   index_method <- match.arg(index_method)
   value_mode <- match.arg(value_mode)
   target <- match.arg(target)
+  parent_type <- ng_reconcile_parent_type(parent_type, assume_inbred)
   recomb_model <- match.arg(recomb_model)
 
   # ---- Validate multivariate threshold arguments ---------------------------

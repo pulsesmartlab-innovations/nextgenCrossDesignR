@@ -902,7 +902,8 @@ ng_cp__stage_predict <- function(ctx) {
       min_effect_reliability = min_effect_reliability,
       recomb_model = recomb_model,
       use_cpp = use_cpp,
-      assume_inbred = assume_inbred,
+      parent_type = parent_type,
+      phased_haplotypes = phased_haplotypes,
       grm_method = grm_method,
       posterior_cov_full = posterior_cov_full
     )
@@ -937,7 +938,7 @@ ng_cp__stage_predict <- function(ctx) {
         min_effect_reliability = min_effect_reliability,
         recomb_model = recomb_model,
         use_cpp = use_cpp,
-        assume_inbred = assume_inbred,
+        parent_type = parent_type,
         top_n_targets = unique(as.integer(c(min(n_crosses, 10L), 10L, 20L, 50L)))
       )
     }
@@ -1411,7 +1412,7 @@ utils::globalVariables(c(
   "alphamate_evol_stop", "alphamate_executable", "alphamate_keep_files", "alphamate_lambda_grid",
   "alphamate_lambda_group", "alphamate_max_contributions", "alphamate_mode", "alphamate_n_threads",
   "alphamate_number_of_parents", "alphamate_runtime_path", "alphamate_target_degree", "alphamate_workdir",
-  "assume_inbred", "bp_per_cm", "budget", "burn_in",
+  "assume_inbred", "parent_type", "phased_haplotypes", "bp_per_cm", "budget", "burn_in",
   "check_basis", "committed_crosses", "constraint_diagnostics", "cost_col",
   "cross_cost", "cross_table", "direction_column_col", "direction_columns",
   "direction_direction_col", "direction_file", "direction_trait_col", "diversity_emphasis",
@@ -1666,10 +1667,20 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
                                     output_file = "crossing_plan.xlsx",
                                     write_outputs = FALSE,
                                     write_figures = FALSE,
-                                    assume_inbred = TRUE,
+                                    parent_type = c("inbred", "dh", "ril"),
+                                    assume_inbred = NULL,
+                                    phased_haplotypes = NULL,
                                     use_cpp = TRUE,
                                     seed = 1L) {
   config <- mget(names(formals()))
+  # parent_type governs the heterozygosity audit: 'inbred'/'dh' (fully fixed
+  # lines) block het as a data error; 'ril' accepts residual het. Legacy
+  # assume_inbred is deprecated (reconciled with a one-time warning). Canonicalise
+  # once here so the staged config and inner calls carry a single clean value.
+  parent_type <- ng_reconcile_parent_type(parent_type, assume_inbred)
+  assume_inbred <- NULL
+  config$parent_type <- parent_type
+  config$assume_inbred <- NULL
   ctx <- ng_cp__build_ctx(config)
   for (s in ng_cp_stage_order()) {
     ctx <- ng_cp_pipeline[[s]](ctx)

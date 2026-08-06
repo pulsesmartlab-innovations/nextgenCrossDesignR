@@ -312,12 +312,13 @@ ng_posterior_cross_predict <- function(geno,
                                        blup = NULL,
                                        include_self = FALSE,
                                        target = c("DH", "RIL"),
+                                       parent_type = c("inbred", "dh", "ril"),
                                        selection_prop = 0.10,
                                        min_effect_reliability = 0.35,
                                        recomb_model = c("haldane", "kosambi"),
                                        window_cm = Inf,
                                        use_cpp = TRUE,
-                                       assume_inbred = TRUE,
+                                       assume_inbred = NULL,
                                        ci_level = 0.95,
                                        gain_col = "usefulness_pmv_gebv",
                                        var_col = "pmv",
@@ -325,6 +326,7 @@ ng_posterior_cross_predict <- function(geno,
                                        k_progeny = 100L,
                                        top_n_targets = c(10L, 20L, 50L)) {
   target <- match.arg(target)
+  parent_type <- ng_reconcile_parent_type(parent_type, assume_inbred)
   recomb_model <- match.arg(recomb_model)
   if (!is.list(posterior_effects) || is.null(posterior_effects$beta_draws)) {
     ng_stop("posterior_effects must be the list returned by ng_fit_ridge_effects_posterior()")
@@ -365,7 +367,7 @@ ng_posterior_cross_predict <- function(geno,
     selection_prop = selection_prop,
     min_effect_reliability = min_effect_reliability,
     recomb_model = recomb_model, window_cm = window_cm, use_cpp = use_cpp,
-    assume_inbred = assume_inbred
+    parent_type = parent_type
   )
   n_pairs <- nrow(base)
   if (!(gain_col %in% names(base))) ng_stop("base scores missing gain_col: ", gain_col)
@@ -400,7 +402,7 @@ ng_posterior_cross_predict <- function(geno,
       target = target, selection_prop = selection_prop,
       min_effect_reliability = min_effect_reliability,
       recomb_model = recomb_model, window_cm = window_cm, use_cpp = use_cpp,
-      assume_inbred = assume_inbred
+      parent_type = parent_type
     )
     pmv_mat[, s] <- scored[[var_col]]
     uc_mat[, s]  <- scored[[gain_col]]
