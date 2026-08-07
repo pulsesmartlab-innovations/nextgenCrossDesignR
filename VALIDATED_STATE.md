@@ -1,6 +1,54 @@
 # Validated Software State
 
-Last reviewed: 2026-07-03 for the metric-merit study and the mate-selection capability pass.
+Last reviewed: 2026-08-07 for the residual-heterozygous-parent variance, the headless message contract, and the frontend-surfacing governance.
+
+## Residual-Heterozygous-Parent Variance & Message Contract Note (v0.17.1, 2026-08-07)
+
+Adds the exact within-cross additive variance for arbitrary **phased** parents
+(`ng_gms_additive_var_general`), generalizing the inbred `a'Ra` kernel to RIL
+parents that carry residual heterozygosity; the `parent_type` heterozygosity
+governance (`inbred`/`dh`/`ril`); the headless-JSON message contract
+(warnings + structured blockers); and the staged JSON runner.
+
+Allowed claims:
+
+- The exact **DH** and **RIL-infinite** within-cross additive variance for phased
+  parents (inbred OR residual-heterozygous) is correct for the package's Haldane
+  (no-interference) recombination model: validated to Monte-Carlo precision
+  against the assumption-free pure-Haldane transmission (DH -0.24%, RIL +0.49%;
+  coupling / repulsion / coexisting-Delta,delta / both-het / random configs,
+  max |err| 0.31%), and reduces byte-identically to `a'Ra` for inbred parents.
+  Derived and adversarially QG-reviewed; see
+  `docs/design/residual-het-parent-variance.md`.
+- `parent_type` governs the heterozygosity audit independent of the progeny
+  target: `dh` (zero-noise floor) and `inbred` block het as a data error; `ril`
+  accepts residual het. Wired into `ng_score_crosses`: with phased haplotypes,
+  het-parent crosses under `parent_type = "ril"` get the exact variance;
+  inbred-parent crosses and every no-phase / DH / inbred path are byte-identical
+  to prior behavior.
+- The headless JSON runner surfaces backend warnings (`result$warnings[]`) and
+  blockers (`ok = false` + `error_message`) instead of crashing; the staged JSON
+  runner (`workflow = "stage"`) works and surfaces the same messages per stage.
+
+Disallowed claims:
+
+- No selection-superiority claim. The RAH finite-lineage tail metric was a
+  **powered validated NULL** (it does not beat analytical usefulness or mean
+  selection); the exact variance correction fixes *accuracy*, not proven
+  long-term gain.
+- Finite-generation RIL (F2:F3, F3:F4, ...) variance is NOT closed-form here;
+  only DH and RIL-infinite are. Finite-RIL remains simulation-only (RAH module).
+- The correction is exact only for the Haldane no-interference model and only
+  with phased haplotypes; dosage-only input recovers only the diagonal part and
+  stays biased low (with the honest advisory).
+
+Frontend-surfacing governance: **experimental capabilities must NOT surface in
+the frontend.** The RAH-PMV finite-lineage module (validated NULL) is parked on
+its own branch and is NOT in the published package, so it cannot surface.
+Anything the backend capability registry marks `status = "experimental"` or
+`"guarded"` (e.g. complex-polyploid modules, finite-RIL analytics) must be gated
+out of the UI -- the frontend is expected to gate on the backend capability
+registry (`ng_backend_capabilities.v1`) for exactly this.
 
 ## External Convex Mate-Allocation Benchmark Note (2026-07-03)
 
