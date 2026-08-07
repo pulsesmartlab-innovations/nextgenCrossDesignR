@@ -70,6 +70,15 @@ JSON.)
 
 ### 4. Render the result contract
 `run_result.json` (`ng_run_result.v1`) — code your views against `contracts/example_result.json`:
+- `status` — **`"ok"` or `"error"`. Always branch on this first.** On `"error"` the run was
+  **blocked** (e.g. a DH/inbred parent carrying heterozygosity, or a bad input); `error_message`
+  holds the human-readable reason to show the user, and the result carries no plan. The runner still
+  writes a valid `result.json` on a blocker (exit code is non-zero) — **read the file even on failure**
+  so you can display `error_message` instead of a raw stderr dump.
+- `warnings` — an array of advisory message strings the run emitted (e.g. the residual-heterozygous-RIL
+  variance advisory, the `assume_inbred` deprecation). Present on a successful run; surface each as a
+  non-blocking banner/toast so the breeder sees caveats (e.g. "variance biased low — supply phased
+  haplotypes"). Empty array when there are none.
 - `selected_crosses` — the crossing plan: `parent1, parent2, multi_trait_score, pair_kinship,
   priority_tier, priority_index` (+ per-trait `<t>_value/_mean/_pmv/_vpm/_var_complex`). The breeder deliverable.
 - `candidate_crosses` — all scored pairs (for the priority-vs-kinship scatter).
