@@ -39,9 +39,11 @@ one layer at a time so you can unlock every capability without ever losing the t
 - **Part 2 — Choosing your settings.** Change one setting group at a time on that same
   call: metric, relationship matrix, progeny type, optimizer, allocation, number of crosses.
 - **Part 3 — Breeder controls.** Layer real constraints onto the plan: diversity, mating
-  rules, progeny inbreeding, marker steering, cost.
+  rules, progeny inbreeding, the unified mate-relatedness control, marker steering, per-trait
+  check-line vetoes, cost.
 - **Part 4 — Multi-trait selection.** Combine several traits into one objective.
-- **Part 5 — From plan to decisions.** Priority tiers, workbooks, and exports.
+- **Part 5 — From plan to decisions.** Priority tiers, portfolio-and-risk profiling,
+  constraint diagnostics, workbooks, and exports.
 - **Part 6 — Alternative entry points.** The one-call single-trait helper and the low-level
   API the runner uses internally.
 - **Part 7 — Specialized workflows.** Polyploids, posterior probabilities, calibration,
@@ -100,9 +102,10 @@ markers <- sprintf("SNP_%03d", seq_len(n_markers))
 
 # 1. GENOTYPE — parents in rows, markers in columns. These are inbred DH/RIL
 # lines, so each parent is homozygous at every marker (dosage 0 or 2, no 1s);
-# 2 * rbinom(., 1, p) draws the fixed allele. The recombination-variance kernel
-# assumes inbred parents, so generating 0/1/2 outbred dosages here would be
-# rejected by QC.
+# 2 * rbinom(., 1, p) draws the fixed allele. The default parent_type = "inbred"
+# (and "dh") treat residual heterozygosity as a data error and block it in QC;
+# RILs legitimately keep a few heterozygous loci after finite selfing, so set
+# parent_type = "ril" for those (see "Parent type and residual heterozygosity").
 freq <- runif(n_markers, 0.1, 0.9)
 dose <- vapply(freq, function(p) 2L * rbinom(n_parents, 1, p), numeric(n_parents))
 geno <- data.frame(NAME = ids, dose, check.names = FALSE)
@@ -460,17 +463,53 @@ choice is available on `ng_design_crosses()` (Part 6) and the polyploid path
 ## Progeny type: DH or RIL
 
 `progeny` must match your real system, because it changes the within-family variance and therefore
-the usefulness ranking. `recomb_model` picks the map function.
+the usefulness ranking. `recomb_model` picks the map function. `parent_type` (next section) is a
+*separate* switch describing the **parents**, not the progeny.
 
 ```{r}
 result <- ng_run_cross_prediction(
   phenotype = pheno, genotype = geno, marker_map = map, trait_direction = direction,
   id_col = "NAME", map_position_unit = "bp", bp_per_cm = 1e6,
-  progeny = "RIL",                  # "DH" or "RIL"
-  recomb_model = "kosambi",  # "haldane" or "kosambi"
-  assume_inbred = FALSE
+  progeny = "RIL",             # progeny target: "DH" or "RIL"
+  recomb_model = "kosambi",    # "haldane" or "kosambi"
+  parent_type = "inbred"       # PARENT genetics; our demo parents are fully inbred (see below)
 )
 ```
+
+## Parent type and residual heterozygosity
+
+`parent_type` describes the **parents you cross**, and is independent of the `progeny`
+target above. It governs how residual heterozygosity in the parent genotypes is treated:
+
+- `"inbred"` (default) and `"dh"` — parents are expected fully fixed. A doubled-haploid
+  line is homozygous by construction, so heterozygous loci beyond a tiny tolerance signal a
+  genotyping/data error and are **blocked** in QC (`"dh"` uses a strict ~0.5% fraction floor;
+  `"inbred"` a looser ~2% tolerance).
+- `"ril"` — recombinant inbred lines legitimately retain heterozygosity at a few loci after
+  finite selfing, so residual het is **accepted**.
+
+Real programs rarely have parents that are homozygous at *every* locus — only DH lines are, by
+construction. When RIL parents carry residual heterozygosity, the usual inbred `a'Ra` variance
+kernel is biased **low**, because it ignores the extra p(1−p) gametic segregation those
+heterozygous loci contribute. Supplying **`phased_haplotypes`** (a per-parent phased haplotype
+array) lets the engine apply the *exact* within-cross additive variance for phased parents —
+validated to Monte-Carlo precision for DH and RIL-infinite progeny, and reducing byte-identically
+to `a'Ra` for fully inbred parents. Without phased haplotypes the `"ril"` path still runs but
+treats parents as inbred at those loci and is biased low; the run emits a warning saying so. See
+`docs/design/residual-het-parent-variance.md`.
+
+```{r}
+# RIL parents that carry residual heterozygosity: accept it with parent_type = "ril"
+# (and pass phased_haplotypes when you have phase, to use the exact residual-het variance).
+result_ril <- ng_run_cross_prediction(
+  phenotype = pheno, genotype = geno, marker_map = map, trait_direction = direction,
+  id_col = "NAME", map_position_unit = "bp", bp_per_cm = 1e6,
+  progeny = "RIL", parent_type = "ril"
+)
+```
+
+(The legacy `assume_inbred = TRUE/FALSE` flag still works but is deprecated: it maps to
+`parent_type = "inbred"`/`"ril"` and warns once.)
 
 ## The optimizer
 
@@ -678,7 +717,7 @@ See `inst/examples/23_*`.
 Every scored cross carries `expected_progeny_inbreeding` (the coancestry of the two parents).
 Penalize it with `lambda_progeny_inbreeding` and read mean/max progeny F from the plan summary.
 `lambda_progeny_inbreeding` and `lambda_mating` act on the same parent-pair axis and add — prefer
-setting one.
+the higher-level `mate_relatedness` control below, which manages this axis for you.
 
 ```{r progeny_inbreeding}
 r <- ng_run_cross_prediction(phenotype = pheno, genotype = geno, marker_map = map,
@@ -689,6 +728,38 @@ r$plan_summary$mean_progeny_inbreeding
 
 `ng_progeny_inbreeding_histogram()` / `ng_write_progeny_inbreeding_histogram_json()` produce a
 distribution for a report. See `inst/examples/22_*`.
+
+## Unified mate-relatedness control
+
+`lambda_mating` and `lambda_progeny_inbreeding` are the two low-level penalties on the
+parent-pair relatedness axis. Rather than tuning them separately, the single **`mate_relatedness`**
+control names the *intent* and lets the engine set the penalty:
+
+- `"avoid_inbreeding"` — penalize crossing close relatives (keeps progeny heterozygosity up),
+- `"favor_complementarity"` — reward it, to concentrate favorable alleles,
+- `"off"` (default) — leave per-cross relatedness unpenalized (group coancestry is still
+  constrained through `lambda_group` / the diversity dial).
+
+`mate_relatedness_weight` sets the strength.
+
+```{r mate_relatedness}
+r <- ng_run_cross_prediction(phenotype = pheno, genotype = geno, marker_map = map,
+  trait_direction = direction, id_col = "NAME", use_ocs = TRUE, n_crosses = 100,
+  mate_relatedness = "avoid_inbreeding", mate_relatedness_weight = 20)
+r$plan_summary$mean_progeny_inbreeding
+```
+
+The control is deliberately a single dial: setting `mate_relatedness` *and* one of the raw
+`lambda_mating` / `lambda_progeny_inbreeding` penalties is a **hard error**, so two relatedness
+terms can never silently stack.
+
+```{r mate_relatedness_stacking, error = TRUE}
+# This errors on purpose — choose the unified control OR the raw lambdas, not both.
+ng_run_cross_prediction(phenotype = pheno, genotype = geno, marker_map = map,
+  trait_direction = direction, id_col = "NAME", use_ocs = TRUE, n_crosses = 50,
+  mate_relatedness = "avoid_inbreeding", mate_relatedness_weight = 20,
+  lambda_progeny_inbreeding = 20)
+```
 
 ## Marker steering and lethal-allele guarding
 
@@ -715,6 +786,39 @@ r <- ng_run_cross_prediction(phenotype = pheno, genotype = geno, marker_map = ma
 
 See `inst/examples/24_*`. (The equivalent scores-level helper `ng_apply_marker_management()` is
 shown in Part 6.)
+
+## Per-trait check-line veto
+
+Breeders optimize one objective but still judge crosses **trait by trait**. `trait_checks` lets you
+name, for any trait, a **check line** — a genotyped parent used as a reference — and reject a cross
+whose predicted **mid-parent** value for that trait is on the *worse* side of the check. The worse
+side follows the trait's selection direction (increase → reject below the check; decrease → reject
+above). This is a **candidate-eligibility filter applied before allocation** — like the lethal
+guard, and exactly parallel to it — so the objective/index is never touched and it works with any
+`multi_trait_method`.
+
+Pass `trait_checks` as a data frame with `trait` and `check` columns (optional `direction` and
+`basis` columns override per row). `check_basis` picks the comparison scale for all checks —
+`"gebv"` (default, a GEBV from the marker effects) or `"phenotype"` (the trait's phenotype
+column) — and mid-parent and check are always compared on the *same* basis.
+
+```{r trait_checks}
+tc <- data.frame(trait = "yield", check = "P001", stringsAsFactors = FALSE)
+r <- ng_run_cross_prediction(phenotype = pheno, genotype = geno, marker_map = map,
+  trait_direction = direction, id_col = "NAME", use_ocs = TRUE, n_crosses = 100,
+  trait_checks = tc, check_basis = "gebv",
+  include_trait_gebv = TRUE)               # also surface each cross's mid-parent GEBV per trait
+# candidate_crosses gains per-trait check columns and a threshold flag:
+head(r$candidate_crosses[, c("parent1", "parent2", "yield_check_value",
+                             "yield_check_violation", "threshold_ok")])
+r$trait_check_diagnostics                  # active checks + counts (flagged / not-evaluable / excluded)
+```
+
+By default violators are only **flagged** (`yield_check_violation` / `threshold_ok`). Set
+`exclude_threshold_violators = TRUE` to drop them from the candidate pool before allocation. If a
+trait's value is missing on the chosen basis the cross is counted as **not-evaluable** — it is never
+silently treated as passing, and a check that would remove *every* candidate is an error, not an
+empty plan. Checks require trait-by-trait prediction (they are keyed by trait); one check per trait.
 
 ## Cost, budget, and logistics
 
@@ -929,6 +1033,56 @@ ng_plot_priority_score_vs_kinship(
 )
 ```
 
+## Portfolio and risk profiling
+
+Two crosses with the same score can be very different bets. For **single-trait** runs, the runner
+augments the priority tiers with a decision-support layer that decomposes each cross into two
+**purely genetic** axes and an estimation-risk bin, attaching them to `selected_crosses` and
+`candidate_crosses`:
+
+- `cross_level` — the additive-genetic mid-parent mean (how good the cross is on average),
+- `cross_upside` — the within-family genetic standard deviation `sqrt(VPM)` (what a lucky segregant
+  could add above the mid-parent — note this is √VPM, the *pure* genetic spread, not √PMV which
+  folds in estimation error),
+- `risk_bin` — a `low` / `med` / `high` binning of the mid-parent prediction-error variance
+  (`confidence_method` records how it was obtained),
+- `portfolio_profile` — a median split of level × upside into `breakthrough` (high/high),
+  `workhorse` (high level, modest spread), `long_shot` (modest level, high spread), or
+  `deprioritize`.
+
+```{r portfolio_risk}
+# A single-trait design (portfolio + risk columns are attached automatically).
+dir_yield <- direction[direction$Trait == "yield", ]
+res1 <- ng_run_cross_prediction(
+  phenotype = pheno[, c("NAME", "yield")], genotype = geno, marker_map = map,
+  trait_direction = dir_yield, id_col = "NAME", use_ocs = TRUE, n_crosses = 100)
+
+head(res1$selected_crosses[, c("parent1", "parent2", "cross_level", "cross_upside",
+                               "risk_bin", "portfolio_profile")])
+```
+
+The columns come straight off the exported runner, so a tier × profile cross-tab is one base-R
+call — a compact read on *what kind* of bets fill each tier — and the run reports a
+`priority_risk_diagnostics` block (counts by risk bin and profile, and how many top-tier crosses
+are high-risk):
+
+```{r portfolio_summary}
+table(res1$selected_crosses$priority_tier, res1$selected_crosses$portfolio_profile)
+res1$priority_risk_diagnostics$n_by_profile
+res1$priority_risk_diagnostics$top_tier_high_risk   # top-tier crosses flagged high estimation-risk
+```
+
+This is a *view* on top of the ranking — it never changes how crosses are scored or allocated.
+Every run (single- or multi-trait) also carries a `constraint_diagnostics` block that records what
+each allocation constraint did (crosses requested vs delivered, whether a kinship / parent-use /
+quota cap bound the plan, lethal / marker / budget activity), so a plan that came back smaller or
+different than requested explains itself:
+
+```{r constraint_diagnostics}
+res1$constraint_diagnostics[c("n_crosses_requested", "n_crosses_delivered",
+                              "constraints_reduced_plan", "max_pair_kinship")]
+```
+
 ## Workbooks, figures, and exports
 
 Write a breeder-facing crossing-plan workbook with selected crosses, priority tiers, parent use,
@@ -1083,7 +1237,7 @@ yield_scores <- ng_score_crosses(
   selection_prop = 0.10,
   recomb_model = "haldane",
   use_cpp = TRUE,
-  assume_inbred = FALSE
+  parent_type = "ril"
 )
 head(yield_scores)
 ```
@@ -1111,7 +1265,7 @@ effects_full <- ng_fit_ridge_effects(
 
 scores_full_pmv <- ng_score_crosses(
   geno = geno_matrix, effects = effects_full, marker_map = marker_map, ids = ids, pairs = pairs,
-  posterior_cov_full = effects_full$beta_cov_full, target = "DH", assume_inbred = FALSE
+  posterior_cov_full = effects_full$beta_cov_full, target = "DH", parent_type = "ril"
 )
 scores_full_pmv$pmv_full_posterior
 ```
@@ -1135,7 +1289,7 @@ for (i in seq_len(nrow(trait_direction_low))) {
                                 seed = 20260704 + i)
   sc_i  <- ng_score_crosses(geno = geno_matrix, effects = eff_i, marker_map = marker_map,
                             ids = ids, pairs = pairs, adjusted_pheno = yy, target = "DH",
-                            selection_prop = 0.10, recomb_model = "haldane", assume_inbred = FALSE)
+                            selection_prop = 0.10, recomb_model = "haldane", parent_type = "ril")
 
   sd_i  <- sqrt(pmax(sc_i$pmv, 0))
   pred  <- if (dir_i == "minimize") sc_i$cross_mean_blend - intensity * sd_i
@@ -1305,7 +1459,7 @@ Probability that progeny exceed a threshold, and expected excess above it (note 
   yy <- setNames(as.numeric(pheno[[tr]]), ids)
   ng_score_crosses(geno = geno_matrix, effects = ng_fit_ridge_effects(geno_matrix, yy, ids),
     marker_map = marker_map, ids = ids, pairs = pairs, adjusted_pheno = yy,
-    target = "DH", assume_inbred = FALSE)
+    target = "DH", parent_type = "ril")
 }
 scored <- .score_trait("yield")
 scored$pred_yield   <- scored$cross_mean_blend
@@ -1576,10 +1730,10 @@ This table groups the exported functions so you can find the right entry point.
 | Single- and multi-trait objectives | `ng_multitrait_spec()`, `ng_add_multitrait_score()`, `ng_multitrait_select_topn()`, `ng_optimize_multitrait_mating_plan()`, `ng_breeder_selection_objective()`, `ng_score_breeder_objective()`, `ng_optimize_breeder_selection_plan()` |
 | Cross optimization and OCS | `ng_optimize_mating_plan()`, `ng_add_balanced_usefulness_score()`, `ng_optimize_balanced_usefulness()`, `ng_optimize_robust_mating_plan()`, `ng_pareto_mate_allocation()`, `ng_allocate_family_sizes()` |
 | Gain–diversity balancing and constraints | `ng_select_by_strategy()`, `ng_select_by_target_coancestry()`, `ng_choose_frontier_point()`, `ng_progeny_inbreeding_histogram()` (constraint / progeny-inbreeding / cost arguments are on `ng_optimize_mating_plan()` and `ng_run_cross_prediction()`) |
-| Marker and lethal-allele management | `ng_marker_target_spec()`, `ng_marker_target_scores()`, `ng_lethal_recessive_spec()`, `ng_lethal_recessive_cross_risk()`, `ng_apply_marker_management()` |
+| Marker, lethal-allele, and trait-check management | `ng_marker_target_spec()`, `ng_marker_target_scores()`, `ng_lethal_recessive_spec()`, `ng_lethal_recessive_cross_risk()`, `ng_apply_marker_management()`, `ng_trait_check_spec()`, `ng_apply_trait_checks()` |
 | Frontend export artifacts | `ng_frontier_export_payload()`, `ng_write_frontier_json()`, `ng_write_progeny_inbreeding_histogram_json()`, `ng_run_comparison_payload()`, `ng_write_run_comparison_json()` |
 | Number of crosses | `ng_optimize_mating_plan_curve()`, `ng_plot_diminishing_returns()` |
-| Priority ranking and workbook output | `ng_rank_cross_priority()`, `ng_cross_priority_summary()`, `ng_plot_priority_score_vs_kinship()`, `ng_cross_priority_workbook_tables()`, `ng_write_cross_priority_workbook()`, `ng_write_crossing_plan_workbook()` |
+| Priority ranking and workbook output | `ng_rank_cross_priority()`, `ng_cross_priority_summary()`, `ng_plot_priority_score_vs_kinship()`, `ng_cross_priority_workbook_tables()`, `ng_write_cross_priority_workbook()`, `ng_write_crossing_plan_workbook()` (single-trait runs also attach `cross_level` / `cross_upside` / `risk_bin` / `portfolio_profile` columns and a `priority_risk_diagnostics` block automatically) |
 | Calibration and family metrics | `ng_validate_metric_calibration()`, `ng_fit_family_variance_calibrators()`, `ng_apply_family_variance_calibrators()`, `ng_family_metric_registry()`, `ng_family_metric_summary()`, `ng_family_selection_threshold()`, `ng_compare_selected_families()` |
 | Probability and posterior prediction | `ng_p_superior_progeny()`, `ng_p_superior_progeny_multitrait()`, `ng_add_p_superior_progeny()`, `ng_add_p_superior_progeny_multitrait()`, `ng_build_cross_trait_covariance()`, `ng_cross_trait_within_family_cov()`, `ng_expected_excess_above_threshold()`, `ng_posterior_cross_predict()`, `ng_posterior_multitrait_cross_predict()`, `ng_sample_ridge_posterior_bcm()`, `ng_sample_ridge_posterior_mcmc()`, `ng_posterior_genetic_covariance()`, `ng_estimate_genetic_covariance()`, `ng_estimate_phenotypic_covariance()` |
 | Native external-method compatibility | `ng_popvar_style_scores()`, `ng_add_popvar_scores()`, `ng_simplemating_relate_thinning()`, `ng_simplemating_build_crosses()`, `ng_simplemating_past_thinning()`, `ng_simplemating_select_crosses_native()`, `ng_simplemating_style_select()`, `ng_add_simplemating_scores()`, `ng_add_gms_vpm_scores()`, `ng_alphamate_default_executable()`, `ng_run_alphamate()`, `ng_select_alphamate()`, `ng_alphamate_style_select()`, `ng_add_external_baseline_scores()`, `ng_external_methods_needed()` |

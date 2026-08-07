@@ -40,6 +40,16 @@ ng_backend_controls <- function() {
       c(fast           = "Standard (fast)",
         full_posterior = "High-accuracy (full, slower)"),
       depends_on = "trait_value_metric=reliable_family_variance"),
+    # Parent line type. Governs the residual-heterozygosity audit independent of
+    # the `progeny` target: inbred/dh block het as a data error; ril accepts it.
+    # Supersedes the deprecated `assume_inbred` flag.
+    # Choice labels are deliberately worded as PARENT material ("... lines" /
+    # heterozygosity handling) so they do not collide with the `progeny` system
+    # labels below -- the two controls are different axes (parents vs progeny).
+    enum("parent_type", "Parent type", "scoring", "inbred",
+      c(inbred = "Inbred lines", dh = "Doubled-haploid lines",
+        ril = "RIL / partially inbred (keeps residual heterozygosity)"),
+      capability = "dh_ril_pmv_scoring"),
     # Two genetic progeny-variance models only (DH, RIL); the plural spellings
     # DHs/RILs are accepted backend aliases (ng_run_cp_target) but not offered as
     # separate dropdown choices, since they resolve to the same DH/RIL kernels.
