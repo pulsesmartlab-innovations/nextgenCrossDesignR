@@ -1,3 +1,33 @@
+#' Resolve the parent line-type policy governing the heterozygosity audit
+#'
+#' `parent_type` is the canonical control:
+#'   * "inbred" / "dh" -- fully fixed lines. A DH line is homozygous by
+#'     construction and finished inbreds are effectively so; a heterozygous
+#'     locus beyond the QC tolerance is a genotyping/data error and is a
+#'     BLOCKER (do not proceed).
+#'   * "ril" -- recombinant inbred lines legitimately retain residual
+#'     heterozygosity at a few loci after finite selfing; het is accepted and
+#'     scoring proceeds (with the DH/RIL kernel, biased low at those loci).
+#' The legacy boolean `assume_inbred` is deprecated: if supplied it overrides
+#' `parent_type` (TRUE -> "inbred", FALSE -> "ril") with a one-time warning.
+#' Returns a single canonical parent_type string.
+ng_reconcile_parent_type <- function(parent_type = c("inbred", "dh", "ril"),
+                                     assume_inbred = NULL) {
+  parent_type <- match.arg(parent_type)
+  if (!is.null(assume_inbred)) {
+    mapped <- if (isTRUE(assume_inbred)) "inbred" else "ril"
+    warning(sprintf(
+      "`assume_inbred` is deprecated; use parent_type = 'inbred' / 'dh' / 'ril'. Mapping assume_inbred = %s to parent_type = '%s'.",
+      as.character(assume_inbred), mapped), call. = FALSE)
+    return(mapped)
+  }
+  parent_type
+}
+
+# TRUE when the parent line type is a fully fixed line (DH or finished inbred),
+# for which residual heterozygosity is a data error rather than biology.
+ng_parent_type_blocks_het <- function(parent_type) parent_type %in% c("inbred", "dh")
+
 ng_score_crosses <- function(geno,
                              effects,
                              marker_map = NULL,
@@ -8,18 +38,24 @@ ng_score_crosses <- function(geno,
                              blup = NULL,
                              include_self = FALSE,
                              target = c("DH", "RIL"),
+                             parent_type = c("inbred", "dh", "ril"),
                              selection_prop = 0.10,
                              min_effect_reliability = 0.35,
                              recomb_model = c("haldane", "kosambi"),
                              window_cm = Inf,
                              use_cpp = TRUE,
-                             assume_inbred = TRUE,
+                             assume_inbred = NULL,
+                             ploidy = 2L,
                              inbred_tolerance = 0.05,
                              inbred_marker_fraction = 0.02,
+                             dh_marker_fraction = 0.005,
+                             phased_haplotypes = NULL,
                              posterior_cov_full = NULL,
                              parent_kinship = NULL,
                              grm_method = c("vanraden", "yang")) {
   target <- match.arg(target)
+  parent_type <- ng_reconcile_parent_type(parent_type, assume_inbred)
+  block_het <- ng_parent_type_blocks_het(parent_type)
   recomb_model <- match.arg(recomb_model)
   grm_method <- match.arg(grm_method)
   geno <- ng_as_numeric_matrix(geno, "geno")
@@ -31,20 +67,31 @@ ng_score_crosses <- function(geno,
   # F1 may be homozygous at some heterozygous loci. Refuse to silently produce
   # wrong PMV: detect non-inbred dosages and either error out or downgrade to
   # the relationship-distance baseline.
+  # A doubled haploid is 100% homozygous by construction, so DH material gets a
+  # STRICT het-marker fraction floor (`dh_marker_fraction`, default 0.5%): true
+  # het is a data error (wrong ploidy, contamination, a RIL mislabelled DH), and
+  # the small floor only absorbs routine genotyping noise (~0.1-0.5% per-call
+  # het error on real SNP/GBS panels) so clean DH data is not false-blocked
+  # while contamination (>> the floor) still blocks. Finished inbred lines
+  # ('inbred') keep the looser `inbred_marker_fraction` (default 2%); RILs are
+  # not audited for a blocker. The per-dosage `inbred_tolerance` (numeric
+  # rounding, e.g. 1.998 -> 2) applies in all cases. ploidy is threaded so the
+  # audit does not misread a homozygous polyploid dosage as heterozygous.
+  het_marker_fraction <- if (identical(parent_type, "dh")) dh_marker_fraction else inbred_marker_fraction
   inbred_audit <- ng_audit_inbred_dosage(
-    geno, tolerance = inbred_tolerance,
-    fraction_tolerance = inbred_marker_fraction
+    geno, ploidy = ploidy, tolerance = inbred_tolerance,
+    fraction_tolerance = het_marker_fraction
   )
-  if (isTRUE(assume_inbred) && length(inbred_audit$violators)) {
+  if (block_het && length(inbred_audit$violators)) {
     msg <- sprintf(
-      "%d / %d parents exceed the residual-heterozygosity tolerance (max het-marker frac = %.3f, examples: %s). The DH/RIL recombination-variance kernel assumes inbred parents; set assume_inbred = FALSE and supply phased haplotypes to ng_exact_gms_additive_var() for outbred parents.",
+      "%d / %d parents carry heterozygous loci beyond tolerance (max het-marker frac = %.3f, examples: %s), but parent_type = '%s' declares fully fixed lines. A doubled-haploid (DH) line is homozygous by construction, so heterozygous loci in DH / fixed material indicate a genotyping or data error -- BLOCKED, do not proceed. If these are RILs (which legitimately retain residual heterozygosity at a few loci after finite selfing), set parent_type = 'ril' to proceed. With phased_haplotypes supplied, het-parent crosses then get the exact residual-het variance (ng_gms_additive_var_general); without phased haplotypes the a'Ra kernel treats parents as inbred and is biased low at the het loci.",
       length(inbred_audit$violators), nrow(geno), inbred_audit$max_fraction,
-      paste(head(inbred_audit$violators, 4L), collapse = ", ")
+      paste(head(inbred_audit$violators, 4L), collapse = ", "), parent_type
     )
     ng_stop(msg)
-  } else if (!isTRUE(assume_inbred) && length(inbred_audit$violators)) {
+  } else if (!block_het && length(inbred_audit$violators)) {
     warning(sprintf(
-      "assume_inbred = FALSE: %d parents are not fully inbred. vpm / pmv below treat parents as inbreds and will be biased; use ng_exact_gms_additive_var() with phased haplotypes for the exact outbred path.",
+      "parent_type = 'ril': treating %d parent(s) as RILs with residual heterozygosity (expected for finite selfing). Note: DH / fully fixed lines are homozygous by construction -- if these were meant to be DH, the het loci are a data error, not biology (use parent_type = 'dh'/'inbred' to block). Supply phased_haplotypes to apply the exact residual-het variance (ng_gms_additive_var_general) to het-parent crosses; WITHOUT phased haplotypes the DH/RIL vpm / pmv below treat parents as fully inbred and are biased low (they omit the parental p(1-p) gametic segregation at the het loci; bias grows with the het fraction -- small for advanced RILs, larger for early generations). See docs/design/residual-het-parent-variance.md.",
       length(inbred_audit$violators)
     ), call. = FALSE)
   }
@@ -141,6 +188,19 @@ ng_score_crosses <- function(geno,
   i <- ng_selection_intensity(selection_prop)
   dh_var <- pmax(dh$vpm, 0)
   dh_pmv <- pmax(dh$pmv, 0)
+  dh_pmv_full <- if (!is.null(dh$pmv_full_posterior)) pmax(dh$pmv_full_posterior, 0) else NULL
+  # Exact residual-het-parent correction: when the parents are declared RILs and
+  # phased haplotypes are supplied, replace the (biased-low) inbred a'Ra vpm/pmv
+  # of het-parent crosses with the exact phased-haplotype variance
+  # (ng_gms_additive_var_general). Inbred-parent crosses and the no-phase / DH /
+  # inbred paths are untouched.
+  if (identical(parent_type, "ril") && !is.null(phased_haplotypes)) {
+    corr <- ng_apply_het_parent_correction(
+      dh_var, dh_pmv, dh_pmv_full, phased_haplotypes, sorted, pairs,
+      target = target, recomb_model = recomb_model,
+      beta_var = sorted$beta_var, beta_cov_full = posterior_cov_full)
+    dh_var <- corr$vpm; dh_pmv <- corr$pmv; dh_pmv_full <- corr$pmv_full
+  }
   effect_rel <- max(0, min(1, mean_source$reliability))
   # Blend mean sources with a smooth weight in the marker-effect reliability.
   # This mixes BLUEs/adjusted phenotypes (no marker-effect uncertainty) with
@@ -178,8 +238,8 @@ ng_score_crosses <- function(geno,
   # (genomicMateSelectR formulation); NA otherwise.
   out$vpm <- dh_var
   out$pmv <- dh_pmv
-  if (!is.null(dh$pmv_full_posterior)) {
-    out$pmv_full_posterior <- pmax(dh$pmv_full_posterior, 0)
+  if (!is.null(dh_pmv_full)) {
+    out$pmv_full_posterior <- dh_pmv_full
   } else {
     out$pmv_full_posterior <- NA_real_
   }
@@ -615,4 +675,95 @@ ng_gametic_ld_parent <- function(parent, haplo_mat, recomb_decay_mat) {
   X <- haplo_mat[rows, colnames(recomb_decay_mat), drop = FALSE]
   p <- colMeans(X)
   recomb_decay_mat * ((0.5 * crossprod(X)) - tcrossprod(p))
+}
+
+#' Exact within-cross additive variance for arbitrary phased parents
+#'
+#' Generalizes the inbred-parent kernel `a'Ra` to parents that carry residual
+#' heterozygosity (real RILs), from the phased parental haplotypes. See
+#' docs/design/residual-het-parent-variance.md for the derivation. Writing
+#' `d1 = HapA - HapB`, `d2 = HapA - HapB` for the two parents (nonzero only at
+#' heterozygous loci) and `R` the target recombination kernel:
+#'   DH  : Var = a'Ra + 1/2 b'[ (1-r) o R o (d1 d1' + d2 d2') ] b, (1-r) = (1+R)/2
+#'   RIL(inf): Var = a'R*a + 1/2 b'[ R* o (d1 d1' + d2 d2') ] b,  R* = (1-2r)/(1+2r)
+#' with `a_k = 1/2 (x1_k - x2_k) b_k`. For inbred parents (d1 = d2 = 0) this
+#' reduces exactly to `a'Ra`. PMV uses the same full kernel K (Var = b'Kb):
+#' `PMV = b'Kb + trace(K Sigma_b)`. `recomb_decay_mat` must be the
+#' target-appropriate kernel (DH: 1-2r; RIL: (1-2r)/(1+2r)).
+ng_gms_additive_var_general <- function(parent1, parent2, haplo_mat, beta,
+                                        recomb_decay_mat, beta_cov = NULL,
+                                        target = c("DH", "RIL")) {
+  target <- match.arg(target)
+  markers <- colnames(recomb_decay_mat)
+  get_pair <- function(p) {
+    rows <- paste0(p, c("_HapA", "_HapB"))
+    miss <- setdiff(rows, rownames(haplo_mat))
+    if (length(miss)) ng_stop("haplo_mat is missing haplotypes: ", paste(miss, collapse = ", "))
+    matrix(haplo_mat[rows, markers, drop = FALSE], nrow = 2L,
+           dimnames = list(c("HapA", "HapB"), markers))
+  }
+  H1 <- get_pair(parent1); H2 <- get_pair(parent2)
+  x1 <- H1["HapA", ] + H1["HapB", ]; x2 <- H2["HapA", ] + H2["HapB", ]
+  d1 <- H1["HapA", ] - H1["HapB", ]; d2 <- H2["HapA", ] - H2["HapB", ]
+  beta <- beta[markers]; beta[!is.finite(beta)] <- 0
+  R <- recomb_decay_mat
+  # Term-2 co-inheritance x within-parent kernel: DH (1-r)(1-2r) = (1+R)R/2; RIL R* itself.
+  K2 <- if (identical(target, "DH")) 0.5 * (1 + R) * R else R
+  # Full progeny genotypic covariance K such that Var(G) = beta' K beta.
+  Kfull <- R * (0.25 * tcrossprod(x1 - x2)) + 0.5 * K2 * (tcrossprod(d1) + tcrossprod(d2))
+  Kfull <- 0.5 * (Kfull + t(Kfull))
+  vpm <- as.numeric(crossprod(beta, Kfull %*% beta))
+  pmv <- vpm
+  if (!is.null(beta_cov)) {
+    bc <- beta_cov[markers, markers, drop = FALSE]
+    pmv <- vpm + sum(Kfull * bc)
+  }
+  c(VPM = max(0, vpm), PMV = max(0, pmv))
+}
+
+# Overwrite vpm/pmv for crosses whose parents carry residual heterozygosity with
+# the exact phased-haplotype formula. Only het-parent crosses are touched;
+# inbred-parent crosses keep the a'Ra path byte-identical. Uses a DENSE
+# recombination kernel (the het correction is exact only densely; the a'Ra
+# window_cm truncation does not apply to it). Silently no-ops if the phased
+# haplotypes do not cover the scored markers.
+ng_apply_het_parent_correction <- function(vpm, pmv, pmv_full,
+                                           phased_haplotypes, sorted, pairs,
+                                           target, recomb_model,
+                                           beta_var, beta_cov_full = NULL) {
+  if (!is.array(phased_haplotypes) || length(dim(phased_haplotypes)) != 3L ||
+      dim(phased_haplotypes)[2L] != 2L || is.null(dimnames(phased_haplotypes)[[1L]]) ||
+      is.null(dimnames(phased_haplotypes)[[3L]])) {
+    ng_stop("phased_haplotypes must be a named 3D array [sample, 2 homologs, marker]")
+  }
+  markers <- sorted$marker_map$marker
+  ph <- phased_haplotypes
+  if (!all(markers %in% dimnames(ph)[[3L]])) return(list(vpm = vpm, pmv = pmv, pmv_full = pmv_full))
+  ph <- ph[, , markers, drop = FALSE]
+  ids_ph <- dimnames(ph)[[1L]]
+  het_of <- function(id) id %in% ids_ph && any(ph[id, 1L, ] != ph[id, 2L, ])
+  need <- intersect(unique(c(pairs$parent1, pairs$parent2)), ids_ph)
+  if (!length(need)) return(list(vpm = vpm, pmv = pmv, pmv_full = pmv_full))
+  hap_rows <- matrix(0, nrow = 2L * length(need), ncol = length(markers),
+                     dimnames = list(as.vector(rbind(paste0(need, "_HapA"),
+                                                     paste0(need, "_HapB"))), markers))
+  for (k in seq_along(need)) {
+    hap_rows[2L * k - 1L, ] <- ph[need[k], 1L, ]
+    hap_rows[2L * k,      ] <- ph[need[k], 2L, ]
+  }
+  R <- ng_recomb_decay_matrix(sorted$marker_map, model = recomb_model, target = target)
+  beta <- sorted$effects[markers]
+  bc_diag <- diag(as.numeric(beta_var[markers]), length(markers)); dimnames(bc_diag) <- list(markers, markers)
+  bc_full <- if (!is.null(beta_cov_full)) beta_cov_full[markers, markers, drop = FALSE] else NULL
+  for (i in seq_len(nrow(pairs))) {
+    p1 <- as.character(pairs$parent1[i]); p2 <- as.character(pairs$parent2[i])
+    if ((het_of(p1) || het_of(p2)) && p1 %in% ids_ph && p2 %in% ids_ph) {
+      r_d <- ng_gms_additive_var_general(p1, p2, hap_rows, beta, R, beta_cov = bc_diag, target = target)
+      vpm[i] <- r_d[["VPM"]]; pmv[i] <- r_d[["PMV"]]
+      if (!is.null(bc_full) && !is.null(pmv_full)) {
+        pmv_full[i] <- ng_gms_additive_var_general(p1, p2, hap_rows, beta, R, beta_cov = bc_full, target = target)[["PMV"]]
+      }
+    }
+  }
+  list(vpm = vpm, pmv = pmv, pmv_full = pmv_full)
 }

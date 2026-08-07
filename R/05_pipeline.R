@@ -8,6 +8,8 @@ ng_design_crosses <- function(geno,
                               n_crosses = 100,
                               max_crosses_per_parent = 6,
                               target = c("DH", "RIL"),
+                              parent_type = c("inbred", "dh", "ril"),
+                              phased_haplotypes = NULL,
                               recomb_model = c("haldane", "kosambi"),
                               selection_prop = 0.10,
                               min_effect_reliability = 0.35,
@@ -28,7 +30,7 @@ ng_design_crosses <- function(geno,
                               ld_ploidy = 2,
                               ld_backend = c("auto", "cpp", "r"),
                               use_cpp = TRUE,
-                              assume_inbred = TRUE,
+                              assume_inbred = NULL,
                               grm_method = c("vanraden", "yang"),
                               seed = 1L,
                               ...) {
@@ -36,6 +38,7 @@ ng_design_crosses <- function(geno,
   ld_backend <- match.arg(ld_backend)
   grm_method <- match.arg(grm_method)
   target <- match.arg(target)
+  parent_type <- ng_reconcile_parent_type(parent_type, assume_inbred)
   recomb_model <- match.arg(recomb_model)
   geno <- ng_as_numeric_matrix(geno, "geno")
   ids <- as.character(ids)
@@ -62,12 +65,13 @@ ng_design_crosses <- function(geno,
     blue = blue,
     blup = blup,
     target = target,
+    parent_type = parent_type,
+    phased_haplotypes = phased_haplotypes,
     recomb_model = recomb_model,
     selection_prop = selection_prop,
     min_effect_reliability = min_effect_reliability,
     window_cm = window_cm,
     use_cpp = use_cpp,
-    assume_inbred = assume_inbred,
     grm_method = grm_method
   )
   # Marker steering / lethal-allele guarding at the scoring layer (Module 4): attach the
