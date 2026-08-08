@@ -62,4 +62,11 @@ stopifnot(inherits(run(Gbelow, parent_type = "dh"), "ng_cross_prediction_result"
 stopifnot(inherits(run(Gabove, parent_type = "inbred"), "ng_cross_prediction_result"))   # inbred: 0.83% < 2%, tolerated
 stopifnot(inherits(suppressWarnings(run(Gabove, parent_type = "ril")), "ng_cross_prediction_result"))
 
-cat("parent_type_het_governance: DH 0.5% floor (above blocks, noise passes); inbred tolerates; RIL proceeds; legacy reconciled\n")
+## --- registry advertises parent_type as a control (so frontends can render it) ---
+ctls <- ng_backend_controls()
+pt <- Filter(function(c) identical(c$id, "parent_type"), ctls)
+stopifnot(length(pt) == 1L)
+stopifnot(identical(pt[[1]]$default, "inbred"))
+stopifnot(setequal(vapply(pt[[1]]$choices, function(x) x$value, ""), c("inbred", "dh", "ril")))
+
+cat("parent_type_het_governance: DH 0.5% floor (above blocks, noise passes); inbred tolerates; RIL proceeds; legacy reconciled; registry advertises parent_type\n")
