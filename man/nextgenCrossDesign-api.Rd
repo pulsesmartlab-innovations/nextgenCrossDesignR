@@ -132,6 +132,7 @@
 \alias{ng_write_head_to_head_dashboard_json}
 \alias{ng_write_head_to_head_visual_report}
 \alias{ng_run_stage}
+\alias{ng_poly_run_stage}
 \title{Public NextGen Cross Design Backend API}
 \description{
 Public backend functions for cross scoring, mate allocation, multi-trait
