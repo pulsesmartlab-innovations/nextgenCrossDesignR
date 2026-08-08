@@ -1,7 +1,7 @@
 Package: nextgenCrossDesign
 Type: Package
 Title: Next Generation Cross Prediction and Mate Allocation
-Version: 0.17.2
+Version: 0.18.0
 Authors@R: c(
     person("NextGen", "Cross Design Team", email = "maintainer@example.com", role = c("aut", "cre"))
     )
