@@ -42,7 +42,12 @@ ng_polyploid_score_crosses <- function(dosage, effects, ploidy = 2L, pairs = NUL
   if (length(unknown)) ng_stop("pairs contains unknown parent IDs: ", paste(unknown, collapse = ", "))
   if (any(p1 == p2)) ng_stop("pairs must not contain self-crosses")
 
-  # within-family additive segregation variance from the progeny-moment table: Var = sum_k a_k^2 Var(X_k)
+  # Within-family additive segregation variance from the progeny-moment table:
+  # Var = sum_k a_k^2 Var(X_k). The between-locus term is zero (R = I) because autopolyploid
+  # parental phase is not identifiable from dosage; averaged over the phase configurations
+  # consistent with the dosages that covariance is EXACTLY zero, so this is unbiased rather than
+  # approximate -- but it cannot separate two crosses that differ only in linkage phase.
+  # See R/49 header for the full statement.
   mt <- ng_polyploid_progeny_moment_table(ploidy, double_reduction = double_reduction)
   Mi <- geno; storage.mode(Mi) <- "integer"
   poly_var <- vapply(seq_along(p1), function(i) {
@@ -57,6 +62,7 @@ ng_polyploid_score_crosses <- function(dosage, effects, ploidy = 2L, pairs = NUL
     poly_var = poly_var,
     poly_usefulness = (gebv[p1] + gebv[p2]) / 2 + intensity * sqrt(pmax(poly_var, 0)),
     poly_parent1_gebv = gebv[p1], poly_parent2_gebv = gebv[p2],
+    variance_model = "unlinked_phase_marginalized",
     pair_kinship = ng_poly4x_pair_coancestry(parent_kinship, pairs),
     stringsAsFactors = FALSE
   )

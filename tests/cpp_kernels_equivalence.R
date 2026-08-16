@@ -181,3 +181,59 @@ cat(sprintf("  local_swap: R obj=%.6f, C++ obj=%.6f, gap=%g\n",
             obj_r, obj_cpp, swap_gap))
 cat(sprintf("  local_swap (parent-use): R obj=%.6f, C++ obj=%.6f, gap=%g\n",
             obj_r2, obj_cpp2, pu_gap))
+
+# --- generated Rcpp exports must match the kernel source ------------------------------------
+# ng_load() compiles src/ng_kernels.cpp with Rcpp::sourceCpp, which BYPASSES RcppExports
+# entirely. So every test here can pass against a new kernel signature while the generated
+# exports still declare the old one -- and the mismatch only appears when the PACKAGE is
+# installed (R CMD check). This guard makes that failure visible to the test suite: if you
+# change an exported kernel signature, run Rcpp::compileAttributes(".").
+pkg_root <- getwd()
+repeat {
+  if (file.exists(file.path(pkg_root, "DESCRIPTION")) &&
+      dir.exists(file.path(pkg_root, "src"))) break
+  parent <- dirname(pkg_root)
+  if (identical(parent, pkg_root)) break
+  pkg_root <- parent
+}
+src_path <- file.path(pkg_root, "src", "ng_kernels.cpp")
+exp_path <- file.path(pkg_root, "R", "RcppExports.R")
+if (file.exists(src_path) && file.exists(exp_path)) {
+  src <- readLines(src_path, warn = FALSE)
+  hits <- grep("^\\s*//\\s*\\[\\[Rcpp::export\\]\\]", src)
+  sigs <- list()
+  for (h in hits) {
+    # signature may wrap across lines; accumulate until the closing paren of the arg list
+    buf <- ""
+    for (j in seq(h + 1L, min(h + 25L, length(src)))) {
+      buf <- paste(buf, trimws(src[[j]]))
+      if (grepl(")", buf, fixed = TRUE)) break
+    }
+    nm <- sub("^.*?([A-Za-z_][A-Za-z0-9_]*)\\s*\\(.*$", "\\1", buf)
+    args <- sub("^[^(]*\\(", "", buf); args <- sub("\\).*$", "", args)
+    args <- trimws(strsplit(args, ",", fixed = TRUE)[[1]])
+    args <- args[nzchar(args)]
+    # last identifier of each declaration is the parameter name (strip default values)
+    args <- vapply(args, function(a) {
+      a <- trimws(sub("=.*$", "", a))
+      sub("^.*[^A-Za-z0-9_]([A-Za-z0-9_]+)$", "\\1", a)
+    }, character(1), USE.NAMES = FALSE)
+    sigs[[nm]] <- args
+  }
+  env <- new.env()
+  sys.source(exp_path, envir = env)
+  for (nm in names(sigs)) {
+    if (!exists(nm, envir = env, inherits = FALSE)) {
+      stop(sprintf("kernel '%s' is exported in ng_kernels.cpp but absent from R/RcppExports.R; run Rcpp::compileAttributes('.')", nm))
+    }
+    got <- names(formals(get(nm, envir = env, inherits = FALSE)))
+    if (!identical(got, sigs[[nm]])) {
+      stop(sprintf(paste0("RcppExports is stale for '%s'.\n  ng_kernels.cpp: %s\n  RcppExports.R: %s\n",
+                          "  run Rcpp::compileAttributes('.') and rebuild."),
+                   nm, paste(sigs[[nm]], collapse = ", "), paste(got, collapse = ", ")))
+    }
+  }
+  cat(sprintf("RcppExports signature guard passed (%d exported kernels)\n", length(sigs)))
+} else {
+  cat("RcppExports signature guard skipped (source not located)\n")
+}

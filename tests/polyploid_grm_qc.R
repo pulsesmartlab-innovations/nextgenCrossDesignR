@@ -75,3 +75,41 @@ Gclean <- ng_polyploid_grm(qc$clean, ploidy = 4L)
 stopifnot(all(is.finite(Gclean)), nrow(Gclean) == nrow(qc$clean))
 
 cat("polyploid GRM + QC test passed\n")
+
+# --- the poly4x path must use the CORRECT GRM for coancestry (0.19.x) -----------------------
+# ng_poly4x_parent_relationship centres dosage on the ploidy midpoint, i.e. it assumes every
+# allele frequency is 0.5. On UNRELATED individuals it therefore reports strong relatedness, and
+# -- the part that actually breaks OCS -- it reorders the pairs. Pinned here so the poly4x
+# scorer cannot silently regress to it.
+set.seed(77)
+Pg <- 4L; ng_ <- 150L; mg <- 400L
+frg <- runif(mg, 0.05, 0.95)
+Mg <- matrix(rbinom(ng_ * mg, Pg, rep(frg, each = ng_)), ng_, mg,
+             dimnames = list(sprintf("u%03d", seq_len(ng_)), sprintf("q%03d", seq_len(mg))))
+Kmid <- ng_poly4x_parent_relationship(Mg, ploidy = Pg)
+Kvr  <- ng_polyploid_grm(Mg, ploidy = Pg, method = "vanraden")
+offd <- function(K) K[upper.tri(K)]
+# correct GRM: unrelated individuals sit near zero, diagonal near one
+stopifnot(abs(mean(offd(Kvr))) < 0.05, abs(mean(diag(Kvr)) - 1) < 0.1)
+# midpoint form: grossly inflated, and NOT merely a rescaling -- the ranking differs
+stopifnot(mean(offd(Kmid)) > 1.0)
+stopifnot(stats::cor(offd(Kmid), offd(Kvr), method = "spearman") < 0.9)
+cat("polyploid GRM: midpoint form is inflated and re-ranks pairs; VanRaden is unbiased\n")
+
+# The poly4x scorer must expose the frequency-centred matrix. Checked structurally (running the
+# scorer needs AlphaSimR) by confirming the source calls ng_polyploid_grm, not the midpoint form.
+src_root <- getwd()
+repeat {
+  if (file.exists(file.path(src_root, "DESCRIPTION")) && dir.exists(file.path(src_root, "R"))) break
+  parent <- dirname(src_root); if (identical(parent, src_root)) break; src_root <- parent
+}
+sc_src <- file.path(src_root, "R", "16_poly4x_scoring.R")
+if (file.exists(sc_src)) {
+  txt <- readLines(sc_src, warn = FALSE)
+  assign_line <- grep("^\\s*parent_kinship\\s*<-", txt, value = TRUE)
+  stopifnot(length(assign_line) >= 1L)
+  stopifnot(any(grepl("ng_polyploid_grm", assign_line, fixed = TRUE)))
+  stopifnot(!any(grepl("ng_poly4x_parent_relationship", assign_line, fixed = TRUE)))
+  cat("poly4x scorer builds parent_kinship from ng_polyploid_grm\n")
+}
+cat("poly4x coancestry GRM test passed\n")

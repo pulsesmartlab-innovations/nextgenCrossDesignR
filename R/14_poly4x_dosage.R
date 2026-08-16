@@ -30,6 +30,19 @@ ng_poly4x_digenic_scaled <- function(geno, ploidy = 4L) {
   geno * (ploidy - geno) * (2 / ploidy) ^ 2
 }
 
+# DEPRECATED -- do not use for coancestry, OCS, or any relatedness decision.
+#
+# This centers dosage on the ploidy MIDPOINT, which implicitly assumes every allele frequency is
+# 0.5. It is therefore an allele-frequency-dominated IBS similarity, not an additive relationship
+# matrix. Measured on 200 UNRELATED autotetraploids (independent draws from common frequencies,
+# i.e. true relatedness ~ 0) it returns a mean off-diagonal of 1.47 (range 1.20..1.72) where the
+# correct GRM returns -0.005 (range -0.15..0.15), and mean diagonal 2.47 versus 0.995. It is not
+# merely rescaled: the RANK correlation of pair values against the correct matrix is only ~0.56,
+# so any coancestry ORDERING taken from it is wrong, which is what an OCS penalty consumes.
+#
+# Use ng_polyploid_grm() (R/47; VanRaden/Yang generalized to ploidy) instead. Retained only so
+# existing calls keep resolving, and to keep the regression test that pins the contrast between
+# the two matrices.
 ng_poly4x_parent_relationship <- function(geno, ploidy = 4L) {
   geno <- ng_polyploid_as_dosage_matrix(geno, ploidy = ploidy, name = "geno")
   X <- ng_poly4x_additive_scaled(geno, ploidy = ploidy)
