@@ -9,7 +9,7 @@ prediction** and **mate allocation** as two separate problems, so each can be
 solved with the right method and audited independently.
 
 <!-- badges -->
-![version](https://img.shields.io/badge/version-0.9.0-blue)
+![version](https://img.shields.io/badge/version-0.20.0-blue)
 ![R](https://img.shields.io/badge/R-%E2%89%A5%204.1-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![status](https://img.shields.io/badge/core%20path-validated%20(DH%2FRIL)-brightgreen)
@@ -56,6 +56,15 @@ matrix. The PMV extension propagates effect uncertainty with
 - **Multi-trait selection** — direction-aware objectives with `auto`,
   `weighted`, `economic_index`, `desired_gain`, and soft/`strict` threshold
   methods.
+- **Breeder decision controls** — a unified `mate_relatedness` dial (avoid
+  inbreeding / favor complementarity), a **per-trait check-line veto** that
+  screens candidates against a reference line before allocation, and a
+  **portfolio & risk** decomposition (genetic level × within-family upside ×
+  estimation risk) layered on the priority tiers — single-trait on the trait
+  itself, multi-trait on the selection index.
+- **Self-explaining plans** — every run returns `constraint_diagnostics` (what
+  each allocation constraint did) and `priority_risk_diagnostics`, so a plan that
+  came back smaller or different than requested explains itself.
 - **Portfolio sizing** — sweep the number of crosses and recommend K by
   diminishing returns (elbow / kneedle), effective-population-size floor, or a
   coancestry budget.
@@ -70,7 +79,7 @@ matrix. The PMV extension propagates effect uncertainty with
 
 ```r
 # from a local source tarball (built from this repo):
-install.packages("nextgenCrossDesign_0.9.0.tar.gz", repos = NULL, type = "source")
+install.packages("nextgenCrossDesign_0.20.0.tar.gz", repos = NULL, type = "source")
 
 # or directly from GitHub:
 # install.packages("remotes")
@@ -138,6 +147,50 @@ Methods: `auto` (rank-normalized, equal weights unless supplied),
 Thresholds are **soft by default** (missing a target is penalized, not
 discarded); use `strict_thresholds = TRUE` for hard quality/market cutoffs. For
 user-facing workflows prefer `ng_breeder_selection_objective()`.
+
+### Breeder decision controls
+
+Three controls on `ng_run_cross_prediction()` add real breeding decisions on top
+of the objective, without touching how crosses are scored:
+
+```r
+result <- ng_run_cross_prediction(
+  genotype = geno, phenotype = pheno, marker_map = map, n_crosses = 100,
+  # 1. Relatedness intent as one dial (not two stacked lambdas):
+  mate_relatedness = "avoid_inbreeding", mate_relatedness_weight = 20,
+  # 2. Per-trait check-line veto — flag/remove crosses whose mid-parent for a
+  #    trait is worse than a reference line, on GEBV or phenotype basis:
+  trait_checks = data.frame(trait = "yield", check = "P001"),
+  check_basis = "gebv", exclude_threshold_violators = FALSE
+)
+```
+
+- **Unified mate-relatedness** — `mate_relatedness` names the intent
+  (`avoid_inbreeding` / `favor_complementarity` / `off`) and sets the parent-pair
+  penalty for you; setting it *and* the raw `lambda_mating` /
+  `lambda_progeny_inbreeding` is a hard error, so two relatedness terms can never
+  silently stack.
+- **Per-trait check-line veto** — a candidate-eligibility filter applied *before*
+  allocation (like the lethal guard), so the objective/index is never touched and
+  it works with any multi-trait method. Flags by default; `exclude_threshold_violators = TRUE`
+  drops violators. Not-evaluable crosses are counted, never silently passed.
+- **Portfolio & risk profiling** — the runner attaches `cross_level`,
+  `cross_upside`, a `risk_bin` from the mid-parent prediction-error variance, a
+  `portfolio_profile` (`breakthrough` / `workhorse` / `long_shot` /
+  `deprioritize`), and `portfolio_basis`. Single-trait resolves the axes on the
+  trait itself (`cross_upside` = √VPM, the pure within-family genetic SD);
+  multi-trait resolves them on the **selection index** (`cross_level` = w′m over
+  mid-parent GEBVs, `cross_upside` = √(w′Sw) using the exact recombination-aware
+  cross-trait covariance), and adds `risk_driver_trait` naming the component trait
+  carrying most of the index uncertainty. Read `portfolio_basis` before
+  interpreting the axes: for the rank-based index methods (`auto` / `weighted` /
+  `threshold`) it is `linearized_rank_index`, meaning the quadrant is indicative
+  rather than a decomposition of `multi_trait_score`. `cross_confidence` and
+  `risk_bin` are within-run quantities and are not comparable across runs.
+
+Every run also returns a `constraint_diagnostics` block (crosses requested vs
+delivered, which caps bound the plan, lethal/marker/budget activity) so a plan
+explains itself, plus `priority_risk_diagnostics` for the portfolio/risk layer.
 
 ### Portfolio size and diminishing returns
 
@@ -231,10 +284,29 @@ the right **direction and scale** against realized simulated family variance.
 
 ## Versioning and changelog
 
-Releases are tagged (`v0.4.0` … `v0.9.0`). See
+Releases are tagged from `v0.4.0` through `v0.14.0`; later versions are on `main`
+but not yet tagged, so install from a built tarball or from `main` for those. See
 [GitHub Releases](https://github.com/pulsesmartlab-innovations/nextgenCrossDesignR/releases)
 for full notes. Recent highlights:
 
+- **0.20.0** — polyploid quantitative-genetics audit: identified additive/dominance
+  split (dominance orthogonalized against the additive design), correct
+  frequency-centred GRM for `poly4x` coancestry, simulated-variance Monte-Carlo SE
+  surfaced, and the autopolyploid `variance_model` stated
+  (`unlinked_phase_marginalized` — unbiased over unknown phase, but it cannot
+  separate crosses differing only in linkage phase).
+- **0.19.0** — multi-trait portfolio & risk on the selection index: `cross_level` =
+  w′m, `cross_upside` = √(w′Sw) from the exact cross-trait covariance, plus
+  `portfolio_basis` and per-cross risk attribution.
+- **0.14.0** — per-trait check-line veto (`trait_checks` / `check_basis` /
+  `exclude_threshold_violators`): flag or remove candidate crosses whose
+  mid-parent for a trait is worse than a reference line, before allocation.
+- **0.13.0** — single-trait portfolio & risk decision layer (`cross_level`,
+  `cross_upside`, `risk_bin`, `portfolio_profile`) plus `priority_risk_diagnostics`.
+- **0.12.0** — `constraint_diagnostics` on every run (what each allocation
+  constraint did).
+- **0.11.0** — unified `mate_relatedness` control (hard error on stacking with the
+  raw relatedness lambdas).
 - **0.9.0** — recombination-aware within-family variance for the allopolyploid
   disomic-subgenome path (exact per-subgenome `a′R a`, summed) and VanRaden/Yang
   GRM for subgenomes.
