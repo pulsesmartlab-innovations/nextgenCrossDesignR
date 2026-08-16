@@ -144,3 +144,23 @@ stopifnot(length(status) == 1L, is.finite(status), status == 0L)
 stopifnot(file.exists(cli_out))
 
 cat("backend capability registry tests passed\n")
+
+# --- cross-priority risk & portfolio family (0.19.0) ---------------------------------------
+# The whole risk/portfolio layer was previously undiscoverable: the frontend reads capabilities
+# from this registry and had no entry for it.
+crp <- methods[methods$id == "cross_priority_risk_portfolio", , drop = FALSE]
+stopifnot(nrow(crp) == 1L)
+stopifnot(identical(crp$category, "scoring"), isTRUE(crp$default))
+stopifnot(grepl("ng_annotate_cross_priority_multitrait", crp$backend_function, fixed = TRUE))
+# The evidence has to carry the load-bearing frontend contract: the basis vocabulary, the badge
+# obligation for rank indices, and the within-run-only caveat.
+for (needle in c("portfolio_basis", "linearized_rank_index", "linear_index", "single_trait",
+                 "badge", "within-run", "cross_upside", "risk_driver_trait")) {
+  stopifnot(grepl(needle, crp$evidence, fixed = TRUE))
+}
+# Appending the row must not have shifted any other family's parallel fields.
+stopifnot(identical(methods$label[methods$id == "multitrait_auto"], "Auto multi-trait default"))
+stopifnot(identical(methods$category[methods$id == "ocs_allocation"], "allocation"))
+stopifnot(!anyNA(methods$id), !anyNA(methods$label), !anyNA(methods$category),
+          !anyNA(methods$default), !anyNA(methods$backend_function), !anyNA(methods$evidence))
+cat("cross-priority risk/portfolio registry family test passed\n")

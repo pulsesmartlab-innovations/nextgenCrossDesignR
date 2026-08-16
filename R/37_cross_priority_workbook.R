@@ -135,6 +135,43 @@ ng_cpw_gebv_label <- function(col) {
   sub("_mean_gebv$", "_mid_parent_gebv", col)
 }
 
+# Portfolio + risk columns for the workbook, in breeder-reading order: where the cross sits, how
+# much to trust it, and (multi-trait only) which trait is driving that doubt. Returns an empty
+# list when the run carries no portfolio annotation at all.
+#
+# risk_bin / cross_confidence are WITHIN-RUN quantities (tertiles and a min-max normalization of
+# the crosses in this plan), so the header carries that caveat -- a spreadsheet outlives the app
+# session that explains it, and a plan always contains roughly a third "high" whether it is well
+# or badly estimated.
+ng_cpw_portfolio_cols <- function(crosses, n) {
+  has <- function(col) col %in% names(crosses) && !all(is.na(crosses[[col]]))
+  out <- list()
+  if (has("portfolio_profile")) out[["portfolio_profile"]] <- as.character(crosses$portfolio_profile)
+  if (has("cross_level"))       out[["cross_level"]]       <- ng_cpw_numeric(crosses$cross_level)
+  if (has("cross_upside"))      out[["cross_upside"]]      <- ng_cpw_numeric(crosses$cross_upside)
+  if (has("risk_bin"))          out[["risk_bin_within_plan"]] <- as.character(crosses$risk_bin)
+  if (has("cross_confidence"))  out[["cross_confidence_within_plan"]] <- ng_cpw_numeric(crosses$cross_confidence)
+  # Multi-trait only: names the component trait contributing most of the index prediction error.
+  if (has("risk_driver_trait")) out[["risk_driver_trait"]] <- as.character(crosses$risk_driver_trait)
+  if (has("risk_driver_share")) out[["risk_driver_share"]] <- ng_cpw_numeric(crosses$risk_driver_share)
+  # portfolio_basis is constant per run, but a spreadsheet gets separated from its run notes --
+  # carrying it per row is what stops a rank-index quadrant being read as a decomposition.
+  if (has("portfolio_basis"))   out[["portfolio_basis"]]   <- as.character(crosses$portfolio_basis)
+  lapply(out, function(v) if (length(v) == n) v else rep(NA, n))
+}
+
+# Insert named columns immediately before an existing column, preserving order.
+ng_cpw_insert_before <- function(df, before, cols) {
+  if (!length(cols)) return(df)
+  for (nm in names(cols)) df[[nm]] <- cols[[nm]]
+  at <- match(before, names(df))
+  if (is.na(at)) return(df)
+  added <- names(cols)
+  keep <- setdiff(names(df), added)
+  at <- match(before, keep)
+  df[, append(keep, added, after = at - 1L), drop = FALSE]
+}
+
 ng_cpw_make_selected <- function(crosses, trait_info, parent_use, duplicate_pairs, block_size,
                                  include_trait_gebv = FALSE) {
   crosses <- as.data.frame(crosses, stringsAsFactors = FALSE, check.names = FALSE)
@@ -182,6 +219,14 @@ ng_cpw_make_selected <- function(crosses, trait_info, parent_use, duplicate_pair
     stringsAsFactors = FALSE,
     check.names = FALSE
   )
+  # Portfolio + risk (R/37_cross_portfolio_risk.R). The workbook is what leaves the building, so
+  # a plan exported here should carry the same risk/portfolio read the app shows -- otherwise a
+  # breeder working from the spreadsheet sees priority tiers with no indication of which crosses
+  # are speculative. Inserted before the free-text breeder columns so the decision fields stay
+  # rightmost. Every column is optional: runs predating the layer (or where the annotation could
+  # not be resolved) simply omit it rather than emitting an all-NA column.
+  out <- ng_cpw_insert_before(out, "Breeder_Rationale",
+                              ng_cpw_portfolio_cols(crosses, nrow(out)))
   trait_cols <- trait_info$column[trait_info$available]
   trait_cols <- trait_cols[trait_cols %in% names(crosses)]
   for (col in trait_cols) out[[col]] <- crosses[[col]]

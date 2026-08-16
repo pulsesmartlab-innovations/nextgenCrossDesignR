@@ -89,6 +89,24 @@ JSON.)
   (effects-only). Display "trained on N, crossing K parents".
 - `effect_summary` — per trait: `marker_effect_reliability, marker_effect_training_n, ridge_lambda`.
 - `qc` — status + issues (mirrors step 1). `objective` — resolved multi-trait method + reason.
+- `priority_risk_diagnostics` + the per-cross portfolio columns — see
+  `2026-08-15-multitrait-portfolio-handoff.md` and the drop-in `ngcd_portfolio_multitrait.R`.
+  Each cross carries `cross_level, cross_upside, cross_confidence, risk_bin, confidence_method,
+  portfolio_profile, portfolio_basis` (+ `risk_driver_trait/_share` on multi-trait runs).
+  **You must badge `portfolio_basis == "linearized_rank_index"`** — for the rank-based index
+  methods (`auto`/`weighted`/`threshold`, and `auto` promotes to `weighted` whenever trait
+  weights are present) the axes are indicative, not a decomposition of `multi_trait_score`.
+  `cross_confidence`/`risk_bin` are **within-run only** (min–max and tertiles of the crosses on
+  screen), so a plan always holds roughly a third "high" regardless of how well it is estimated.
+
+  Note on the shipped example: it is a deliberately small 10-parent / 12-marker dataset, so its
+  `disease` trait has almost no GEBV spread. That makes it a **useful** reference — it populates
+  the warning fields most runs leave null (`pev_concentration_note`,
+  `risk_disproportionate_traits`), so you can code those views against real shapes. It also makes
+  `index_weights` look alarming (`disease: -3540.7` vs `yield: 0.138`). That is correct, not a
+  bug: weights are raw-unit (`coef * sign / scale`), so the 25667x weight ratio is just the
+  inverse of the 25670x scale ratio. **Never render weight magnitude as importance** — use the
+  `index_traits` shares for that.
 
 ### 5. Decision / strategy exports (interactive controls)
 See `MATING_STRATEGY_INTEGRATION.md` for the control→field mapping. Key exporters:

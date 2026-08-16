@@ -113,3 +113,63 @@ if (requireNamespace("openxlsx", quietly = TRUE)) {
 }
 
 cat("cross priority workbook tests passed\n")
+
+# --- portfolio + risk columns reach the workbook (0.19.0) -----------------------------------
+# The workbook is what leaves the building. Before this, a breeder working from the spreadsheet
+# saw priority tiers with no indication of which crosses were speculative.
+set.seed(21)
+n_p <- 12L; mk_p <- 40L; gid_p <- sprintf("Q%02d", seq_len(n_p))
+gm_p <- matrix(2L * rbinom(n_p * mk_p, 1, 0.5), n_p, mk_p,
+               dimnames = list(gid_p, sprintf("S%03d", seq_len(mk_p))))
+bA <- rnorm(mk_p, 0, 0.1); bB <- -0.7 * bA + rnorm(mk_p, 0, 0.03)
+phen_p <- data.frame(NAME = gid_p,
+                     yield = as.numeric(gm_p %*% bA) + rnorm(n_p, 0, 0.5),
+                     protein = as.numeric(gm_p %*% bB) + rnorm(n_p, 0, 0.5),
+                     stringsAsFactors = FALSE)
+res_p <- ng_run_cross_prediction(
+  phenotype = phen_p,
+  genotype = data.frame(NAME = gid_p, gm_p, check.names = FALSE, stringsAsFactors = FALSE),
+  marker_map = data.frame(SNP = colnames(gm_p), chr = rep(1:2, length.out = mk_p),
+                          bp = rep(seq(0, 100, length.out = 20), 2)[seq_len(mk_p)] * 1e6),
+  trait_direction = data.frame(trait = c("yield", "protein"), column = c("yield", "protein"),
+                               direction = c("increase", "decrease"), weight = c(0.6, 0.4)),
+  id_col = "NAME", map_marker_col = "SNP", map_chr_col = "chr", map_pos_col = "bp",
+  map_pos_cm_divisor = 1e6, trait_value_metric = "usefulness", n_crosses = 6L,
+  max_crosses_per_parent = 3L, use_ocs = TRUE, write_outputs = FALSE, write_figures = FALSE,
+  seed = 5L)
+
+ti_p <- ng_cpw_trait_table(stats::setNames(c("increase", "decrease"), c("yield", "protein")),
+                           res_p$selected_crosses)
+sel_p <- ng_cpw_make_selected(res_p$selected_crosses, ti_p, NULL, NULL, 10L)
+pf_cols <- c("portfolio_profile", "cross_level", "cross_upside", "risk_bin_within_plan",
+             "cross_confidence_within_plan", "risk_driver_trait", "risk_driver_share",
+             "portfolio_basis")
+stopifnot(all(pf_cols %in% names(sel_p)))
+stopifnot(nrow(sel_p) == nrow(res_p$selected_crosses))
+# Values survive the transfer, not just the headers.
+stopifnot(all(sel_p$risk_bin_within_plan %in% c("low", "med", "high")))
+stopifnot(all(sel_p$portfolio_profile %in%
+                c("breakthrough", "workhorse", "long_shot", "deprioritize")))
+stopifnot(all(is.finite(sel_p$cross_upside)), all(sel_p$cross_upside >= 0))
+stopifnot(all(sel_p$risk_driver_trait %in% c("yield", "protein")))
+stopifnot(identical(sel_p$portfolio_basis[[1L]],
+                    as.character(res_p$selected_crosses$portfolio_basis[[1L]])))
+# Decision/free-text columns must stay rightmost so the breeder's writing area is unbroken.
+for (cc in pf_cols) stopifnot(match(cc, names(sel_p)) < match("Breeder_Rationale", names(sel_p)))
+stopifnot(match("Crossing_Status", names(sel_p)) > match("Breeder_Rationale", names(sel_p)))
+
+# A run WITHOUT the annotation (pre-0.13 result, or an unresolvable index) must simply omit the
+# columns rather than emit a sheet full of NA.
+bare_p <- res_p$selected_crosses
+bare_p[c("portfolio_profile", "cross_level", "cross_upside", "risk_bin", "cross_confidence",
+         "risk_driver_trait", "risk_driver_share", "portfolio_basis")] <- NULL
+sel_bare <- ng_cpw_make_selected(bare_p, ti_p, NULL, NULL, 10L)
+stopifnot(!any(pf_cols %in% names(sel_bare)))
+stopifnot("Breeder_Rationale" %in% names(sel_bare), nrow(sel_bare) == nrow(bare_p))
+
+# An all-NA column is treated as absent (nothing to tell the breeder).
+na_p <- res_p$selected_crosses
+na_p$risk_driver_trait <- NA_character_
+sel_na <- ng_cpw_make_selected(na_p, ti_p, NULL, NULL, 10L)
+stopifnot(!("risk_driver_trait" %in% names(sel_na)), "portfolio_profile" %in% names(sel_na))
+cat("workbook portfolio + risk column test passed\n")

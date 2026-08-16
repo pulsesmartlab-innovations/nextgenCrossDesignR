@@ -358,6 +358,34 @@ ng_backend_capability_registry <- function(generated_at = Sys.time()) {
     stringsAsFactors = FALSE
   )
 
+  # Appended rather than threaded through the six parallel vectors above: a misaligned insert
+  # would silently attach one family's label/evidence to another family's id.
+  method_families <- rbind(method_families, data.frame(
+    id = "cross_priority_risk_portfolio",
+    label = "Cross priority risk & portfolio",
+    category = "scoring",
+    default = TRUE,
+    backend_function = "ng_annotate_cross_priority; ng_annotate_cross_priority_multitrait; ng_cross_portfolio_summary; ng_run_cross_prediction (priority_risk_diagnostics)",
+    evidence = paste0(
+      "Per-cross risk (estimation confidence) and a level x within-family-SD portfolio quadrant ",
+      "(breakthrough/workhorse/long_shot/deprioritize), attached to both the selected plan and the ",
+      "candidate pool as cross_level/cross_upside/cross_confidence/risk_bin/confidence_method/",
+      "portfolio_profile/portfolio_basis. Single-trait resolves the axes on the trait itself; ",
+      "multi-trait resolves them on the selection index (cross_level = w'm over mid-parent GEBVs, ",
+      "cross_upside = sqrt(w'Sw) using the exact recombination-aware within-family cross-trait ",
+      "covariance, never the diagonal shortcut). portfolio_basis tells the frontend how literally to ",
+      "read the quadrant: 'single_trait', 'linear_index' (economic_index/desired_gain, coefficients ",
+      "solved as a linear index), or 'linearized_rank_index' (auto/weighted/threshold, where the ",
+      "rank-normalized score has no linear form in genetic units and the axes are indicative rather ",
+      "than a decomposition of multi_trait_score -- the frontend MUST badge this case). Multi-trait ",
+      "runs also attribute the risk: risk_driver_trait/risk_driver_share per cross, plus per-trait ",
+      "index_traits and risk_disproportionate_traits in priority_risk_diagnostics. Confidence is a ",
+      "within-run normalization and risk_bin is within-run tertiles -- neither is comparable across ",
+      "runs. Posterior-ON confidence and prob_top_tier are not implemented."
+    ),
+    stringsAsFactors = FALSE
+  ))
+
   workflows <- data.frame(
     id = c(
       "user_friendly_cross_prediction",
