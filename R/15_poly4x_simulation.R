@@ -211,9 +211,24 @@ ng_poly4x_family_stats <- function(pop, top_prop = 0.10) {
     ng_stop("top_prop must be a single finite numeric value in (0, 1]")
   }
   top_n <- min(length(gv), max(1L, ceiling(length(gv) * top_prop)))
+  n_gv <- length(gv)
+  v <- if (n_gv > 1L) stats::var(gv) else 0
+  # Monte Carlo standard error of the family variance. This path estimates var_gv by SIMULATING
+  # n_progeny progeny, so var_gv is a sample variance and carries real sampling error -- at 25
+  # progeny the relative SE is ~29%, which is larger than the differences between many crosses.
+  # Reported so the noise is visible rather than implicit. Kurtosis-aware (Var(s^2) =
+  # (mu4 - (n-3)/(n-1) s^4)/n), which reduces to the normal-theory s^2 sqrt(2/(n-1)) at kurtosis 3.
+  var_se <- NA_real_
+  if (n_gv > 3L && is.finite(v) && v > 0) {
+    mu4 <- mean((gv - mean(gv))^4)
+    vv <- (mu4 - ((n_gv - 3) / (n_gv - 1)) * v^2) / n_gv
+    var_se <- if (is.finite(vv) && vv > 0) sqrt(vv) else NA_real_
+  }
   data.frame(
     mean_gv = mean(gv),
-    var_gv = if (length(gv) > 1L) stats::var(gv) else 0,
+    var_gv = v,
+    var_gv_se = var_se,
+    mean_gv_se = if (n_gv > 1L && is.finite(v)) sqrt(v / n_gv) else NA_real_,
     top10_gv = mean(sort(gv, decreasing = TRUE)[seq_len(top_n)]),
     max_gv = max(gv),
     stringsAsFactors = FALSE

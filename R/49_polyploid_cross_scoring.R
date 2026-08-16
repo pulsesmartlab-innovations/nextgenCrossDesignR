@@ -13,9 +13,27 @@
 #   within-fam var  = sum_k add_k^2 Var(X_k)  +  sum_k dom_k^2 Var(H_k)
 #   usefulness      = mean + i*sqrt(var)
 # The moments depend ONLY on the parental dosage pair, so a (ploidy+1)x(ploidy+1) table is
-# precomputed once and looked up vectorized -- no per-cross simulation. (Linkage-equilibrium /
-# unlinked-loci approximation for the segregation variance; digenic dominance is per-locus. Double
-# reduction is not modelled here -- random chromosome segregation only.)
+# precomputed once and looked up vectorized -- no per-cross simulation.
+#
+# VARIANCE MODEL -- "unlinked_phase_marginalized". The locus sums above set the between-locus
+# term to zero (R = I), and that deserves a precise statement rather than the vague label
+# "linkage-equilibrium approximation":
+#   * It is UNBIASED, not an approximation. Autopolyploid parental phase -- which homologue
+#     carries which allele -- is NOT identifiable from dosage. Averaged over the phase
+#     configurations consistent with the observed dosages, the between-locus gamete covariance is
+#     EXACTLY zero, even for completely linked loci (verified to 1e-16 by enumeration over all
+#     phase configurations and all gametes). So sum_k a_k^2 Var(X_k) is the exact expectation of
+#     the within-family variance given the information dosage actually carries.
+#   * What it cannot do is DISCRIMINATE. For a fixed phase the covariance is not zero: for a
+#     duplex x duplex pair of tightly linked loci it ranges over about [-1/3, +1/3]. Two crosses
+#     with identical parental dosages but different phase therefore receive identical predictions.
+#     Variance-based metrics (usefulness) consequently separate autopolyploid crosses less sharply
+#     than the diploid path, where inbred parents make phase known and the exact recombination-
+#     aware a'Ra kernel applies.
+#   * Supplying phased polyploid haplotypes would make the exact computation possible; that is not
+#     implemented. The allopolyploid subgenome path (R/18) IS recombination-aware when a per-
+#     subgenome cM map is given, because disomic pairing makes phase tractable there.
+# Digenic dominance only (trigenic / quadrigenic dominance components are not modelled).
 
 # Gamete distribution: pmf of the number of alt alleles in a ploidy/2-allele gamete from a parent
 # of dosage d, over 0..ploidy/2. Random chromosome segregation is Hypergeometric. DOUBLE REDUCTION
@@ -90,6 +108,16 @@ ng_polyploid_score_crosses_dominance <- function(fit,
   bd0 <- if (has_dom) bd else numeric(length(ba))
   cen_a <- ploidy * fit$allele_freq                     # additive centering
   hbar <- if (has_dom) fit$hbar else numeric(length(ba)) # dominance centering
+  # The effects were fitted on the ORTHOGONAL dominance basis (R/48)
+  #   D = (H - hbar) - b (X - ploidy p),   b = fit$b_orth (observed Cov(W,H)/Var(W); R/48)
+  # so the progeny statistics must be taken on D, not on raw H. Everything needed follows from
+  # the existing moment table:
+  #   E[D]      = (E[H] - hbar) - b (E[X] - ploidy p)
+  #   Var(D)    = Var(H) + b^2 Var(X) - 2 b Cov(X, H)
+  #   Cov(X, D) = Cov(X, H) - b Var(X)
+  # Scoring on raw H while the model was fitted on D would mis-state both the heterosis term and
+  # the dominance variance whenever p != 0.5 -- i.e. at almost every marker.
+  b_orth <- if (has_dom && !is.null(fit$b_orth)) as.numeric(fit$b_orth) else numeric(length(ba))
   intensity <- ng_selection_intensity(selection_prop)
   parent_kinship <- ng_polyploid_grm(M, ploidy = ploidy, method = grm_method)
 
@@ -103,7 +131,7 @@ ng_polyploid_score_crosses_dominance <- function(fit,
   if (isTRUE(use_cpp) && exists("ng_poly_dominance_scores_cpp", mode = "function", inherits = TRUE)) {
     # C++ accumulates the O(n_crosses x markers) loop over the moment table
     res <- ng_poly_dominance_scores_cpp(M, i1, i2, mt$mu, mt$varX, mt$EH, mt$varH, mt$covXH,
-                                        ba, bd0, cen_a, hbar, fit$intercept, has_dom)
+                                        ba, bd0, cen_a, hbar, b_orth, fit$intercept, has_dom)
     mid_bv <- res[, 1]; heterosis <- res[, 2]; add_var <- res[, 3]
     dom_var <- res[, 4]; cov_ad <- res[, 5]
   } else {
@@ -112,12 +140,16 @@ ng_polyploid_score_crosses_dominance <- function(fit,
     for (i in seq_len(n)) {
       di <- M[p1[i], ] + 1L; dj <- M[p2[i], ] + 1L      # 1-based index into the moment table
       ij <- cbind(di, dj)
-      mid_bv[i] <- fit$intercept + sum(ba * (mt$mu[ij] - cen_a))
+      wx <- mt$mu[ij] - cen_a                           # E[X] - ploidy p
+      mid_bv[i] <- fit$intercept + sum(ba * wx)
       add_var[i] <- sum(ba^2 * mt$varX[ij])
       if (has_dom) {
-        heterosis[i] <- sum(bd * (mt$EH[ij] - hbar))    # expected progeny dominance = heterosis
-        dom_var[i] <- sum(bd^2 * mt$varH[ij])
-        cov_ad[i] <- 2 * sum(ba * bd * mt$covXH[ij])    # X and H share the draw
+        ed  <- (mt$EH[ij] - hbar) - b_orth * wx                                  # E[D]
+        vd  <- mt$varH[ij] + b_orth^2 * mt$varX[ij] - 2 * b_orth * mt$covXH[ij]  # Var(D)
+        cxd <- mt$covXH[ij] - b_orth * mt$varX[ij]                               # Cov(X, D)
+        heterosis[i] <- sum(bd * ed)                    # expected progeny dominance = heterosis
+        dom_var[i] <- sum(bd^2 * pmax(vd, 0))
+        cov_ad[i] <- 2 * sum(ba * bd * cxd)             # X and D share the draw
       }
     }
   }
@@ -132,5 +164,11 @@ ng_polyploid_score_crosses_dominance <- function(fit,
   attr(out, "parent_kinship") <- parent_kinship
   attr(out, "ploidy") <- as.integer(ploidy)
   attr(out, "has_dominance") <- !is.null(bd)
+  # Travels with the numbers: an autopolyploid within-family variance is unbiased over unknown
+  # parental phase but cannot resolve linkage-phase differences between crosses (see header).
+  out$variance_model <- "unlinked_phase_marginalized"
+  attr(out, "variance_model") <- "unlinked_phase_marginalized"
+  attr(out, "dominance_model") <- if (is.null(bd)) NA_character_ else "digenic"
+  attr(out, "double_reduction") <- as.numeric(double_reduction)
   out
 }

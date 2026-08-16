@@ -117,8 +117,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // ng_poly_dominance_scores_cpp
-NumericMatrix ng_poly_dominance_scores_cpp(IntegerMatrix M, IntegerVector i1, IntegerVector i2, NumericMatrix mu, NumericMatrix varX, NumericMatrix EH, NumericMatrix varH, NumericMatrix covXH, NumericVector ba, NumericVector bd, NumericVector cen_a, NumericVector hbar, double intercept, bool has_dom);
-RcppExport SEXP _nextgenCrossDesign_ng_poly_dominance_scores_cpp(SEXP MSEXP, SEXP i1SEXP, SEXP i2SEXP, SEXP muSEXP, SEXP varXSEXP, SEXP EHSEXP, SEXP varHSEXP, SEXP covXHSEXP, SEXP baSEXP, SEXP bdSEXP, SEXP cen_aSEXP, SEXP hbarSEXP, SEXP interceptSEXP, SEXP has_domSEXP) {
+NumericMatrix ng_poly_dominance_scores_cpp(IntegerMatrix M, IntegerVector i1, IntegerVector i2, NumericMatrix mu, NumericMatrix varX, NumericMatrix EH, NumericMatrix varH, NumericMatrix covXH, NumericVector ba, NumericVector bd, NumericVector cen_a, NumericVector hbar, NumericVector b_orth, double intercept, bool has_dom);
+RcppExport SEXP _nextgenCrossDesign_ng_poly_dominance_scores_cpp(SEXP MSEXP, SEXP i1SEXP, SEXP i2SEXP, SEXP muSEXP, SEXP varXSEXP, SEXP EHSEXP, SEXP varHSEXP, SEXP covXHSEXP, SEXP baSEXP, SEXP bdSEXP, SEXP cen_aSEXP, SEXP hbarSEXP, SEXP b_orthSEXP, SEXP interceptSEXP, SEXP has_domSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -134,9 +134,10 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericVector >::type bd(bdSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type cen_a(cen_aSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type hbar(hbarSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type b_orth(b_orthSEXP);
     Rcpp::traits::input_parameter< double >::type intercept(interceptSEXP);
     Rcpp::traits::input_parameter< bool >::type has_dom(has_domSEXP);
-    rcpp_result_gen = Rcpp::wrap(ng_poly_dominance_scores_cpp(M, i1, i2, mu, varX, EH, varH, covXH, ba, bd, cen_a, hbar, intercept, has_dom));
+    rcpp_result_gen = Rcpp::wrap(ng_poly_dominance_scores_cpp(M, i1, i2, mu, varX, EH, varH, covXH, ba, bd, cen_a, hbar, b_orth, intercept, has_dom));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -148,7 +149,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_nextgenCrossDesign_ng_dh_recomb_pairs_banded_cpp", (DL_FUNC) &_nextgenCrossDesign_ng_dh_recomb_pairs_banded_cpp, 8},
     {"_nextgenCrossDesign_ng_bcm_posterior_sampler_cpp", (DL_FUNC) &_nextgenCrossDesign_ng_bcm_posterior_sampler_cpp, 7},
     {"_nextgenCrossDesign_ng_local_swap_cpp", (DL_FUNC) &_nextgenCrossDesign_ng_local_swap_cpp, 10},
-    {"_nextgenCrossDesign_ng_poly_dominance_scores_cpp", (DL_FUNC) &_nextgenCrossDesign_ng_poly_dominance_scores_cpp, 14},
+    {"_nextgenCrossDesign_ng_poly_dominance_scores_cpp", (DL_FUNC) &_nextgenCrossDesign_ng_poly_dominance_scores_cpp, 15},
     {NULL, NULL, 0}
 };
 

@@ -720,6 +720,7 @@ NumericMatrix ng_poly_dominance_scores_cpp(IntegerMatrix M,
                                            NumericMatrix EH, NumericMatrix varH, NumericMatrix covXH,
                                            NumericVector ba, NumericVector bd,
                                            NumericVector cen_a, NumericVector hbar,
+                                           NumericVector b_orth,
                                            double intercept, bool has_dom) {
   int n = i1.size();
   int m = M.ncol();
@@ -730,13 +731,20 @@ NumericMatrix ng_poly_dominance_scores_cpp(IntegerMatrix M,
     for (int k = 0; k < m; ++k) {
       int di = M(r1, k), dj = M(r2, k);
       double a = ba[k];
-      bv += a * (mu(di, dj) - cen_a[k]);
+      double wx = mu(di, dj) - cen_a[k];          // E[X] - ploidy p
+      bv += a * wx;
       av += a * a * varX(di, dj);
       if (has_dom) {
-        double d = bd[k];
-        het += d * (EH(di, dj) - hbar[k]);
-        dv += d * d * varH(di, dj);
-        cv += 2.0 * a * d * covXH(di, dj);
+        // Orthogonal dominance basis D = (H - hbar) - b (X - ploidy p); see R/48 header.
+        double d = bd[k], b = b_orth[k];
+        double vX = varX(di, dj), vH = varH(di, dj), cXH = covXH(di, dj);
+        double ed  = (EH(di, dj) - hbar[k]) - b * wx;      // E[D]
+        double vd  = vH + b * b * vX - 2.0 * b * cXH;      // Var(D)
+        double cxd = cXH - b * vX;                         // Cov(X, D)
+        if (vd < 0.0) vd = 0.0;
+        het += d * ed;
+        dv += d * d * vd;
+        cv += 2.0 * a * d * cxd;
       }
     }
     out(c, 0) = bv; out(c, 1) = het; out(c, 2) = av; out(c, 3) = dv; out(c, 4) = cv;

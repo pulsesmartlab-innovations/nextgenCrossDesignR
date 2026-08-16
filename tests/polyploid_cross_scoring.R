@@ -102,3 +102,46 @@ if (exists("ng_poly_dominance_scores_cpp", mode = "function", inherits = TRUE)) 
 }
 
 cat("polyploid dominance cross scoring test passed\n")
+
+# --- analytic cross moments must reproduce SIMULATED progeny (0.19.x) -----------------------
+# The strongest available check on the whole chain: gamete pmf -> progeny moment table ->
+# orthogonal dominance basis -> cross_mean / cross_var. Simulate real meiosis (including double
+# reduction), score the resulting progeny through the fitted model, and compare.
+set.seed(41)
+Ps <- 4L; ns <- 24L; ms <- 40L; drs <- 0.15
+idss <- sprintf("S%02d", seq_len(ns))
+fs <- runif(ms, 0.1, 0.9)
+Ms <- matrix(rbinom(ns * ms, Ps, rep(fs, each = ns)), ns, ms,
+             dimnames = list(idss, sprintf("V%03d", seq_len(ms))))
+ys <- as.numeric(Ms %*% rnorm(ms, 0, .25) + (Ms * (Ps - Ms)) %*% rnorm(ms, 0, .12)) + rnorm(ns, 0, .5)
+fits <- ng_polyploid_fit_effects(Ms, ys, ploidy = Ps, model = "additive_dominance", seed = 3L)
+scs <- ng_polyploid_score_crosses_dominance(fits, Ms, double_reduction = drs, use_cpp = FALSE)
+
+sim_gam <- function(dvec, P, dr) vapply(dvec, function(d) {
+  g <- P %/% 2L; al <- c(rep(1L, d), rep(0L, P - d))
+  if (g >= 2L && stats::runif(1) < dr) {
+    j <- sample.int(P, 1L); rest <- al[-j]
+    2L * al[j] + if (g > 2L) sum(sample(rest, g - 2L)) else 0L
+  } else sum(sample(al, g))
+}, integer(1))
+
+nprog <- 3000
+for (i in c(1L, 7L)) {
+  a <- scs$parent1[i]; b <- scs$parent2[i]
+  prog <- t(vapply(seq_len(nprog), function(z)
+    sim_gam(Ms[a, ], Ps, drs) + sim_gam(Ms[b, ], Ps, drs), integer(ms)))
+  colnames(prog) <- colnames(Ms); rownames(prog) <- sprintf("p%04d", seq_len(nprog))
+  gv <- ng_polyploid_predict_value(fits, prog, type = "genotypic")
+  # mean is exact in expectation; sd carries ~1/sqrt(2n) Monte Carlo error (~1.3% at n=3000)
+  stopifnot(abs(scs$cross_mean[i] - mean(gv)) / max(abs(scs$cross_mean[i]), 1e-8) < 0.02)
+  stopifnot(abs(sqrt(scs$cross_var[i]) - stats::sd(gv)) / sqrt(scs$cross_var[i]) < 0.12)
+}
+
+# The decomposition must be exact and non-negative: cross_var = add + dom + 2cov(X,D)
+stopifnot(all(scs$add_var >= 0), all(scs$dom_var >= 0), all(scs$cross_var >= 0))
+stopifnot(all(abs(scs$cross_mean - (scs$mid_parent_bv + scs$heterosis)) < 1e-10))
+# ...and the C++ path must agree on the orthogonal basis (b_orth threaded through the kernel)
+scc <- ng_polyploid_score_crosses_dominance(fits, Ms, double_reduction = drs, use_cpp = TRUE)
+nm <- vapply(scc, is.numeric, logical(1))
+stopifnot(max(abs(as.matrix(scc[, nm]) - as.matrix(scs[, nm]))) < 1e-9)
+cat("polyploid analytic-vs-simulated progeny test passed\n")

@@ -1,6 +1,6 @@
 ng_poly4x_score_crosses <- function(parent_pop,
                                     sim_param,
-                                    n_score_progeny = 25L,
+                                    n_score_progeny = 200L,
                                     candidate_pairs = NULL,
                                     selection_prop = 0.10,
                                     seed = 1L,
@@ -15,6 +15,19 @@ ng_poly4x_score_crosses <- function(parent_pop,
     ng_stop("n_score_progeny must be an integer >= 2")
   }
   n_score_progeny <- as.integer(n_score_progeny)
+  # This path estimates the family variance by SIMULATION, so poly4x_var is a sample variance with
+  # relative SE ~ sqrt(2/(n-1)): 29% at 25 progeny, 20% at 50, 10% at 200. Below ~50 the sampling
+  # error is larger than the real spread between many crosses, so a variance-based ranking
+  # (poly4x_var / poly4x_usefulness) is substantially noise. Default raised to 200; per-cross
+  # poly4x_var_se is reported so the remaining noise stays visible.
+  if (n_score_progeny < 50L) {
+    warning(sprintf(paste0(
+      "n_score_progeny = %d gives a relative Monte Carlo SE of about %.0f%% on each cross's ",
+      "simulated variance, which can exceed the real differences between crosses; ",
+      "poly4x_var / poly4x_usefulness rankings will be partly noise. Use >= 200 for a ~10%% SE, ",
+      "or read the per-cross poly4x_var_se column."),
+      n_score_progeny, 100 * sqrt(2 / max(n_score_progeny - 1L, 1L))), call. = FALSE)
+  }
   if (!is.numeric(seed) || length(seed) != 1L || !is.finite(seed)) {
     ng_stop("seed must be a single finite integer-like numeric value")
   }
@@ -31,7 +44,12 @@ ng_poly4x_score_crosses <- function(parent_pop,
   candidate_pairs <- ng_poly4x_validate_candidate_pairs(candidate_pairs, ids)
 
   dosage <- ng_poly4x_pull_dosage(parent_pop, sim_param)
-  parent_kinship <- ng_poly4x_parent_relationship(dosage)
+  # Correct allele-frequency-centred polyploid GRM (VanRaden generalized to ploidy; R/47), NOT the
+  # ploidy-midpoint shortcut. The midpoint form implicitly assumes every allele frequency is 0.5,
+  # so on unrelated autotetraploids it returns a mean off-diagonal of ~1.47 (measured, 200
+  # unrelated individuals) instead of ~0 -- and it is not merely shifted: the RANK correlation
+  # with the correct matrix is only ~0.56, so the pair ordering that OCS penalises on was wrong.
+  parent_kinship <- ng_polyploid_grm(dosage, ploidy = 4L, method = "vanraden")
   pair_coancestry <- ng_poly4x_pair_coancestry(parent_kinship, candidate_pairs)
   digenic <- rowMeans(ng_poly4x_digenic_scaled(dosage))
   scoring_parent_pop <- unserialize(serialize(parent_pop, NULL))
@@ -58,6 +76,8 @@ ng_poly4x_score_crosses <- function(parent_pop,
     parent2 = candidate_pairs$parent2,
     poly4x_mean = stats$mean_gv,
     poly4x_var = stats$var_gv,
+    poly4x_var_se = stats$var_gv_se,
+    poly4x_mean_se = stats$mean_gv_se,
     poly4x_top10 = stats$top10_gv,
     poly4x_max = stats$max_gv,
     poly4x_usefulness = stats$mean_gv + intensity * sqrt(pmax(stats$var_gv, 0)),
