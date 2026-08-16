@@ -118,6 +118,7 @@ stopifnot(all(c("cross_level","cross_upside","cross_confidence","risk_bin",
                 "confidence_method","portfolio_profile") %in% names(sc)))
 stopifnot(all(sc$cross_upside >= 0), diff(range(sc$cross_confidence, na.rm = TRUE)) > 0)
 stopifnot(sc$confidence_method[[1L]] == "midparent_pev_partial")   # usefulness = effect-based X
+stopifnot(sc$portfolio_basis[[1L]] == "single_trait")  # level is the trait's own mid-parent GEBV
 stopifnot(!is.null(res$priority_risk_diagnostics))
 stopifnot(all(c("cross_level","cross_upside","risk_bin","portfolio_profile") %in% names(res$candidate_crosses)))
 # mean metric -> mean fully covers risk
