@@ -1,6 +1,106 @@
 # Validated Software State
 
-Last reviewed: 2026-08-07 for the residual-heterozygous-parent variance, the headless message contract, and the frontend-surfacing governance.
+Last reviewed: 2026-08-16 for the multi-trait cross-priority portfolio and the polyploid
+quantitative-genetics audit.
+
+## Multi-Trait Portfolio & Polyploid QG Audit Note (v0.20.0, 2026-08-16)
+
+Two efforts. (a) The cross-priority risk/portfolio layer, single-trait since v0.13.0, now
+resolves its two axes on the SELECTION INDEX so multi-trait runs get the same six columns
+(previously they got none). (b) A quantitative-genetics audit of the polyploid path, which had
+not received the adversarial treatment the diploid path had; it validated most of the genetics
+by direct simulation and found three defects.
+
+Allowed claims:
+
+- **Multi-trait portfolio axes.** `cross_level = w'm` over per-trait mid-parent GEBVs and
+  `cross_upside = sqrt(w'Sw)`, with `S` the EXACT recombination-aware within-family cross-trait
+  covariance (`ng_cross_trait_within_family_cov`, per-cross `a_t' R a_s`). The diagonal shortcut
+  `sqrt(sum w^2 Var)` is not used and is not equivalent: on an antagonistic trait pair it
+  overstated index SD by 1.85x at the median and up to 7x. `S` is rescaled so its diagonal
+  reproduces the run's reported `vpm`, which makes `T == 1` collapse to exactly `sqrt(vpm)` and
+  honours het-parent corrected variances. The index basis is resolved once on the candidate pool,
+  so the selected plan and the candidate pool sit on the same axes.
+- **Polyploid gamete transmission.** The hypergeometric gamete pmf and the classical double
+  reduction model (with probability alpha the gamete is two IBD copies of one randomly chosen
+  parental allele) reproduce directly simulated meiosis: max |empirical - analytic| = 0.0039
+  against a Monte-Carlo SE of ~0.005, over ploidy 4 and 6, dr in {0, 0.25}, all parental dosages.
+- **Double reduction preserves the mid-parent.** `E[gamete] = d/2` to 1.8e-15 for ploidy 2/4/6/8
+  and every dr in [0, 1]. Double reduction redistributes gametes toward homozygosity but cannot
+  shift expected dose, so predicted cross MEANS stay correct at any dr.
+- **Polyploid cross moments.** The progeny-moment table reproduces simulated progeny moments, and
+  `E[X]` is exactly the mid-parent dosage. End to end, the analytic `cross_mean` / `cross_var`
+  reproduce the genotypic values of SIMULATED progeny to 0.001% (mean) and 1.1% (sd), the latter
+  being the Monte-Carlo error at n = 3000.
+- **Polyploid GRM.** `ng_polyploid_grm()` reduces EXACTLY to textbook VanRaden at ploidy 2
+  (max abs diff 0) and keeps mean(diag) ~ 1 at ploidy 2/4/6 with unrelated off-diagonals ~ 0
+  (-0.005 measured on 200 unrelated autotetraploids).
+- **Identified additive/dominance split.** The dominance design is now the residual of
+  `H = d(ploidy - d)` regressed on the additive design, using the OBSERVED per-marker coefficient
+  (statistical parameterization; Alvarez-Castro & Carlborg 2007, Vitezica et al. 2013). Measured
+  `cor(W, D)` falls from 0.983 to 0.000 in the fitted sample. Under HWE the coefficient converges
+  to `(ploidy - 1)(1 - 2p)`, and at ploidy 2 that limit reproduces the published orthogonal
+  dominance coding `(-2p^2, 2pq, -2q^2)` to 1e-16. The change is an exact reparameterization of
+  the same model space (total genotypic value invariant to 4e-16).
+- **Autopolyploid variance is UNBIASED over unknown phase.** Autopolyploid parental phase is not
+  identifiable from dosage. Enumerating every phase configuration consistent with the observed
+  dosages and every gamete, the between-locus gamete covariance averages to exactly zero
+  (max 1.1e-16) even for COMPLETELY LINKED loci. The locus-sum variance
+  (`variance_model = "unlinked_phase_marginalized"`) is therefore the exact expectation given the
+  information dosage carries, not an approximation.
+- **Allopolyploid subgenome variance** remains exact under disomic inheritance: the
+  cross-subgenome block of `R` is identically zero, so the per-subgenome `a'Ra` block-diagonal
+  decomposition is exact (recombination-aware when a per-subgenome cM map is supplied).
+- **R / C++ parity** for the polyploid dominance kernel: all score columns agree to 4e-16.
+
+Disallowed claims:
+
+- **The multi-trait quadrant is NOT a decomposition of `multi_trait_score` for rank-based index
+  methods.** `auto` / `weighted` / `threshold` combine rank-normalized traits, so no linear index
+  exists in genetic units and the axes come from reinterpreting trait weights as standardized-unit
+  coefficients (`portfolio_basis = "linearized_rank_index"`). Since `auto` promotes to `weighted`
+  whenever trait weights are present, this is the common case, and the frontend MUST badge it.
+  Only `economic_index` / `desired_gain` give `portfolio_basis = "linear_index"`. This is a
+  deliberate override of the 2026-07-25 design's "omit the quadrant for non-linear methods" rule;
+  the measured basis for it (`pearson(cross_level, multi_trait_score)` = 0.871 weighted vs 0.873
+  economic_index) is recorded as Rev 7 of that design doc.
+- **`cross_confidence` and `risk_bin` are within-run only** -- a min-max normalization and
+  tertiles of the crosses on screen. A plan always contains roughly one third "high risk"
+  regardless of how well it is estimated. Not comparable across runs; not an absolute statement
+  about plan quality.
+- **The index PEV is a block-diagonal approximation.** Traits are fitted by INDEPENDENT univariate
+  ridges, so no cross-trait estimation-error covariance exists; `sum_k w_k^2 PEV_k` is a ranking
+  input, not a calibrated interval. Per-trait PEVs are moreover only comparable across traits when
+  their residual variances are, and sigma_e^2 is estimated in-sample: a trait whose ridge lambda
+  lands on the grid floor can interpolate its training rows and report a near-zero PEV. When one
+  trait then carries >90% of the index PEV the run says so (`pev_concentration_note`) and
+  `risk_bin` must not be read as an index-wide statement.
+- **The autopolyploid variance cannot DISCRIMINATE on linkage phase.** At fixed phase the
+  between-locus covariance is real -- about [-1/3, +1/3] for a duplex x duplex tightly linked pair
+  -- so two crosses with identical parental dosages but different phase receive identical
+  predictions. Variance-based metrics therefore separate autopolyploid crosses less sharply than
+  the diploid path, where inbred parents make phase known and the exact `a'Ra` kernel applies.
+  Making it exact would need phased polyploid haplotypes, which are NOT implemented.
+- **Polyploid dominance is DIGENIC only.** Trigenic and quadrigenic dominance components are not
+  modelled.
+- **The `poly4x` (AlphaSimR) path reports a SIMULATED variance**, with relative Monte-Carlo SE
+  ~ sqrt(2/(n-1)): 29% at 25 progeny, 10% at 200. Below ~50 progeny the sampling error exceeds the
+  real spread between many crosses and `poly4x_var` / `poly4x_usefulness` rankings are
+  substantially noise. The default is now 200 and per-cross `poly4x_var_se` is reported; no
+  precision claim beyond that SE.
+- **No selection-superiority claim** for either effort. The portfolio layer is a reporting and
+  decision surface, not a change to the ranked merit; the polyploid work is accuracy and
+  identifiability, not demonstrated long-term gain.
+- **Prior additive/dominance splits are not comparable** with post-0.20.0 ones. The
+  reparameterization changes how ridge distributes effects between the components (that split was
+  previously decided by the penalty rather than the data), so historical `add_var` / `dom_var`
+  numbers should not be compared across the change.
+
+Method note (why the audit was possible at all): `ng_load()` compiles `src/ng_kernels.cpp` via
+`Rcpp::sourceCpp`, bypassing `RcppExports`, so the whole suite passed against a changed C++
+signature while the generated exports were stale -- installation broke and only `R CMD check`
+caught it. `tests/cpp_kernels_equivalence.R` now compares the exported signatures in the kernel
+source against `R/RcppExports.R` and was verified to fire on a deliberately reverted signature.
 
 ## Residual-Heterozygous-Parent Variance & Message Contract Note (v0.17.1, 2026-08-07)
 
@@ -275,6 +375,16 @@ allocator; a third-party package the backend no longer uses). New/changed:
 - Correct allele-frequency-based polyploid GRM `ng_polyploid_grm(method = "vanraden" | "yang")`
   (replaces the old ploidy-midpoint kinship) and digenic `ng_polyploid_dominance_grm()`;
   ploidy-aware `ng_polyploid_qc()`.
+  > **CORRECTION (2026-08-16, v0.20.0).** "Replaces the old ploidy-midpoint kinship" OVERSTATED
+  > what v0.4.0 shipped. The correct GRM replaced the midpoint form on the `ng_polyploid_design_*`
+  > path only; the `poly4x` (AlphaSimR) path went on building `parent_kinship` from
+  > `ng_poly4x_parent_relationship` and handing it to `ng_poly4x_ocs` as the coancestry the
+  > diversity penalty acts on, until v0.20.0. The midpoint form centres dosage on `ploidy/2`, i.e.
+  > assumes every allele frequency is 0.5: on 200 UNRELATED autotetraploids it reports a mean
+  > off-diagonal of 1.4724 (range 1.203..1.718, diag 2.4724) where VanRaden gives -0.0050 (range
+  > -0.148..0.145, diag 0.9952), and -- the part that matters for OCS, which consumes an ORDERING
+  > -- the Spearman rank correlation between the two sets of pair values is only 0.565. Any
+  > `poly4x` diversity/coancestry result produced before v0.20.0 was computed on that matrix.
 - Additive+dominance marker effects `ng_fit_polyploid_effects()` and value prediction
   `ng_predict_polyploid_value(type = "genotypic" | "breeding")` for clonal-crop selection.
 - Dominance-aware cross scoring `ng_score_crosses_poly_dominance()` (heterosis-inclusive mean +
@@ -1017,3 +1127,20 @@ then validate by crop/ploidy scope:
 5. Repeat parent-size validation for 20 through 80 parents.
 6. Add a separate true-polyploid validation grid before making claims for
    autotetraploid or complex polyploid breeding programs.
+
+Two further items follow directly from the 2026-08-16 audit, and both remove a stated
+Disallowed claim rather than adding a feature for its own sake:
+
+7. **Posterior-ON confidence + `prob_top_tier`** (the F2 item of the cross-priority design).
+   Today `cross_confidence` is a within-run normalization of a posterior-OFF mid-parent PEV, so
+   it can only RANK crosses inside one plan. A posterior path would make it a calibrated
+   interval and support "probability this cross beats the check", retiring the within-run-only
+   restriction. The multi-trait case additionally needs the per-draw INDEX value, and the
+   block-diagonal index PEV is the approximation it would replace.
+8. **Phased polyploid haplotypes -> exact autopolyploid within-family variance.** The current
+   locus sum is unbiased over unknown phase but cannot separate two crosses differing only in
+   linkage phase (covariance about [-1/3, +1/3] at fixed phase for a duplex x duplex tightly
+   linked pair). Supplying phase would make the computation exact and let variance-based metrics
+   discriminate autopolyploid crosses as sharply as the diploid path already does. This is the
+   polyploid analogue of what `phased_haplotypes` already does for residual-heterozygous RIL
+   parents (v0.17.1), so the precedent and the kernel shape both exist.
