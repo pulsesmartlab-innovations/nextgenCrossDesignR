@@ -853,8 +853,6 @@ ng_cp__stage_predict <- function(ctx) {
   posterior_effects_list <- list()
   posterior_predictions_list <- list()
   cross_table <- NULL
-  priority_beta_cov <- NULL
-  priority_marker_mean <- NULL
   set.seed(seed)
 
   run_trait_job <- function(i) {
@@ -880,9 +878,11 @@ ng_cp__stage_predict <- function(ctx) {
     n_effect_training <- length(fit_ids)
     # Also request the full beta covariance (used for the mid-parent PEV / cross-priority
     # risk annotation, Task 3) whenever the marker count is tractable, even outside the
-    # full_posterior PMV path.
-    want_beta_cov <- identical(method_varPMV, "full_posterior") ||
-      (length(trait_spec$column) == 1L && ncol(geno) <= 6000L)
+    # full_posterior PMV path. Multi-trait runs need it per trait (the index PEV is a
+    # weighted sum of the per-trait mid-parent PEVs), so the marker cap -- not the trait
+    # count -- is what gates it; each job reduces Sigma_beta to an n_pairs PEV vector and
+    # drops the dense matrix below, so peak memory is one Sigma_beta per parallel worker.
+    want_beta_cov <- identical(method_varPMV, "full_posterior") || ncol(geno) <= 6000L
     fit <- ng_fit_ridge_effects(
       geno = fit_geno,
       y = fit_y,
@@ -945,6 +945,14 @@ ng_cp__stage_predict <- function(ctx) {
     clean_trait <- ng_run_cp_clean_trait_name(trait)
     pmv_used_col <- ng_run_cp_pmv_col(scored_trait, method_varPMV)
     var_complex_col <- ng_run_cp_var_complex_col(scored_trait, method_varPMV)
+    # Cross-priority risk: reduce the dense Sigma_beta to the per-cross mid-parent PEV here,
+    # while it is still in scope, so only an n_pairs vector travels back from the job. The
+    # PEV then rides the cross table as `<trait>_midparent_pev` and survives candidate
+    # filtering and allocation by construction (rather than being recomputed downstream from
+    # a Sigma_beta that, for multi-trait runs, only the last trait would have supplied).
+    midparent_pev <- ng_midparent_pev(geno, scored_trait[, c("parent1", "parent2")],
+                                      fit$beta_cov_full, fit$marker_mean)
+    if (!identical(method_varPMV, "full_posterior")) fit$beta_cov_full <- NULL
     list(
       index = i,
       trait = trait,
@@ -952,6 +960,7 @@ ng_cp__stage_predict <- function(ctx) {
       clean_trait = clean_trait,
       y = y,
       fit = fit,
+      midparent_pev = midparent_pev,
       scored_trait = scored_trait,
       value = value,
       pmv_used_col = pmv_used_col,
@@ -1006,20 +1015,50 @@ ng_cp__stage_predict <- function(ctx) {
     cross_table[[paste0(clean_trait, "_parent_distance")]] <- scored_trait$parent_distance
     cross_table[[paste0(clean_trait, "_var_complex")]] <- scored_trait[[item$var_complex_col]]
     cross_table[[paste0(clean_trait, "_reliability")]] <- scored_trait$effect_reliability
+    # Per-trait mid-parent PEV (cross-priority risk). NA when Sigma_beta was not requested.
+    cross_table[[paste0(clean_trait, "_midparent_pev")]] <- item$midparent_pev
     effects_list[[trait]] <- item$fit
     trait_scores[[trait]] <- scored_trait
-    # Cross-priority risk annotation (Task 5) needs Sigma_beta + the marker centering used to
-    # fit it; single-trait runs only ever populate this from the one trait, but for multi-trait
-    # jobs the last trait to be folded in here simply wins (annotation itself is single-trait
-    # only, gated below).
-    priority_beta_cov <- item$fit$beta_cov_full
-    priority_marker_mean <- item$fit$marker_mean
     if (isTRUE(run_posterior_prediction)) {
       posterior_effects_list[[trait]] <- item$posterior_effects
       posterior_predictions_list[[trait]] <- item$posterior_scores
     }
     effect_summary[[j]] <- item$effect_summary
   }
+
+  # EXACT within-family cross-trait covariance (multi-trait only): Cov(t, s | cross) = a_t' R a_s,
+  # the recombination-aware generalization of the per-trait a'Ra used for vpm. This is what makes
+  # the multi-trait portfolio upside sqrt(w' S w) correct for genetically correlated traits --
+  # summing per-trait variances would overstate the index spread whenever the traits are
+  # antagonistic within the family (the classic yield/protein case). The wf_var_/wf_cov_ columns
+  # ride the cross table so they survive candidate filtering and allocation by row alignment.
+  # Cost scales with T (one kernel pass per trait); the T(T+1)/2 trait pairs are cheap colSums.
+  if (nrow(trait_spec) > 1L && !is.null(cross_table) && nrow(cross_table) > 0L) {
+    betas <- vapply(trait_spec$trait, function(tr) {
+      b <- suppressWarnings(as.numeric(effects_list[[tr]]$beta))
+      b[!is.finite(b)] <- 0
+      b
+    }, numeric(ncol(geno)))
+    betas <- matrix(betas, nrow = ncol(geno), ncol = nrow(trait_spec),
+                    dimnames = list(colnames(geno), trait_spec$trait))
+    # Chunk the PAIR dimension. ng_cross_trait_within_family_cov materializes an n_pairs x m
+    # contrast matrix plus one m x n_pairs matrix per trait, so a full candidate pool at
+    # production scale (200 parents = 19,900 pairs x 5,000 markers x 3 traits) would allocate
+    # several GB in one go. Crosses are row-independent here, so chunking is numerically
+    # identical and caps peak memory at roughly chunk x markers x 8 bytes x (1 + 2T).
+    all_pairs <- cross_table[, c("parent1", "parent2"), drop = FALSE]
+    chunk <- max(200L, as.integer(5e6 / max(ncol(geno), 1L)))
+    starts <- seq(1L, nrow(all_pairs), by = chunk)
+    ctc <- do.call(rbind, lapply(starts, function(s) {
+      rows <- seq(s, min(s + chunk - 1L, nrow(all_pairs)))
+      ng_cross_trait_within_family_cov(
+        geno = geno, betas = betas, marker_map = marker_map_std, ids = ids,
+        pairs = all_pairs[rows, , drop = FALSE],
+        target = target, recomb_model = recomb_model)
+    }))
+    for (cc in setdiff(names(ctc), c("parent1", "parent2"))) cross_table[[cc]] <- ctc[[cc]]
+  }
+
   ctx$ld_pruning_report <- ld_pruning_report
   ctx$geno <- geno
   ctx$marker_map_std <- marker_map_std
@@ -1031,8 +1070,6 @@ ng_cp__stage_predict <- function(ctx) {
   ctx$posterior_effects_list <- posterior_effects_list
   ctx$posterior_predictions_list <- posterior_predictions_list
   ctx$cross_table <- cross_table
-  ctx$priority_beta_cov <- priority_beta_cov
-  ctx$priority_marker_mean <- priority_marker_mean
   ctx$parallel_backend <- parallel_backend
   ctx$parallel_cores_used <- parallel_cores_used
   ctx$effect_summary <- effect_summary
@@ -1165,6 +1202,10 @@ ng_cp__stage_index <- function(ctx) {
   # Marker steering (Module 4): attach the target-allele score (and, when lambda_marker != 0,
   # the blended merit) to the reported candidate table and drive the criterion the native /
   # AlphaMate-style allocators optimize. The OCS path performs the same blend internally.
+  # The index metadata (method + resolved weights / solved coefficients) is what the multi-trait
+  # portfolio axes are built from; capture it here because `attr` does not survive the row
+  # subsetting the allocator performs on the way to the plan.
+  ctx$multi_trait_meta <- attr(scored_crosses, "multi_trait")
   allocation_criterion_col <- "multi_trait_score"
   if (!is.null(marker_target_spec)) {
     scored_crosses <- ng_apply_marker_management(
@@ -1284,8 +1325,7 @@ ng_cp__stage_allocate <- function(ctx) {
 
 ng_cp__stage_rank <- function(ctx) {
   list2env(ctx, environment())
-  priority_beta_cov <- ctx$priority_beta_cov
-  priority_marker_mean <- ctx$priority_marker_mean
+  multi_trait_meta <- ctx$multi_trait_meta
   selected <- ng_rank_cross_priority(
     crosses = plan,
     score_col = "multi_trait_score",
@@ -1302,40 +1342,151 @@ ng_cp__stage_rank <- function(ctx) {
 
   # Cross-priority portfolio + risk annotation (Tasks 1-4): attaches cross_level/cross_upside/
   # cross_confidence/risk_bin/confidence_method/portfolio_profile to the selected and candidate
-  # tables, plus a summary diagnostics block. Single-trait only for now (deferred for multi-trait
-  # runs, where "level" and "vpm" would need to be resolved through the blended objective).
+  # tables, plus a summary diagnostics block. Single-trait resolves level/upside on the trait
+  # itself; multi-trait resolves them on the SELECTION INDEX (see R/37) -- same six columns and
+  # the same quadrant semantics either way, so the reporting surface does not fork.
   priority_risk_diagnostics <- NULL
+  traits_clean <- vapply(trait_spec$trait, ng_run_cp_clean_trait_name, character(1L),
+                         USE.NAMES = FALSE)
+  # The merit's sqrt(X) term is effect-based (i.e. draws on marker-effect estimation error,
+  # not just the mid-parent mean) for every metric except mean/parent_distance, and for
+  # usefulness only when its variance source isn't the effect-free parent_distance proxy.
+  effect_based_x <- !(trait_value_metric %in% c("mean", "parent_distance", "le")) &&
+    !(identical(trait_value_metric, "usefulness") &&
+      uc_variance_source %in% c("parent_distance", "le"))
+  lvl_cols <- paste0(traits_clean, "_mean_gebv")
+  vpm_cols <- paste0(traits_clean, "_vpm")
+  pev_cols <- paste0(traits_clean, "_midparent_pev")
+
   if (length(trait_spec$column) == 1L) {
-    clean1 <- ng_run_cp_clean_trait_name(trait_spec$trait[[1L]])
-    lvl_col <- paste0(clean1, "_mean_gebv")
-    vpm_col <- paste0(clean1, "_vpm")
-    # The merit's sqrt(X) term is effect-based (i.e. draws on marker-effect estimation error,
-    # not just the mid-parent mean) for every metric except mean/parent_distance, and for
-    # usefulness only when its variance source isn't the effect-free parent_distance proxy.
-    effect_based_x <- !(trait_value_metric %in% c("mean", "parent_distance", "le")) &&
-      !(identical(trait_value_metric, "usefulness") &&
-        uc_variance_source %in% c("parent_distance", "le"))
     ann_one <- function(tbl) {
       if (!nrow(tbl)) return(tbl)
-      if (!all(c(lvl_col, vpm_col, "parent1", "parent2") %in% names(tbl))) return(tbl)
-      pev <- ng_midparent_pev(geno, tbl[, c("parent1", "parent2")],
-                              priority_beta_cov, priority_marker_mean)
-      ng_annotate_cross_priority(tbl, level = tbl[[lvl_col]], vpm = tbl[[vpm_col]],
+      if (!all(c(lvl_cols, vpm_cols, "parent1", "parent2") %in% names(tbl))) return(tbl)
+      pev <- if (pev_cols %in% names(tbl)) suppressWarnings(as.numeric(tbl[[pev_cols]])) else NULL
+      ng_annotate_cross_priority(tbl, level = tbl[[lvl_cols]], vpm = tbl[[vpm_cols]],
                                  pev = pev, effect_based_x = effect_based_x)
     }
-    selected <- ann_one(selected)
-    scored_crosses <- ann_one(scored_crosses)
-    if (nrow(selected) > 0L && "confidence_method" %in% names(selected)) {
-      cm1 <- selected$confidence_method[[1L]]
-      priority_risk_diagnostics <- list(
-        confidence_method = if (is.null(cm1)) NA_character_ else cm1,
-        n_by_risk    = as.list(table(selected$risk_bin)),
-        n_by_profile = as.list(table(selected$portfolio_profile)),
-        top_tier_high_risk = sum(as.character(selected$priority_tier) ==
-                                   levels(selected$priority_tier)[[1L]] &
-                                 as.character(selected$risk_bin) == "high", na.rm = TRUE),
-        posterior_used = FALSE
-      )
+  } else {
+    # Index coefficients: the linear solve for the economic_index / desired_gain families, the
+    # resolved (normalized, positive) trait weights for the weighted / rank-sum family.
+    mt_method <- if (is.null(multi_trait_meta$method)) "weighted" else multi_trait_meta$method
+    mt_coef <- multi_trait_meta$economic_index_coefficients
+    if (is.null(mt_coef)) mt_coef <- multi_trait_meta$desired_gain_coefficients
+    if (is.null(mt_coef)) mt_coef <- multi_trait_meta$weights
+    wf_cols <- paste0("wf_var_", trait_spec$trait)
+    mt_ready <- !is.null(mt_coef) &&
+      all(c(lvl_cols, vpm_cols, wf_cols, "parent1", "parent2") %in% names(scored_crosses))
+    # One basis for the whole run, resolved on the candidate pool: the per-trait scale is an
+    # IQR of the rows it sees, so deriving it per table would put the plan and the candidate
+    # pool on different index axes.
+    mt_basis <- if (mt_ready && nrow(scored_crosses) > 0L) {
+      ng_multitrait_index_reference(scored_crosses, trait_order = trait_spec$trait,
+                                    mean_gebv_cols = lvl_cols,
+                                    directions = trait_spec$direction, coefficients = mt_coef)
+    } else NULL
+    ann_one <- function(tbl) {
+      if (!nrow(tbl) || is.null(mt_basis)) return(tbl)
+      if (!all(c(lvl_cols, vpm_cols, wf_cols, "parent1", "parent2") %in% names(tbl))) return(tbl)
+      ng_annotate_cross_priority_multitrait(
+        tbl, trait_order = trait_spec$trait, mean_gebv_cols = lvl_cols, vpm_cols = vpm_cols,
+        directions = trait_spec$direction, coefficients = mt_coef,
+        pev_cols = if (all(pev_cols %in% names(tbl))) pev_cols else NULL,
+        effect_based_x = effect_based_x, index_method = mt_method, basis = mt_basis)
+    }
+  }
+  selected <- ann_one(selected)
+  scored_crosses <- ann_one(scored_crosses)
+  if (nrow(selected) > 0L && "confidence_method" %in% names(selected)) {
+    cm1 <- selected$confidence_method[[1L]]
+    priority_risk_diagnostics <- list(
+      confidence_method = if (is.null(cm1)) NA_character_ else cm1,
+      basis = if (length(trait_spec$column) == 1L) "single_trait" else "multi_trait_index",
+      n_traits = nrow(trait_spec),
+      n_by_risk    = as.list(table(selected$risk_bin)),
+      n_by_profile = as.list(table(selected$portfolio_profile)),
+      top_tier_high_risk = sum(as.character(selected$priority_tier) ==
+                                 levels(selected$priority_tier)[[1L]] &
+                               as.character(selected$risk_bin) == "high", na.rm = TRUE),
+      posterior_used = FALSE
+    )
+    if (length(trait_spec$column) > 1L) {
+      ib <- attr(selected, "index_basis")
+      priority_risk_diagnostics$index_method <- multi_trait_meta$method
+      priority_risk_diagnostics$index_weights <- if (is.null(ib)) NULL else as.list(ib$w)
+      priority_risk_diagnostics$upside_method <- "exact_within_family_cov"
+      # "linearized_rank_index" means multi_trait_score is a RANK index, so the quadrant is
+      # indicative rather than a decomposition of the ranked merit -- the frontend must badge
+      # it. See ng_multitrait_portfolio_basis.
+      pb <- selected$portfolio_basis[[1L]]
+      priority_risk_diagnostics$portfolio_basis <- if (is.null(pb)) NA_character_ else pb
+      # Per-trait accounting for the index, over the CANDIDATE pool (a plan of n_crosses is too
+      # small a sample to characterise a trait). Answers the two questions a breeder asks of a
+      # multi-trait run without opening the cross table: which trait is carrying the risk, and
+      # is any trait effectively absent from the index?
+      if (!is.null(ib) && nrow(scored_crosses) > 0L) {
+        grab_rt <- function(cols) {
+          if (!all(cols %in% names(scored_crosses))) return(NULL)
+          matrix(vapply(cols, function(cc)
+            suppressWarnings(as.numeric(scored_crosses[[cc]])), numeric(nrow(scored_crosses))),
+            nrow = nrow(scored_crosses), dimnames = list(NULL, trait_spec$trait))
+        }
+        col_mean <- function(M) {
+          if (is.null(M)) return(rep(NA_real_, nrow(trait_spec)))
+          v <- colMeans(M, na.rm = TRUE)
+          v[!is.finite(v)] <- NA_real_
+          v
+        }
+        var_share <- col_mean(ng_multitrait_variance_shares(
+          scored_crosses, trait_spec$trait, ib$w, vpm = grab_rt(vpm_cols)))
+        pm <- grab_rt(pev_cols)
+        pev_share <- col_mean(if (is.null(pm)) NULL else
+          ng_multitrait_pev_shares(pm, ib$w, trait_spec$trait))
+        rel <- col_mean(grab_rt(paste0(traits_clean, "_reliability")))
+        priority_risk_diagnostics$index_traits <- lapply(seq_len(nrow(trait_spec)), function(k)
+          list(trait = trait_spec$trait[[k]],
+               direction = trait_spec$direction[[k]],
+               weight = unname(ib$w[[k]]),
+               marker_effect_reliability = unname(rel[[k]]),
+               mean_variance_share = unname(var_share[[k]]),
+               mean_pev_share = unname(pev_share[[k]])))
+        # Traits that buy more uncertainty than opportunity: carrying above an equal share of
+        # the index PEV, and more than twice as much of the index's risk as of its spread. This
+        # is the actionable signal (drop the trait, or phenotype it better) and it is what
+        # actually catches a poorly-estimated trait -- a bare "contributes little" threshold
+        # misses one that contributes little gain but a great deal of error.
+        equal_share <- 1 / nrow(trait_spec)
+        flagged <- is.finite(pev_share) & pev_share > equal_share &
+          pev_share > 2 * pmax(var_share, 0, na.rm = FALSE)
+        flagged[is.na(flagged)] <- FALSE
+        priority_risk_diagnostics$risk_disproportionate_traits <-
+          as.list(trait_spec$trait[flagged])
+
+        # Is the index confidence actually an INDEX quantity? sum_k w_k^2 PEV_k is exact given
+        # the fitted models, but the per-trait PEVs are only comparable across traits when
+        # their residual variances are -- and sigma_e^2 is estimated in sample. A trait whose
+        # ridge lambda lands on the grid floor can interpolate its training rows, collapsing
+        # sigma_e^2 and reporting a near-zero PEV regardless of how well the trait is really
+        # predicted. When one trait then carries essentially all of the index PEV, risk_bin is
+        # a single-trait statement wearing an index label, and must not be read otherwise.
+        conc <- if (any(is.finite(pev_share))) max(pev_share, na.rm = TRUE) else NA_real_
+        priority_risk_diagnostics$pev_concentration <- conc
+        priority_risk_diagnostics$pev_concentration_note <-
+          if (is.finite(conc) && conc > 0.9) sprintf(paste0(
+            "index confidence is dominated by '%s' (%.0f%% of the index prediction-error ",
+            "variance), so risk_bin ranks crosses on that trait rather than on the index. ",
+            "Per-trait PEVs are only comparable when their residual variances are; check ",
+            "ridge_lambda and marker_effect_reliability per trait (a lambda at the grid floor ",
+            "interpolates its training rows and reports a near-zero PEV)."),
+            trait_spec$trait[[which.max(replace(pev_share, !is.finite(pev_share), -Inf))]],
+            100 * conc) else NA_character_
+      }
+      priority_risk_diagnostics$portfolio_basis_note <-
+        if (identical(pb, "linearized_rank_index")) paste0(
+          "index method '", multi_trait_meta$method, "' combines rank-normalized traits, so no ",
+          "linear index exists in genetic units; cross_level/cross_upside use the trait weights ",
+          "as standardized-unit coefficients and are indicative, not a decomposition of ",
+          "multi_trait_score. Supply economic_weight (or desired_change) per trait for a solved ",
+          "linear index.") else NA_character_
     }
   }
 
