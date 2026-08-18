@@ -942,10 +942,15 @@ ng_cp__stage_predict <- function(ctx) {
         # Summarize the SELECTED metric, not the hardcoded usefulness column: a posterior
         # interval computed on usefulness must never be presented as the uncertainty of a
         # `mean` / `var_complex` run (design doc F2).
+        # method_varPMV = "fast" INSIDE the draw loop is deliberate, not a fallback.
+        # "full_posterior" inflates the variance by the marker-effect uncertainty; inside the
+        # posterior loop that uncertainty is already carried by the draws themselves (R/30
+        # scores each draw with beta_var = 0), so requesting it here would double-count it --
+        # and the per-draw tables carry no pmv_full_posterior column to begin with.
         value_fun = function(sc) ng_run_cp_trait_value(
           scored_trait = sc, direction = trait_spec$direction[[i]],
           trait_value_metric = trait_value_metric, uc_variance_source = uc_variance_source,
-          selection_prop = selection_prop, method_varPMV = method_varPMV),
+          selection_prop = selection_prop, method_varPMV = "fast"),
         # include the plan size so prob_top_tier answers "top-N where N is the plan"
         top_n_targets = unique(as.integer(c(n_crosses, min(n_crosses, 10L), 10L, 20L, 50L)))
       )
