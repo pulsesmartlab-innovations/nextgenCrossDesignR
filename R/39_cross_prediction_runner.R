@@ -939,7 +939,15 @@ ng_cp__stage_predict <- function(ctx) {
         recomb_model = recomb_model,
         use_cpp = use_cpp,
         parent_type = parent_type,
-        top_n_targets = unique(as.integer(c(min(n_crosses, 10L), 10L, 20L, 50L)))
+        # Summarize the SELECTED metric, not the hardcoded usefulness column: a posterior
+        # interval computed on usefulness must never be presented as the uncertainty of a
+        # `mean` / `var_complex` run (design doc F2).
+        value_fun = function(sc) ng_run_cp_trait_value(
+          scored_trait = sc, direction = trait_spec$direction[[i]],
+          trait_value_metric = trait_value_metric, uc_variance_source = uc_variance_source,
+          selection_prop = selection_prop, method_varPMV = method_varPMV),
+        # include the plan size so prob_top_tier answers "top-N where N is the plan"
+        top_n_targets = unique(as.integer(c(n_crosses, min(n_crosses, 10L), 10L, 20L, 50L)))
       )
     }
     clean_trait <- ng_run_cp_clean_trait_name(trait)
@@ -952,6 +960,19 @@ ng_cp__stage_predict <- function(ctx) {
     # a Sigma_beta that, for multi-trait runs, only the last trait would have supplied).
     midparent_pev <- ng_midparent_pev(geno, scored_trait[, c("parent1", "parent2")],
                                       fit$beta_cov_full, fit$marker_mean)
+    # Posterior spread of the ranked value + P(top-N) on that same value. Reduced to vectors
+    # here so they ride the cross table and survive candidate filtering / allocation, exactly
+    # like the mid-parent PEV above.
+    post_sd <- NULL; post_topn <- NULL
+    if (!is.null(posterior_scores)) {
+      if ("ranked_value_post_sd" %in% names(posterior_scores)) {
+        post_sd <- suppressWarnings(as.numeric(posterior_scores$ranked_value_post_sd))
+      }
+      tn <- paste0("posterior_topn_prob_", as.integer(n_crosses))
+      if (tn %in% names(posterior_scores)) {
+        post_topn <- suppressWarnings(as.numeric(posterior_scores[[tn]]))
+      }
+    }
     if (!identical(method_varPMV, "full_posterior")) fit$beta_cov_full <- NULL
     list(
       index = i,
@@ -961,6 +982,8 @@ ng_cp__stage_predict <- function(ctx) {
       y = y,
       fit = fit,
       midparent_pev = midparent_pev,
+      post_sd = post_sd,
+      post_topn = post_topn,
       scored_trait = scored_trait,
       value = value,
       pmv_used_col = pmv_used_col,
@@ -1017,6 +1040,8 @@ ng_cp__stage_predict <- function(ctx) {
     cross_table[[paste0(clean_trait, "_reliability")]] <- scored_trait$effect_reliability
     # Per-trait mid-parent PEV (cross-priority risk). NA when Sigma_beta was not requested.
     cross_table[[paste0(clean_trait, "_midparent_pev")]] <- item$midparent_pev
+    if (!is.null(item$post_sd))   cross_table[[paste0(clean_trait, "_post_sd")]]   <- item$post_sd
+    if (!is.null(item$post_topn)) cross_table[[paste0(clean_trait, "_post_topn")]] <- item$post_topn
     effects_list[[trait]] <- item$fit
     trait_scores[[trait]] <- scored_trait
     if (isTRUE(run_posterior_prediction)) {
@@ -1359,12 +1384,17 @@ ng_cp__stage_rank <- function(ctx) {
   pev_cols <- paste0(traits_clean, "_midparent_pev")
 
   if (length(trait_spec$column) == 1L) {
+    sd_col <- paste0(traits_clean, "_post_sd")
+    tn_col <- paste0(traits_clean, "_post_topn")
     ann_one <- function(tbl) {
       if (!nrow(tbl)) return(tbl)
       if (!all(c(lvl_cols, vpm_cols, "parent1", "parent2") %in% names(tbl))) return(tbl)
       pev <- if (pev_cols %in% names(tbl)) suppressWarnings(as.numeric(tbl[[pev_cols]])) else NULL
+      psd <- if (sd_col %in% names(tbl)) suppressWarnings(as.numeric(tbl[[sd_col]])) else NULL
+      ptn <- if (tn_col %in% names(tbl)) suppressWarnings(as.numeric(tbl[[tn_col]])) else NULL
       ng_annotate_cross_priority(tbl, level = tbl[[lvl_cols]], vpm = tbl[[vpm_cols]],
-                                 pev = pev, effect_based_x = effect_based_x)
+                                 pev = pev, effect_based_x = effect_based_x,
+                                 post_sd = psd, prob_top_tier = ptn)
     }
   } else {
     # Index coefficients: the linear solve for the economic_index / desired_gain families, the
@@ -1407,7 +1437,7 @@ ng_cp__stage_rank <- function(ctx) {
       top_tier_high_risk = sum(as.character(selected$priority_tier) ==
                                  levels(selected$priority_tier)[[1L]] &
                                as.character(selected$risk_bin) == "high", na.rm = TRUE),
-      posterior_used = FALSE
+      posterior_used = identical(cm1, "posterior_ci")
     )
     if (length(trait_spec$column) > 1L) {
       ib <- attr(selected, "index_basis")

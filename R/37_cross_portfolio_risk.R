@@ -24,7 +24,11 @@ ng_midparent_pev <- function(geno, pairs, beta_cov, marker_mean = NULL) {
 #   confidence_method: *_partial when the merit's sqrt(X) term is effect-based (mean PEV
 #     does not cover the variance-estimation error, spec 5.4); plain otherwise.
 ng_cross_confidence <- function(pev, effect_based_x = TRUE,
-                                method_prefix = "midparent_pev") {
+                                method_prefix = "midparent_pev", spread = NULL) {
+  # `spread` supplies the uncertainty scale DIRECTLY (e.g. a posterior SD of the ranked value)
+  # instead of deriving it as sqrt(pev). Everything downstream -- normalization, tertiles -- is
+  # identical; only the source of the scale differs.
+  if (!is.null(spread)) pev <- pmax(as.numeric(spread), 0)^2
   n <- length(pev)
   na_bin <- factor(rep(NA_character_, n), levels = c("low", "med", "high"), ordered = TRUE)
   if (is.null(pev) || !any(is.finite(pev)) ||
@@ -76,17 +80,31 @@ ng_cross_portfolio_profile <- function(level, upside,
 #   level = the additive-genetic mid-parent mean column (cross_mean_gebv basis)
 #   vpm   = the pure within-family genetic variance column (a'Ra); upside = sqrt(vpm)
 ng_annotate_cross_priority <- function(crosses, level, vpm, pev = NULL,
-                                       effect_based_x = TRUE) {
+                                       effect_based_x = TRUE,
+                                       post_sd = NULL, prob_top_tier = NULL) {
   crosses <- as.data.frame(crosses, stringsAsFactors = FALSE)
   crosses$cross_level  <- as.numeric(level)
   crosses$cross_upside <- sqrt(pmax(as.numeric(vpm), 0))
-  cf <- ng_cross_confidence(pev, effect_based_x = effect_based_x)
+  # Posterior ON: confidence comes from the posterior SD of the RANKED value, which already
+  # covers both the mean and the variance term of the merit -- so it carries no "_partial"
+  # caveat, unlike the mid-parent PEV fallback (which covers only the mean).
+  use_post <- !is.null(post_sd) && any(is.finite(post_sd))
+  cf <- if (use_post) {
+    ng_cross_confidence(NULL, effect_based_x = FALSE,
+                        method_prefix = "posterior_ci", spread = post_sd)
+  } else {
+    ng_cross_confidence(pev, effect_based_x = effect_based_x)
+  }
   crosses$cross_confidence  <- cf$cross_confidence
   crosses$risk_bin          <- cf$risk_bin
   crosses$confidence_method <- cf$confidence_method
   crosses$portfolio_profile <- ng_cross_portfolio_profile(crosses$cross_level,
                                                           crosses$cross_upside)
   crosses$portfolio_basis <- "single_trait"
+  # prob_top_tier is a JOINT merit x uncertainty quantity ("is this cross genuinely top-N?"),
+  # deliberately reported as its own continuous column and NEVER binned into risk_bin or
+  # relabelled as confidence -- the two answer different questions.
+  crosses$prob_top_tier <- if (is.null(prob_top_tier)) NA_real_ else as.numeric(prob_top_tier)
   crosses
 }
 

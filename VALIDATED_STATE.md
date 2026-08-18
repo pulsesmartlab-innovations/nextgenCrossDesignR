@@ -1,7 +1,94 @@
 # Validated Software State
 
-Last reviewed: 2026-08-16 for the multi-trait cross-priority portfolio and the polyploid
-quantitative-genetics audit.
+Last reviewed: 2026-08-18 for the exact phased autopolyploid variance and posterior-ON
+cross confidence.
+
+## Phased Autopolyploid Variance & Posterior Confidence Note (v0.21.0, 2026-08-18)
+
+Closes two items that were carried as **Disallowed claims** in the 2026-08-16 note: the
+autopolyploid within-family variance could not resolve linkage phase, and `cross_confidence`
+had no posterior path (so it was a within-run ranking only, and P(top-N) did not exist).
+
+Allowed claims:
+
+- **Exact phased autopolyploid within-family additive variance.** With phased parental
+  homologues and a cM map, for P homologues under random bivalent pairing:
+
+      Var(gamete) = [ P * sum_i (b h_i)' R (b h_i) - (b d)' R (b d) ] / (4 (P - 1))
+
+  with `d = sum_i h_i` the dosage and `R_kl = (1 - 2 r_kl)` the decay matrix the package
+  already builds; the cross variance is the sum over the two parents. Derived from the bivalent
+  model (within a bivalent the gamete keeps the same homologue across two loci with probability
+  `1 - r`, and the pairing average puts weight `1/(P-1)` on the sum over all homologue pairs).
+  Validated three ways, all in `tests/polyploid_phased_variance.R`:
+  * against **directly simulated meiosis** (random bivalent pairing + crossovers along the
+    chromosome): 0.43%-2.10% relative error at n = 15000-30000 draws, i.e. within Monte-Carlo
+    error (~1%);
+  * the **unlinked limit collapses EXACTLY to the dosage-only moment table** (max abs diff
+    3.6e-15 through the function, 5.8e-15 through the scorer) -- so phase can change the answer
+    only through LINKAGE, never on its own;
+  * the **single-locus case equals the hypergeometric** `d(P-d)/(4(P-1))` exactly, for ploidy
+    2/4/6 and every dosage.
+  Exposed as `phased_haplotypes` + `marker_map` on `ng_polyploid_score_crosses()`, which then
+  stamps `variance_model = "phased_exact"` instead of `"unlinked_phase_marginalized"`.
+  Rownames follow the diploid convention generalized to ploidy: `<parent>_Hap1`..`<parent>_HapP`.
+- **Phase changes the DECISION, not just the number.** Spearman between dosage-based and
+  phased usefulness is 0.926 on a test panel -- the cross ORDER moves. This matters more than
+  the posterior work below, because the autopolyploid variance feeds `cross_usefulness`, which
+  feeds the index, which feeds allocation. Posterior confidence does not: the allocator
+  optimizes `multi_trait_score` (or `marker_adjusted_gain`), and posterior output never reaches
+  it in `ng_run_cross_prediction` -- `ng_optimize_robust_mating_plan` exists but is called only
+  from tests and the vignette.
+- **Cost is O(parents), not O(crosses).** The per-parent term does not depend on the mate, so it
+  is computed once per parent (P + 1 quadratic forms) and each cross is a sum of two precomputed
+  numbers.
+- **Posterior-ON confidence summarizes the SELECTED metric (design-doc item F2).**
+  `ng_posterior_cross_predict()` takes a `value_fun` and reports `ranked_value_post_sd`, so the
+  runner summarizes the value it actually ranks on rather than the hardcoded
+  `usefulness_pmv_gebv`. With posterior on, `cross_confidence` derives from the absolute
+  posterior SD of that value on its native scale (never a CV) and
+  `confidence_method = "posterior_ci"` -- with **no `_partial` suffix**, because unlike the
+  mid-parent PEV fallback it covers the merit's variance term as well as its mean.
+  `prob_top_tier` is populated from P(cross in top-N) at N = the plan size.
+- **The F2 fix is measurable, not cosmetic.** Confidence computed under `trait_value_metric =
+  "usefulness"` versus `"mean"` correlates at **Spearman -0.21** on the same data -- nearly
+  opposite orderings. Under the previous behaviour both runs would have received the identical
+  usefulness-based interval.
+
+Disallowed claims:
+
+- **The phased path covers ADDITIVE variance only.** `ng_polyploid_score_crosses_dominance()`
+  has no phased path; its dominance (and additive) variance still comes from the dosage moment
+  table. Do not describe dominance-aware polyploid scoring as phase-exact.
+- **Double reduction is not modelled on the phased path** (random chromosome segregation only).
+  Supplying `phased_haplotypes` together with `double_reduction > 0` is a hard error rather than
+  a silent choice between them; if DR matters more than phase for a crop, use the dosage path.
+- **Phase must be supplied, and is not inferred.** Without `phased_haplotypes` the autopolyploid
+  variance remains `unlinked_phase_marginalized` -- unbiased over unknown phase but unable to
+  separate crosses differing only in linkage phase. The package does not phase dosage data.
+- **`prob_top_tier` is not the confidence axis.** It is a joint merit x uncertainty quantity
+  ("is this cross genuinely top-N?"), reported as its own continuous column and never binned
+  into `risk_bin` or relabelled as confidence.
+- **No posterior path for MULTI-TRAIT runs.** Measured, not assumed. Two blockers:
+  * *Definitional.* The per-draw index the design doc specifies is linear, but `auto` promotes
+    to `weighted`, a RANK index, for which no linear per-draw value exists. Rank-normalizing
+    within each draw gives every draw the same marginal distribution by construction, so the
+    across-draw spread reflects rank REORDERING rather than magnitude uncertainty -- not a
+    confidence signal.
+  * *The cheap approximation does not work.* Holding the within-family covariance at its point
+    estimate and varying only the mean per draw retains 98.5-99.3% of the posterior SD's
+    MAGNITUDE but only 0.37-0.98 Spearman of its per-cross ORDERING (risk-bin agreement
+    44%/53%/89% across three settings; three bins give 33% by chance). The mean term's
+    uncertainty is largely shared across crosses, so the between-cross signal lives
+    disproportionately in the variance term. Since `cross_confidence` is a within-run
+    normalization and `risk_bin` is within-run tertiles, only the ordering matters -- so the
+    approximation fails exactly where it would be used, and worst in small, low-h2 programs.
+  * The full per-draw path is affordable at small scale and not at production scale: measured
+    0.14 s per pass at 50 parents / 1k markers / T=2 (70 s for 500 draws), 1.3 s at 100 / 2k
+    (11 min), and 40 s at 200 parents / 5k markers / T=3 (5.6 h).
+  Multi-trait runs therefore keep the mid-parent PEV path and its existing disclosure.
+- **No selection-superiority claim** for either feature. The phased variance is an accuracy and
+  identifiability improvement; the posterior work is a reporting surface.
 
 ## Multi-Trait Portfolio & Polyploid QG Audit Note (v0.20.0, 2026-08-16)
 
