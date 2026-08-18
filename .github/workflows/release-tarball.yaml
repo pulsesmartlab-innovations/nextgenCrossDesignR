@@ -1,0 +1,95 @@
+# Attaches an installable source tarball to every GitHub release.
+#
+# WHY THIS EXISTS. README tells users to install with
+#
+#     install.packages("nextgenCrossDesign_<ver>.tar.gz", repos = NULL, type = "source")
+#
+# but no release ever carried that file. GitHub's auto-generated "Source code (tar.gz)" is a
+# snapshot of the repository, NOT a built package -- it has no vignettes rendered into inst/doc,
+# and `R CMD build` conventions are not applied -- so it is not what that command expects. The
+# documented install path therefore named a file nobody could obtain.
+#
+# Doing it in CI rather than by hand is the point: a tarball built manually drifts the moment
+# someone forgets, which is exactly how the deployment image ended up several versions behind.
+#
+# Triggers on release publication so tagging is the only action needed, plus workflow_dispatch
+# so an existing release can be back-filled.
+name: release-tarball
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to attach a tarball to (e.g. v0.21.0)'
+        type: string
+        required: true
+
+permissions:
+  contents: write        # required to upload a release asset
+
+jobs:
+  tarball:
+    runs-on: ubuntu-latest
+    name: build & attach source tarball
+    steps:
+      # Build from the tag being released, never from whatever main happens to be, so the
+      # asset provably matches the release it hangs off.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.tag_name }}
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: release
+          use-public-rspm: true
+
+      # Vignettes are rendered into the tarball, which is the difference between a built
+      # package and a source snapshot.
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: any::rcmdcheck, any::knitr, any::rmarkdown
+          needs: check
+
+      - name: Build source tarball
+        id: build
+        run: |
+          set -euo pipefail
+          R CMD build . --no-manual
+          TARBALL=$(ls nextgenCrossDesign_*.tar.gz | head -1)
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+          echo "built $TARBALL"
+
+      # The asset is the documented install path, so it must actually install. Checking that
+      # here means a broken tarball never reaches a release.
+      - name: Verify the tarball installs and loads
+        run: |
+          set -euo pipefail
+          R CMD INSTALL "${{ steps.build.outputs.tarball }}"
+          Rscript -e 'library(nextgenCrossDesign);
+            v <- as.character(utils::packageVersion("nextgenCrossDesign"));
+            cat("installed version:", v, "\n");
+            if (!length(getNamespaceExports("nextgenCrossDesign"))) stop("no exports");
+            cat("exports:", length(getNamespaceExports("nextgenCrossDesign")), "\n")'
+
+      # The tag must agree with DESCRIPTION, or the release advertises a version it does not
+      # contain -- the same class of drift this workflow exists to stop.
+      - name: Check the tag matches DESCRIPTION
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.tag_name }}"
+          DESC=$(grep '^Version:' DESCRIPTION | sed 's/^Version:[[:space:]]*//')
+          echo "tag=$TAG DESCRIPTION=$DESC"
+          if [ "v$DESC" != "$TAG" ]; then
+            echo "tag $TAG does not match DESCRIPTION version $DESC"; exit 1
+          fi
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" "${{ steps.build.outputs.tarball }}" --clobber --repo "$GITHUB_REPOSITORY"
+          echo "attached ${{ steps.build.outputs.tarball }} to $TAG"

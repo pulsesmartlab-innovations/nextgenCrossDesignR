@@ -9,7 +9,7 @@ prediction** and **mate allocation** as two separate problems, so each can be
 solved with the right method and audited independently.
 
 <!-- badges -->
-![version](https://img.shields.io/badge/version-0.20.0-blue)
+![version](https://img.shields.io/badge/version-0.21.0-blue)
 ![R](https://img.shields.io/badge/R-%E2%89%A5%204.1-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![status](https://img.shields.io/badge/core%20path-validated%20(DH%2FRIL)-brightgreen)
@@ -78,8 +78,9 @@ matrix. The PMV extension propagates effect uncertainty with
 ## Installation
 
 ```r
-# from a local source tarball (built from this repo):
-install.packages("nextgenCrossDesign_0.20.0.tar.gz", repos = NULL, type = "source")
+# from the source tarball attached to a release
+# (github.com/pulsesmartlab-innovations/nextgenCrossDesignR/releases -> Assets):
+install.packages("nextgenCrossDesign_0.21.0.tar.gz", repos = NULL, type = "source")
 
 # or directly from GitHub:
 # install.packages("remotes")
@@ -289,6 +290,11 @@ but not yet tagged, so install from a built tarball or from `main` for those. Se
 [GitHub Releases](https://github.com/pulsesmartlab-innovations/nextgenCrossDesignR/releases)
 for full notes. Recent highlights:
 
+- **0.21.0** — exact phased autopolyploid within-family variance (`phased_haplotypes` +
+  `marker_map`, `variance_model = "phased_exact"`; validated against simulated meiosis and
+  collapsing exactly to the dosage result when unlinked) and posterior-ON cross confidence
+  (`confidence_method = "posterior_ci"` on the metric the run actually ranks on, plus
+  `prob_top_tier`).
 - **0.20.0** — polyploid quantitative-genetics audit: identified additive/dominance
   split (dominance orthogonalized against the additive design), correct
   frequency-centred GRM for `poly4x` coancestry, simulated-variance Monte-Carlo SE
