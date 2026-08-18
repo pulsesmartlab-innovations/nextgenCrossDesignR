@@ -19,7 +19,10 @@
 # contract the allocator consumes; select on poly_mean (gain) or poly_usefulness (variance-aware).
 ng_polyploid_score_crosses <- function(dosage, effects, ploidy = 2L, pairs = NULL,
                                   grm_method = c("vanraden", "yang"),
-                                  selection_prop = 0.10, double_reduction = 0) {
+                                  selection_prop = 0.10, double_reduction = 0,
+                                  phased_haplotypes = NULL, marker_map = NULL,
+                                  recomb_model = c("haldane", "kosambi")) {
+  recomb_model <- match.arg(recomb_model)
   grm_method <- match.arg(grm_method)
   geno <- ng_polyploid_as_dosage_matrix(dosage, ploidy = ploidy, name = "dosage")
   ids <- rownames(geno)
@@ -42,18 +45,39 @@ ng_polyploid_score_crosses <- function(dosage, effects, ploidy = 2L, pairs = NUL
   if (length(unknown)) ng_stop("pairs contains unknown parent IDs: ", paste(unknown, collapse = ", "))
   if (any(p1 == p2)) ng_stop("pairs must not contain self-crosses")
 
-  # Within-family additive segregation variance from the progeny-moment table:
-  # Var = sum_k a_k^2 Var(X_k). The between-locus term is zero (R = I) because autopolyploid
-  # parental phase is not identifiable from dosage; averaged over the phase configurations
-  # consistent with the dosages that covariance is EXACTLY zero, so this is unbiased rather than
-  # approximate -- but it cannot separate two crosses that differ only in linkage phase.
-  # See R/49 header for the full statement.
-  mt <- ng_polyploid_progeny_moment_table(ploidy, double_reduction = double_reduction)
-  Mi <- geno; storage.mode(Mi) <- "integer"
-  poly_var <- vapply(seq_along(p1), function(i) {
-    ij <- cbind(Mi[p1[i], ] + 1L, Mi[p2[i], ] + 1L)
-    sum(eff^2 * mt$varX[ij])
-  }, numeric(1))
+  # Within-family additive segregation variance. Two paths:
+  #
+  #  * PHASED (phased_haplotypes + marker_map supplied): the EXACT recombination-aware variance
+  #    from the parental homologues (ng_poly_phased_within_family_var, R/49). This is the only
+  #    path that can separate two crosses whose parents share dosages but differ in linkage
+  #    phase. Double reduction is not modelled here, so requesting both is refused rather than
+  #    silently honouring one.
+  #  * DOSAGE (default): the progeny-moment table, Var = sum_k a_k^2 Var(X_k). The between-locus
+  #    term is zero (R = I) because autopolyploid phase is not identifiable from dosage; averaged
+  #    over the phase configurations consistent with the dosages that covariance is EXACTLY zero,
+  #    so this is unbiased rather than approximate -- but it cannot resolve phase. See the R/49
+  #    header for the full statement.
+  use_phase <- !is.null(phased_haplotypes)
+  if (use_phase) {
+    if (is.null(marker_map)) {
+      ng_stop("phased_haplotypes needs marker_map: the exact phased variance is recombination-aware")
+    }
+    if (isTRUE(double_reduction > 0)) {
+      ng_stop("double_reduction is not modelled on the phased path; set double_reduction = 0 ",
+              "to use phased haplotypes, or drop phased_haplotypes to use the dosage path")
+    }
+    poly_var <- ng_poly_phased_within_family_var(
+      phased_haplotypes, data.frame(parent1 = p1, parent2 = p2, stringsAsFactors = FALSE),
+      beta = stats::setNames(eff, colnames(geno)), marker_map = marker_map,
+      ploidy = ploidy, recomb_model = recomb_model)
+  } else {
+    mt <- ng_polyploid_progeny_moment_table(ploidy, double_reduction = double_reduction)
+    Mi <- geno; storage.mode(Mi) <- "integer"
+    poly_var <- vapply(seq_along(p1), function(i) {
+      ij <- cbind(Mi[p1[i], ] + 1L, Mi[p2[i], ] + 1L)
+      sum(eff^2 * mt$varX[ij])
+    }, numeric(1))
+  }
   intensity <- ng_selection_intensity(selection_prop)
 
   out <- data.frame(
@@ -62,7 +86,7 @@ ng_polyploid_score_crosses <- function(dosage, effects, ploidy = 2L, pairs = NUL
     poly_var = poly_var,
     poly_usefulness = (gebv[p1] + gebv[p2]) / 2 + intensity * sqrt(pmax(poly_var, 0)),
     poly_parent1_gebv = gebv[p1], poly_parent2_gebv = gebv[p2],
-    variance_model = "unlinked_phase_marginalized",
+    variance_model = if (use_phase) "phased_exact" else "unlinked_phase_marginalized",
     pair_kinship = ng_poly4x_pair_coancestry(parent_kinship, pairs),
     stringsAsFactors = FALSE
   )

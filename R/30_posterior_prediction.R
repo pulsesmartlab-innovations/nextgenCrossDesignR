@@ -322,6 +322,7 @@ ng_posterior_cross_predict <- function(geno,
                                        ci_level = 0.95,
                                        gain_col = "usefulness_pmv_gebv",
                                        var_col = "pmv",
+                                       value_fun = NULL,
                                        tau_superior = NULL,
                                        k_progeny = 100L,
                                        top_n_targets = c(10L, 20L, 50L)) {
@@ -405,7 +406,10 @@ ng_posterior_cross_predict <- function(geno,
       parent_type = parent_type
     )
     pmv_mat[, s] <- scored[[var_col]]
-    uc_mat[, s]  <- scored[[gain_col]]
+    # `value_fun` lets a caller summarize the metric it actually RANKS on rather than the
+    # hardcoded usefulness column. Without it, a posterior interval computed on usefulness would
+    # be presented as the uncertainty of a `mean` / `var_complex` run -- the wrong quantity.
+    uc_mat[, s]  <- if (is.null(value_fun)) scored[[gain_col]] else as.numeric(value_fun(scored))
   }
 
   alpha <- (1 - ci_level) / 2
@@ -424,6 +428,13 @@ ng_posterior_cross_predict <- function(geno,
   base[[paste0(gain_col, "_post_mean")]]  <- rowMeans(uc_mat, na.rm = TRUE)
   base[[paste0(gain_col, "_post_lower")]] <- row_quantile(uc_mat, q_lower)
   base[[paste0(gain_col, "_post_upper")]] <- row_quantile(uc_mat, q_upper)
+  # Absolute posterior SD of the ranked value, on its native scale. This is the merit-DECOUPLED
+  # spread the risk layer consumes; never a CV (usefulness can be ~0 or negative, so a ratio is
+  # sign-ill-defined and would re-conflate merit with uncertainty).
+  base$ranked_value_post_sd <- apply(uc_mat, 1L, function(r) {
+    fr <- r[is.finite(r)]; if (length(fr) < 2L) NA_real_ else stats::sd(fr)
+  })
+  base$ranked_value_post_mean <- rowMeans(uc_mat, na.rm = TRUE)
 
   if (!is.null(tau_superior)) {
     tau <- as.numeric(tau_superior)
@@ -457,6 +468,7 @@ ng_posterior_cross_predict <- function(geno,
   attr(base, "posterior") <- list(
     n_draws = S, method = posterior_effects$method,
     gain_col = gain_col, var_col = var_col,
+    ranked_value = if (is.null(value_fun)) gain_col else "value_fun",
     ci_level = ci_level, selection_intensity = i_intensity,
     top_n_targets = as.integer(top_n_targets)
   )

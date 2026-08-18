@@ -172,3 +172,129 @@ ng_polyploid_score_crosses_dominance <- function(fit,
   attr(out, "double_reduction") <- as.numeric(double_reduction)
   out
 }
+
+# ---- EXACT phased autopolyploid within-family variance ---------------------------------------
+#
+# The dosage-only variance above is unbiased over unknown phase but cannot separate two crosses
+# whose parents have identical dosages and different linkage phase. When the parental HOMOLOGUES
+# are known (phased), the within-family additive variance is available exactly.
+#
+# Model: P homologues pair at random into P/2 bivalents; the gamete takes one chromatid per
+# bivalent (P/2 alleles). Within a bivalent {i,j} the gamete carries h_i or h_j with probability
+# 1/2 at a locus, and the SAME homologue at a second locus with probability (1 - r), so
+#   Cov(g_k, g_l | bivalent{i,j}) = (1 - 2r_kl) (h_ik - h_jk)(h_il - h_jl) / 4.
+# Averaging over the (P-1)!! pairings -- each unordered pair appears in (P-3)!! of them, i.e. a
+# weight of 1/(P-1) on the sum over ALL pairs -- and using
+#   sum_{i<j} (h_ik - h_jk)(h_il - h_jl) = P sum_i h_ik h_il - (sum_i h_ik)(sum_i h_il)
+# gives, for marker effects b and the decay matrix R_kl = (1 - 2 r_kl),
+#
+#   Var(gamete value) = [ P * sum_i (b*h_i)' R (b*h_i)  -  (b*d)' R (b*d) ] / (4 (P - 1))
+#
+# with d = sum_i h_i the parental dosage. The cross variance is the sum over the two parents,
+# because gametes from different parents are independent.
+#
+# Two properties worth knowing, both verified in tests/polyploid_phased_variance.R:
+#   * under R = I (unlinked) it collapses EXACTLY to the hypergeometric d(P-d)/(4(P-1)), i.e. to
+#     the dosage-only result -- phase changes the answer only through linkage, as it must;
+#   * against directly simulated meiosis (random bivalent pairing + crossovers) it agrees to
+#     Monte-Carlo error.
+# Double reduction is NOT modelled on this path (random chromosome segregation only); use the
+# dosage path with `double_reduction` if DR matters more than phase for your crop.
+#
+# Cost note: the per-parent term does not depend on the mate, so it is computed once per parent
+# (P + 1 quadratic forms each) and every cross is then a sum of two precomputed numbers -- O(parents),
+# not O(crosses).
+
+# Split "<parent>_Hap<k>" rownames into parent id + homologue index. Mirrors the diploid
+# "<parent>_HapA"/"_HapB" convention used by ng_gms_additive_var_general.
+ng_poly_hap_parents <- function(haplotypes, ploidy) {
+  rn <- rownames(haplotypes)
+  if (is.null(rn)) ng_stop("phased_haplotypes must have rownames '<parent>_Hap<k>'")
+  m <- regmatches(rn, regexec("^(.*)_Hap([0-9]+)$", rn))
+  bad <- vapply(m, length, 0L) != 3L
+  if (any(bad)) {
+    ng_stop("phased_haplotypes rownames must look like '<parent>_Hap1'..'<parent>_Hap", ploidy,
+            "'; offending: ", paste(utils::head(rn[bad], 3L), collapse = ", "))
+  }
+  parent <- vapply(m, `[`, character(1), 2L)
+  idx <- as.integer(vapply(m, `[`, character(1), 3L))
+  tab <- table(parent)
+  wrong <- names(tab)[tab != ploidy]
+  if (length(wrong)) {
+    ng_stop("phased_haplotypes: ", length(wrong), " parent(s) do not have exactly ", ploidy,
+            " homologues (e.g. ", paste(utils::head(wrong, 3L), collapse = ", "), ")")
+  }
+  if (any(idx < 1L | idx > ploidy)) ng_stop("phased_haplotypes homologue indices must be 1..", ploidy)
+  list(parent = parent, index = idx)
+}
+
+# Per-parent gamete-value variance (the bracketed term above), summed over chromosomes.
+# Returns a named numeric vector over parents.
+ng_poly_phased_parent_var <- function(haplotypes, beta, marker_map, ploidy,
+                                      recomb_model = c("haldane", "kosambi")) {
+  recomb_model <- match.arg(recomb_model)
+  P <- as.integer(ploidy)
+  if (P < 2L || P %% 2L != 0L) ng_stop("phased polyploid variance needs an even ploidy >= 2")
+  H <- as.matrix(haplotypes); storage.mode(H) <- "double"
+  info <- ng_poly_hap_parents(H, P)
+  mm <- ng_prepare_marker_map(marker_map, colnames(H), model = recomb_model)
+  ord <- order(mm$chr_index, mm$pos_cm, mm$marker)
+  mm <- mm[ord, , drop = FALSE]
+  # Effects may arrive named by marker or positional in the haplotype column order. Resolve
+  # explicitly and FAIL on an unmatched marker: silently coercing a missing effect to 0 yields a
+  # plausible-looking variance (in the limit, exactly zero) instead of an error.
+  if (is.null(names(beta))) {
+    if (length(beta) != ncol(H)) {
+      ng_stop("beta is unnamed, so it must have one value per haplotype column (",
+              ncol(H), "); got ", length(beta))
+    }
+    beta <- stats::setNames(as.numeric(beta), colnames(H))
+  }
+  miss_b <- setdiff(mm$marker, names(beta))
+  if (length(miss_b)) {
+    ng_stop("beta is missing ", length(miss_b), " marker(s) present in the haplotypes, e.g. ",
+            paste(utils::head(miss_b, 3L), collapse = ", "))
+  }
+  b <- as.numeric(beta[mm$marker])
+  if (anyNA(b)) ng_stop("beta contains NA for ", sum(is.na(b)), " marker(s)")
+  H <- H[, mm$marker, drop = FALSE]
+
+  parents <- unique(info$parent)
+  out <- stats::setNames(numeric(length(parents)), parents)
+  for (cc in unique(mm$chr_index)) {
+    idx <- which(mm$chr_index == cc)
+    # R[k,l] = (1 - 2 r_kl) on this chromosome; cross-chromosome entries are 0 by construction,
+    # so the quadratic form decomposes into independent per-chromosome blocks.
+    Rc <- ng_recomb_decay_matrix(mm[idx, , drop = FALSE], model = recomb_model, target = "DH")
+    bc <- b[idx]
+    for (p in parents) {
+      rows <- which(info$parent == p)
+      Hp <- H[rows, idx, drop = FALSE]                       # P x m_chr homologues
+      A <- sweep(Hp, 2L, bc, "*")                            # rows: b * h_i
+      t1 <- sum(rowSums((A %*% Rc) * A))                     # sum_i (b h_i)' R (b h_i)
+      bd <- bc * colSums(Hp)                                 # b * dosage
+      t2 <- drop(bd %*% Rc %*% bd)
+      out[[p]] <- out[[p]] + (P * t1 - t2)
+    }
+  }
+  out / (4 * (P - 1))
+}
+
+# Exact within-family additive variance per cross, from phased parental homologues.
+ng_poly_phased_within_family_var <- function(haplotypes, pairs, beta, marker_map, ploidy,
+                                             recomb_model = c("haldane", "kosambi")) {
+  recomb_model <- match.arg(recomb_model)
+  pairs <- as.data.frame(pairs, stringsAsFactors = FALSE)
+  if (!all(c("parent1", "parent2") %in% names(pairs))) {
+    ng_stop("pairs must contain parent1 and parent2")
+  }
+  pv <- ng_poly_phased_parent_var(haplotypes, beta, marker_map, ploidy,
+                                  recomb_model = recomb_model)
+  p1 <- as.character(pairs$parent1); p2 <- as.character(pairs$parent2)
+  miss <- setdiff(unique(c(p1, p2)), names(pv))
+  if (length(miss)) {
+    ng_stop("phased_haplotypes is missing homologues for parent(s): ",
+            paste(utils::head(miss, 5L), collapse = ", "))
+  }
+  unname(pv[p1] + pv[p2])
+}

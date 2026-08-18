@@ -151,3 +151,61 @@ back <- jsonlite::read_json(tf, simplifyVector = TRUE)
 stopifnot("portfolio_profile" %in% names(back$selected_crosses))
 stopifnot(!is.null(back$priority_risk_diagnostics$confidence_method))
 cat("priority risk portfolio json test passed\n")
+
+# --- posterior-ON confidence + prob_top_tier (F2) ------------------------------------------
+# With posterior prediction on, cross_confidence comes from the posterior SD of the RANKED
+# value rather than the mid-parent PEV. Two things make this worth having:
+#   * it covers the whole merit (mean AND variance term), so it carries no "_partial" caveat;
+#   * it is computed on the metric the run actually ranks on -- a posterior interval taken from
+#     usefulness must never be presented as the uncertainty of a `mean` run.
+set.seed(7)
+np <- 16L; mkp <- 60L; gidp <- sprintf("P%02d", seq_len(np))
+gmp <- matrix(2L * rbinom(np * mkp, 1, 0.5), np, mkp,
+              dimnames = list(gidp, sprintf("M%03d", seq_len(mkp))))
+yp <- as.numeric(gmp %*% rnorm(mkp, 0, 0.1)) + rnorm(np)
+gtp <- data.frame(NAME = gidp, gmp, check.names = FALSE, stringsAsFactors = FALSE)
+php <- data.frame(NAME = gidp, yield = yp, stringsAsFactors = FALSE)
+mmp <- data.frame(SNP = colnames(gmp), chr = rep(1:2, length.out = mkp),
+                  bp = rep(seq(0, 100, length.out = 30), 2)[seq_len(mkp)] * 1e6)
+dirp <- data.frame(trait = "yield", column = "yield", direction = "increase",
+                   stringsAsFactors = FALSE)
+run_post <- function(post, metric = "usefulness") ng_run_cross_prediction(
+  phenotype = php, genotype = gtp, marker_map = mmp, trait_direction = dirp,
+  id_col = "NAME", map_marker_col = "SNP", map_chr_col = "chr", map_pos_col = "bp",
+  map_pos_cm_divisor = 1e6, trait_value_metric = metric, n_crosses = 8L,
+  max_crosses_per_parent = 3L, use_ocs = TRUE, write_outputs = FALSE, write_figures = FALSE,
+  seed = 5L, run_posterior_prediction = post, n_iter = 80L, burn_in = 20L,
+  posterior_method = "closed_form")
+
+r_off <- run_post(FALSE)
+stopifnot(identical(r_off$selected_crosses$confidence_method[[1L]], "midparent_pev_partial"))
+stopifnot("prob_top_tier" %in% names(r_off$selected_crosses))
+stopifnot(all(is.na(r_off$selected_crosses$prob_top_tier)))     # OFF -> no top-N probability
+stopifnot(isFALSE(r_off$priority_risk_diagnostics$posterior_used))
+
+r_on <- run_post(TRUE)
+sc_on <- r_on$selected_crosses
+stopifnot(identical(sc_on$confidence_method[[1L]], "posterior_ci"))   # NOT _partial
+stopifnot(isTRUE(r_on$priority_risk_diagnostics$posterior_used))
+stopifnot(all(is.finite(sc_on$prob_top_tier)))
+stopifnot(all(sc_on$prob_top_tier >= 0 & sc_on$prob_top_tier <= 1))
+stopifnot(diff(range(sc_on$cross_confidence, na.rm = TRUE)) > 0)     # varies across crosses
+stopifnot(all(c("prob_top_tier", "cross_confidence", "risk_bin") %in%
+                names(r_on$candidate_crosses)))
+# prob_top_tier is its own column and is NOT the confidence axis (they answer different
+# questions: joint merit x uncertainty vs uncertainty alone).
+stopifnot(!isTRUE(all.equal(sc_on$prob_top_tier, sc_on$cross_confidence)))
+
+# The metric being summarized must follow trait_value_metric. Under the pre-F2 behaviour the
+# posterior always summarized usefulness, so these two runs would have produced IDENTICAL
+# confidence; they must not.
+r_mean <- run_post(TRUE, "mean")
+stopifnot(identical(r_mean$selected_crosses$confidence_method[[1L]], "posterior_ci"))
+pk <- function(d) paste(pmin(d$parent1, d$parent2), pmax(d$parent1, d$parent2))
+cu <- r_on$candidate_crosses; cm <- r_mean$candidate_crosses
+idx <- match(pk(cu), pk(cm))
+stopifnot(!anyNA(idx))
+rho <- stats::cor(cu$cross_confidence, cm$cross_confidence[idx],
+                  method = "spearman", use = "complete.obs")
+stopifnot(is.finite(rho), rho < 0.99)
+cat("posterior-ON confidence + prob_top_tier test passed\n")
