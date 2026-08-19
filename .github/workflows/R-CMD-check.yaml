@@ -202,3 +202,38 @@ jobs:
       - name: Run both tiers
         run: Rscript tools/run_tests.R
         shell: bash
+
+  # One aggregate status for the branch ruleset to require.
+  #
+  # The ruleset previously required four checks BY NAME (ubuntu/macos/windows + harness). Once
+  # the scope filter stopped running macOS and Windows on pull requests, those two contexts
+  # never reported and every PR was blocked -- the API refused the merge with 405. Requiring a
+  # single always-running job instead makes the protection independent of which legs the filter
+  # selected, so the matrix can change again without touching branch protection.
+  #
+  # It is a real gate, not a rubber stamp: a skipped job is accepted ONLY when the scope job
+  # classified the change as documentation-only. Any failure or cancellation fails the gate.
+  gate:
+    needs: [scope, check, harness]
+    if: always()
+    runs-on: ubuntu-latest
+    name: gate
+    steps:
+      - name: Require the selected jobs to have passed
+        run: |
+          set -euo pipefail
+          CODE="${{ needs.scope.outputs.code }}"
+          SCOPE="${{ needs.scope.result }}"
+          CHECK="${{ needs.check.result }}"
+          HARNESS="${{ needs.harness.result }}"
+          echo "scope=$SCOPE code=$CODE check=$CHECK harness=$HARNESS"
+          [ "$SCOPE" = "success" ] || { echo "scope job did not succeed"; exit 1; }
+          if [ "$CODE" = "true" ]; then
+            [ "$CHECK" = "success" ]   || { echo "FAIL: check did not pass ($CHECK)"; exit 1; }
+            [ "$HARNESS" = "success" ] || { echo "FAIL: deep harness did not pass ($HARNESS)"; exit 1; }
+            echo "gate passed: code change, check and harness both green"
+          else
+            case "$CHECK"   in success|skipped) ;; *) echo "FAIL: unexpected check result ($CHECK)"; exit 1;; esac
+            case "$HARNESS" in success|skipped) ;; *) echo "FAIL: unexpected harness result ($HARNESS)"; exit 1;; esac
+            echo "gate passed: documentation-only change, heavy jobs correctly skipped"
+          fi
