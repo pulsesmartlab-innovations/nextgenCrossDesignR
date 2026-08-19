@@ -9,28 +9,120 @@
 #             show that; the matrix is the point, not redundancy.
 #   harness - the deep tests/*.R science suite. Linux only and slower, so it
 #             does not need to fan out across platforms to be useful.
+#
+# COST GATING (added when the repositories moved back to private).
+# On a public repository Actions minutes are free, so everything ran on
+# everything. Private repositories are billed with platform multipliers --
+# macOS x10, Windows x2, Linux x1 -- and measured against this repo's own runs a
+# full pass costs about 130 billable minutes:
+#
+#     deep harness        76.3 real x1  =  76.3
+#     macOS check          3.5 real x10 =  35.2   <- 27% of the bill for 3% of the time
+#     windows check        3.6 real x2  =   7.2
+#     ubuntu check         5.2 real x1  =   5.2
+#     tarball (releases)   6.5 real x1  =   6.5
+#
+# At 130 min a run the 2,000-minute free allowance is ~15 runs a month, which is
+# less than this project's actual merge rate. Two filters fix that without
+# weakening the science gate:
+#
+#   1. PATH FILTER. Documentation-only changes (README, VALIDATED_STATE.md,
+#      docs/**) do not run the check matrix or the harness at all. Several
+#      recent PRs were docs-only and each one cost a full 130 minutes.
+#   2. PLATFORM FILTER. Pull requests run Linux only; the full three-OS matrix
+#      runs on pushes to main and on tags. Cross-platform breakage is real but
+#      rare, and it is caught before a release rather than never.
+#
+# The deep harness is deliberately NOT reduced on pull requests. It is the job
+# that has actually caught regressions here -- including one that all three
+# platform checks passed -- so it still runs on every code-touching PR. What
+# changed is that it no longer runs for a README edit.
 name: R-CMD-check
 
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      full:
+        description: 'Force the full three-OS matrix and the harness'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
+  # Decide what this event needs to run. Kept as a plain git diff rather than a
+  # third-party path-filter action: it is auditable, has no supply-chain
+  # surface, and this repo already prefers explicit code over dependencies.
+  scope:
+    runs-on: ubuntu-latest
+    name: decide scope
+    outputs:
+      code: ${{ steps.decide.outputs.code }}
+      matrix: ${{ steps.decide.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: decide
+        run: |
+          set -euo pipefail
+          EVENT="${{ github.event_name }}"
+          FORCE="${{ github.event_name == 'workflow_dispatch' && inputs.full }}"
+
+          # --- does this change touch anything that can alter behaviour? ---
+          if [ "$EVENT" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            HEAD="${{ github.event.pull_request.head.sha }}"
+            FILES=$(git diff --name-only "$BASE" "$HEAD")
+          elif [ "$EVENT" = "push" ] && [ -n "${{ github.event.before }}" ] && \
+               git cat-file -e "${{ github.event.before }}^{commit}" 2>/dev/null; then
+            FILES=$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}")
+          else
+            FILES=""      # tags, first push, manual runs: treat as code
+          fi
+
+          if [ -z "$FILES" ]; then
+            CODE=true
+          else
+            # Anything outside these documentation paths counts as code. The
+            # default is deliberately "code": a new top-level file we have not
+            # thought about should run the full gate, not skip it.
+            if echo "$FILES" | grep -qvE '^(README\.md|VALIDATED_STATE\.md|BENCHMARK_NOTES\.md|VALIDATION_PROTOCOL\.md|FRAMEWORK\.md|CLAUDE\.md|LICENSE|\.gitignore|docs/)'; then
+              CODE=true
+            else
+              CODE=false
+            fi
+          fi
+          [ "$FORCE" = "true" ] && CODE=true
+
+          # --- how wide should the platform matrix be? ---
+          if [ "$FORCE" = "true" ] || [ "$EVENT" = "push" ] || [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            MATRIX='[{"os":"ubuntu-latest","r":"release"},{"os":"macos-latest","r":"release"},{"os":"windows-latest","r":"release"}]'
+          else
+            MATRIX='[{"os":"ubuntu-latest","r":"release"}]'
+          fi
+
+          echo "code=$CODE"     >> "$GITHUB_OUTPUT"
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "event=$EVENT code=$CODE"
+          echo "matrix=$MATRIX"
+          echo "changed files:"; echo "$FILES" | head -30
+
   check:
+    needs: scope
+    if: needs.scope.outputs.code == 'true'
     runs-on: ${{ matrix.config.os }}
     name: check (${{ matrix.config.os }}, R ${{ matrix.config.r }})
     strategy:
       fail-fast: false
       matrix:
-        config:
-          - {os: ubuntu-latest,  r: 'release'}
-          - {os: macos-latest,   r: 'release'}
-          - {os: windows-latest, r: 'release'}
+        config: ${{ fromJSON(needs.scope.outputs.matrix) }}
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       R_KEEP_PKG_SOURCE: yes
@@ -66,6 +158,8 @@ jobs:
           args: 'c("--no-manual")'
 
   harness:
+    needs: scope
+    if: needs.scope.outputs.code == 'true'
     runs-on: ubuntu-latest
     name: deep harness (tests/*.R)
     env:
