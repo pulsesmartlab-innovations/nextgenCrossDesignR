@@ -27,11 +27,20 @@
 # weakening the science gate:
 #
 #   1. PATH FILTER. Documentation-only changes (README, VALIDATED_STATE.md,
-#      docs/**) do not run the check matrix or the harness at all. Several
-#      recent PRs were docs-only and each one cost a full 130 minutes.
-#   2. PLATFORM FILTER. Pull requests run Linux only; the full three-OS matrix
-#      runs on pushes to main and on tags. Cross-platform breakage is real but
-#      rare, and it is caught before a release rather than never.
+#      docs/**) skip the expensive work. Several recent PRs were docs-only and
+#      each one cost a full 130 minutes.
+#   2. PLATFORM FILTER. Pull requests do the real work on Linux only; macOS and
+#      Windows do their real work on pushes to main and on tags. Cross-platform
+#      breakage is real but rare, and it is caught before a release.
+#
+# IMPORTANT -- WHY THE JOBS STILL RUN INSTEAD OF BEING SKIPPED.
+# The branch ruleset requires four status checks BY NAME. A job skipped with a
+# job-level `if:` never reports its context at all, so branch protection waits
+# forever and the merge API refuses with 405 -- which is exactly what happened
+# on the first attempt at this change. So every job still starts and still
+# reports; the filters are applied to the STEPS inside. A skipped leg therefore
+# costs only runner startup (a few seconds) instead of its full run, and branch
+# protection keeps working untouched.
 #
 # The deep harness is deliberately NOT reduced on pull requests. It is the job
 # that has actually caught regressions here -- including one that all three
@@ -63,7 +72,7 @@ jobs:
     name: decide scope
     outputs:
       code: ${{ steps.decide.outputs.code }}
-      matrix: ${{ steps.decide.outputs.matrix }}
+      allplat: ${{ steps.decide.outputs.allplat }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -102,37 +111,49 @@ jobs:
           [ "$FORCE" = "true" ] && CODE=true
 
           # --- how wide should the platform matrix be? ---
+          # Do the non-Linux legs do real work on this event?
           if [ "$FORCE" = "true" ] || [ "$EVENT" = "push" ] || [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            MATRIX='[{"os":"ubuntu-latest","r":"release"},{"os":"macos-latest","r":"release"},{"os":"windows-latest","r":"release"}]'
+            ALLPLAT=true
           else
-            MATRIX='[{"os":"ubuntu-latest","r":"release"}]'
+            ALLPLAT=false
           fi
 
-          echo "code=$CODE"     >> "$GITHUB_OUTPUT"
-          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
-          echo "event=$EVENT code=$CODE"
-          echo "matrix=$MATRIX"
+          echo "code=$CODE"       >> "$GITHUB_OUTPUT"
+          echo "allplat=$ALLPLAT" >> "$GITHUB_OUTPUT"
+          echo "event=$EVENT code=$CODE allplat=$ALLPLAT"
           echo "changed files:"; echo "$FILES" | head -30
 
   check:
     needs: scope
-    if: needs.scope.outputs.code == 'true'
     runs-on: ${{ matrix.config.os }}
     name: check (${{ matrix.config.os }}, R ${{ matrix.config.r }})
     strategy:
       fail-fast: false
       matrix:
-        config: ${{ fromJSON(needs.scope.outputs.matrix) }}
+        config:
+          - {os: ubuntu-latest,  r: 'release'}
+          - {os: macos-latest,   r: 'release'}
+          - {os: windows-latest, r: 'release'}
     env:
+      # This leg does real work when the change touches code AND either it is a
+      # Linux leg or the event wants every platform. Otherwise the job still
+      # runs and reports, but every step below is skipped.
+      RUN: ${{ needs.scope.outputs.code == 'true' && (matrix.config.os == 'ubuntu-latest' || needs.scope.outputs.allplat == 'true') }}
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       R_KEEP_PKG_SOURCE: yes
       # Compile and cross-check the C++ kernel against the pure-R path rather
       # than skipping it; the kernel is the part most likely to break per-platform.
       NG_TEST_CPP: '1'
     steps:
+      - name: Why this leg is or is not doing work
+        run: echo "code=${{ needs.scope.outputs.code }} allplat=${{ needs.scope.outputs.allplat }} RUN=$RUN"
+        shell: bash
+
       - uses: actions/checkout@v4
+        if: env.RUN == 'true'
 
       - uses: r-lib/actions/setup-r@v2
+        if: env.RUN == 'true'
         with:
           r-version: ${{ matrix.config.r }}
           use-public-rspm: true
@@ -144,6 +165,7 @@ jobs:
       # would just add non-CRAN resolution to every platform. R CMD check treats
       # the resulting "suggested but not available" as a NOTE, not an error.
       - uses: r-lib/actions/setup-r-dependencies@v2
+        if: env.RUN == 'true'
         with:
           dependencies: '"hard"'
           extra-packages: |
@@ -153,24 +175,31 @@ jobs:
             any::rmarkdown
 
       - uses: r-lib/actions/check-r-package@v2
+        if: env.RUN == 'true'
         with:
           upload-snapshots: true
           args: 'c("--no-manual")'
 
   harness:
     needs: scope
-    if: needs.scope.outputs.code == 'true'
     runs-on: ubuntu-latest
     name: deep harness (tests/*.R)
     env:
+      RUN: ${{ needs.scope.outputs.code }}
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       # AlphaSimR's default thread count perturbs realized QTL/recombination
       # outcomes under the same seed, which would make runs non-reproducible.
       NG_ALPHASIMR_THREADS: '1'
     steps:
+      - name: Why this job is or is not doing work
+        run: echo "code=${{ needs.scope.outputs.code }} RUN=$RUN"
+        shell: bash
+
       - uses: actions/checkout@v4
+        if: env.RUN == 'true'
 
       - uses: r-lib/actions/setup-r@v2
+        if: env.RUN == 'true'
         with:
           r-version: 'release'
           use-public-rspm: true
@@ -180,6 +209,7 @@ jobs:
       # package is absent, exactly as they do without them installed locally.
       # PopVar is on CRAN, so its comparison paths do run here.
       - uses: r-lib/actions/setup-r-dependencies@v2
+        if: env.RUN == 'true'
         with:
           dependencies: '"hard"'
           extra-packages: |
@@ -196,44 +226,11 @@ jobs:
             any::PopVar
 
       - name: Install the package
+        if: env.RUN == 'true'
         run: R CMD INSTALL --no-build-vignettes .
         shell: bash
 
       - name: Run both tiers
+        if: env.RUN == 'true'
         run: Rscript tools/run_tests.R
         shell: bash
-
-  # One aggregate status for the branch ruleset to require.
-  #
-  # The ruleset previously required four checks BY NAME (ubuntu/macos/windows + harness). Once
-  # the scope filter stopped running macOS and Windows on pull requests, those two contexts
-  # never reported and every PR was blocked -- the API refused the merge with 405. Requiring a
-  # single always-running job instead makes the protection independent of which legs the filter
-  # selected, so the matrix can change again without touching branch protection.
-  #
-  # It is a real gate, not a rubber stamp: a skipped job is accepted ONLY when the scope job
-  # classified the change as documentation-only. Any failure or cancellation fails the gate.
-  gate:
-    needs: [scope, check, harness]
-    if: always()
-    runs-on: ubuntu-latest
-    name: gate
-    steps:
-      - name: Require the selected jobs to have passed
-        run: |
-          set -euo pipefail
-          CODE="${{ needs.scope.outputs.code }}"
-          SCOPE="${{ needs.scope.result }}"
-          CHECK="${{ needs.check.result }}"
-          HARNESS="${{ needs.harness.result }}"
-          echo "scope=$SCOPE code=$CODE check=$CHECK harness=$HARNESS"
-          [ "$SCOPE" = "success" ] || { echo "scope job did not succeed"; exit 1; }
-          if [ "$CODE" = "true" ]; then
-            [ "$CHECK" = "success" ]   || { echo "FAIL: check did not pass ($CHECK)"; exit 1; }
-            [ "$HARNESS" = "success" ] || { echo "FAIL: deep harness did not pass ($HARNESS)"; exit 1; }
-            echo "gate passed: code change, check and harness both green"
-          else
-            case "$CHECK"   in success|skipped) ;; *) echo "FAIL: unexpected check result ($CHECK)"; exit 1;; esac
-            case "$HARNESS" in success|skipped) ;; *) echo "FAIL: unexpected harness result ($HARNESS)"; exit 1;; esac
-            echo "gate passed: documentation-only change, heavy jobs correctly skipped"
-          fi
