@@ -157,6 +157,7 @@ ng_multitrait_validation_evaluate_plan <- function(plan,
     out$mean_pair_kinship <- mean(plan$pair_kinship, na.rm = TRUE)
   }
   if (!is.null(plan_summary$group_coancestry)) out$group_coancestry <- plan_summary$group_coancestry
+  if (!is.null(plan_summary$group_relationship)) out$group_relationship <- plan_summary$group_relationship
   if (!is.null(plan_summary$lambda_group)) out$lambda_group <- plan_summary$lambda_group
   if (!is.null(plan_summary$lambda_mating)) out$lambda_mating <- plan_summary$lambda_mating
   if (!is.null(plan_summary$lambda_parent_use)) out$lambda_parent_use <- plan_summary$lambda_parent_use

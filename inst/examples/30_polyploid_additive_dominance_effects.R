@@ -37,7 +37,8 @@ train <- ids[1:180]; test <- ids[181:240]
 # --- fit additive-only vs additive + dominance on the training clones ---
 fit_a <- ng_polyploid_fit_effects(dosage[train, ], phenotype[train], ploidy = ploidy, model = "additive")
 fit_ad <- ng_polyploid_fit_effects(dosage[train, ], phenotype[train], ploidy = ploidy,
-                                   model = "additive_dominance")
+                                   model = "additive_dominance",
+                                   allow_experimental_dominance = TRUE)
 
 # --- predict on held-out clones ---
 gv_a <- ng_polyploid_predict_value(fit_a, dosage[test, ], type = "genotypic")   # additive-only

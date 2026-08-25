@@ -36,8 +36,18 @@ ng_polyploid_fit_effects <- function(dosage,
                                      model = c("additive_dominance", "additive"),
                                      min_maf = 0,
                                      impute_missing = TRUE,
-                                     seed = 1L) {
+                                     seed = 1L,
+                                     allow_experimental_dominance = FALSE) {
   model <- match.arg(model)
+  if (identical(model, "additive_dominance") && !isTRUE(allow_experimental_dominance)) {
+    ng_stop("polyploid additive+dominance fitting is experimental because it currently uses one ",
+            "ridge penalty for both variance components; set allow_experimental_dominance = TRUE ",
+            "only for research diagnostics")
+  }
+  if (identical(model, "additive_dominance")) {
+    warning("experimental polyploid dominance fit: additive and dominance components share one ridge penalty",
+            call. = FALSE)
+  }
   prep <- ng_polyploid_prep_dosage(dosage, ploidy, min_maf = min_maf, impute_missing = impute_missing)
   M <- prep$M; ids <- prep$ids; p <- prep$p; ploidy <- prep$ploidy
   markers <- colnames(M)
@@ -49,7 +59,11 @@ ng_polyploid_fit_effects <- function(dosage,
   W <- sweep(M, 2L, ploidy * p, "-")                 # additive (freq-centered) design
   hbar <- NULL; b_orth <- NULL; m_add <- ncol(W)
   if (identical(model, "additive_dominance")) {
-    H <- M * (ploidy - M); hbar <- colMeans(H)
+    H <- M * (ploidy - M)
+    hbar <- vapply(seq_len(ncol(H)), function(j) {
+      observed <- !prep$missing[, j]
+      mean(H[observed, j])
+    }, numeric(1L))
     # Observed per-marker regression of H on W (statistical parameterization; see header).
     # W is mean-centered by construction (p = colMeans(M)/ploidy), so b is a ratio of sums.
     # Monomorphic / invariant markers regress to 0, leaving D as plain mean-centered H.
@@ -59,6 +73,10 @@ ng_polyploid_fit_effects <- function(dosage,
     b_orth <- ifelse(ss > 0, colSums(Wc * Hc) / ifelse(ss > 0, ss, 1), 0)
     b_orth[!is.finite(b_orth)] <- 0
     D <- Hc - sweep(W, 2L, b_orth, "*")              # orthogonal dominance design
+    # Mean-imputed additive dosage is W=0, but its nonlinear H value is not the
+    # conditional expectation of the centered dominance covariate. A missing
+    # call carries no marker-level dominance information and must contribute 0.
+    if (any(prep$missing)) D[prep$missing] <- 0
     X <- cbind(W, D)
   } else {
     X <- W
@@ -70,7 +88,9 @@ ng_polyploid_fit_effects <- function(dosage,
     beta_add = beta[seq_len(m_add)],
     beta_dom = if (identical(model, "additive_dominance")) beta[(m_add + 1L):(2L * m_add)] else NULL,
     intercept = fit$intercept, allele_freq = p, hbar = hbar, b_orth = b_orth, markers = markers,
-    ploidy = ploidy, model = model, reliability = fit$reliability
+    ploidy = ploidy, model = model,
+    cv_predictive_r2 = fit$cv_predictive_r2,
+    reliability = NA_real_, reliability_is_calibrated = FALSE
   ), class = "ng_polyploid_effects")
 }
 

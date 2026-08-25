@@ -37,21 +37,163 @@ ng_optimize_mating_plan <- function(scores,
   method <- match.arg(method)
   lambda_parent_use_mode <- match.arg(lambda_parent_use_mode)
   scores <- as.data.frame(scores, stringsAsFactors = FALSE)
+  n_crosses_num <- suppressWarnings(as.numeric(n_crosses))
+  if (length(n_crosses_num) != 1L || !is.finite(n_crosses_num) || n_crosses_num < 1 ||
+      abs(n_crosses_num - round(n_crosses_num)) > 1e-8) {
+    ng_stop("n_crosses must be one positive integer")
+  }
+  n_crosses <- as.integer(round(n_crosses_num))
+  cap_num <- suppressWarnings(as.numeric(max_crosses_per_parent))
+  if (length(cap_num) != 1L || is.na(cap_num) || cap_num <= 0 ||
+      (is.finite(cap_num) && abs(cap_num - round(cap_num)) > 1e-8)) {
+    ng_stop("max_crosses_per_parent must be a positive integer or Inf")
+  }
+  # A parent can occupy at most both gametic slots in every selected cross.
+  max_crosses_per_parent <- if (is.infinite(cap_num)) 2L * n_crosses else
+    min(as.integer(round(cap_num)), 2L * n_crosses)
+  max_pair_num <- suppressWarnings(as.numeric(max_pair_kinship))
+  if (length(max_pair_num) != 1L || is.na(max_pair_num) ||
+      (is.infinite(max_pair_num) && max_pair_num < 0)) {
+    ng_stop("max_pair_kinship must be one finite number or Inf")
+  }
+  max_pair_kinship <- max_pair_num
+  min_use_num <- suppressWarnings(as.numeric(min_crosses_per_parent))
+  if (length(min_use_num) != 1L || !is.finite(min_use_num) || min_use_num < 0 ||
+      abs(min_use_num - round(min_use_num)) > 1e-8) {
+    ng_stop("min_crosses_per_parent must be one non-negative integer")
+  }
+  min_crosses_per_parent <- as.integer(round(min_use_num))
+  nonnegative_scalar <- function(x, name) {
+    z <- suppressWarnings(as.numeric(x))
+    if (length(z) != 1L || !is.finite(z) || z < 0) ng_stop(name, " must be one finite non-negative number")
+    z
+  }
+  lambda_group <- nonnegative_scalar(lambda_group, "lambda_group")
+  lambda_mating <- nonnegative_scalar(lambda_mating, "lambda_mating")
+  lambda_progeny_inbreeding <- nonnegative_scalar(lambda_progeny_inbreeding, "lambda_progeny_inbreeding")
+  lambda_parent_use <- nonnegative_scalar(lambda_parent_use, "lambda_parent_use")
+  lambda_cost <- nonnegative_scalar(lambda_cost, "lambda_cost")
+  lambda_logistic <- nonnegative_scalar(lambda_logistic, "lambda_logistic")
+  budget_num <- suppressWarnings(as.numeric(budget))
+  if (length(budget_num) != 1L || is.na(budget_num) || budget_num < 0) {
+    ng_stop("budget must be one non-negative finite number or Inf")
+  }
+  budget <- budget_num
   required <- c("parent1", "parent2", gain_col)
   miss <- setdiff(required, names(scores))
   if (length(miss)) ng_stop("scores missing columns: ", paste(miss, collapse = ", "))
-  if (!("pair_kinship" %in% names(scores))) scores$pair_kinship <- 0
-  scores <- scores[is.finite(scores[[gain_col]]) & scores$pair_kinship <= max_pair_kinship, , drop = FALSE]
+  scores$parent1 <- as.character(scores$parent1)
+  scores$parent2 <- as.character(scores$parent2)
+  if (anyNA(scores$parent1) || anyNA(scores$parent2) ||
+      any(!nzchar(trimws(scores$parent1))) || any(!nzchar(trimws(scores$parent2)))) {
+    ng_stop("candidate parent IDs must be non-missing and non-blank")
+  }
+  pair_key <- ng_group_pair_key(scores$parent1, scores$parent2)
+  if (anyDuplicated(pair_key)) ng_stop("scores contains duplicate unordered parent pairs")
+  pair_kinship_supplied <- "pair_kinship" %in% names(scores)
+  if (!pair_kinship_supplied) scores$pair_kinship <- 0
+  scores$pair_kinship <- suppressWarnings(as.numeric(scores$pair_kinship))
+  if (any(!is.finite(scores$pair_kinship))) ng_stop("scores$pair_kinship must be finite")
+  gain_value <- suppressWarnings(as.numeric(scores[[gain_col]]))
+  scores <- scores[is.finite(gain_value), , drop = FALSE]
   # Mating-group legality: drop candidate crosses whose parents' groups are not an
   # allowed group x group pairing, so every downstream allocator only sees legal matings.
   scores <- ng_filter_group_permission(scores, parent_group, group_permission)
   if (nrow(scores) < n_crosses) ng_stop("Not enough feasible candidate crosses")
   parents <- sort(unique(c(scores$parent1, scores$parent2)))
-  if (is.null(parent_kinship)) {
+  parent_kinship_supplied <- !is.null(parent_kinship)
+  if (!parent_kinship_supplied) {
     parent_kinship <- diag(length(parents))
     rownames(parent_kinship) <- colnames(parent_kinship) <- parents
   } else {
+    parent_kinship <- as.matrix(parent_kinship)
+    if (!is.numeric(parent_kinship) || nrow(parent_kinship) != ncol(parent_kinship) ||
+        is.null(rownames(parent_kinship)) || is.null(colnames(parent_kinship)) ||
+        anyDuplicated(rownames(parent_kinship)) || anyDuplicated(colnames(parent_kinship)) ||
+        !setequal(rownames(parent_kinship), colnames(parent_kinship))) {
+      ng_stop("parent_kinship must be a uniquely named square additive-relationship matrix")
+    }
+    missing_k <- setdiff(parents, intersect(rownames(parent_kinship), colnames(parent_kinship)))
+    if (length(missing_k)) ng_stop("parent_kinship is missing parents: ", paste(missing_k, collapse = ", "))
     parent_kinship <- parent_kinship[parents, parents, drop = FALSE]
+    if (any(!is.finite(parent_kinship))) ng_stop("parent_kinship contains non-finite entries")
+    if (max(abs(parent_kinship - t(parent_kinship))) > 1e-8) ng_stop("parent_kinship must be symmetric")
+    parent_kinship <- (parent_kinship + t(parent_kinship)) / 2
+    kev <- eigen(parent_kinship, symmetric = TRUE, only.values = TRUE)$values
+    ktol <- 1e-8 * max(1, max(abs(kev)))
+    if (min(kev) < -ktol) ng_stop("parent_kinship must be positive semidefinite")
+    expected_pair_kinship <- as.numeric(parent_kinship[cbind(
+      match(scores$parent1, parents), match(scores$parent2, parents))]) / 2
+    if (pair_kinship_supplied &&
+        any(abs(scores$pair_kinship - expected_pair_kinship) > 1e-6)) {
+      ng_stop("scores$pair_kinship is inconsistent with parent_kinship/2; ",
+              "supply both on kinship/coancestry scale")
+    }
+    scores$pair_kinship <- expected_pair_kinship
+    scores$pair_relationship <- 2 * expected_pair_kinship
+  }
+  # Apply the pairwise cap only after any supplied relationship matrix has
+  # established the authoritative pair-kinship values.
+  scores <- scores[scores$pair_kinship <= max_pair_kinship, , drop = FALSE]
+  if (nrow(scores) < n_crosses) ng_stop("Not enough feasible candidate crosses")
+  parents <- sort(unique(c(scores$parent1, scores$parent2)))
+  parent_kinship <- parent_kinship[parents, parents, drop = FALSE]
+  if (!("pair_relationship" %in% names(scores))) {
+    scores$pair_relationship <- 2 * scores$pair_kinship
+  } else {
+    supplied_relationship <- suppressWarnings(as.numeric(scores$pair_relationship))
+    if (any(!is.finite(supplied_relationship)) ||
+        any(abs(supplied_relationship - 2 * scores$pair_kinship) > 1e-6)) {
+      ng_stop("scores$pair_relationship must equal 2 * scores$pair_kinship")
+    }
+    scores$pair_relationship <- supplied_relationship
+  }
+  expected_epi <- pmax(0, scores$pair_kinship)
+  if ("expected_progeny_inbreeding" %in% names(scores)) {
+    supplied_epi <- suppressWarnings(as.numeric(scores$expected_progeny_inbreeding))
+    if (any(!is.finite(supplied_epi)) || any(abs(supplied_epi - expected_epi) > 1e-6)) {
+      ng_stop("scores$expected_progeny_inbreeding must equal max(0, pair_kinship)")
+    }
+  }
+  scores$expected_progeny_inbreeding <- expected_epi
+  if (!is.null(cost_col)) {
+    if (length(cost_col) != 1L || is.na(cost_col) || !nzchar(trimws(as.character(cost_col)))) {
+      ng_stop("cost_col must be NULL or one non-blank column name")
+    }
+    cost_col <- as.character(cost_col)
+    if (!(cost_col %in% names(scores))) ng_stop("cost_col is not present in scores: ", cost_col)
+    cost_value <- suppressWarnings(as.numeric(scores[[cost_col]]))
+    if (any(!is.finite(cost_value)) || any(cost_value < 0)) {
+      ng_stop("cost_col must contain finite non-negative costs for every candidate cross")
+    }
+    scores[[cost_col]] <- cost_value
+  } else if (is.finite(budget)) {
+    ng_stop("a finite budget requires cost_col")
+  }
+  if (!is.null(logistic_col)) {
+    if (length(logistic_col) != 1L || is.na(logistic_col) || !nzchar(trimws(as.character(logistic_col)))) {
+      ng_stop("logistic_col must be NULL or one non-blank column name")
+    }
+    logistic_col <- as.character(logistic_col)
+    if (!(logistic_col %in% names(scores))) ng_stop("logistic_col is not present in scores: ", logistic_col)
+    logistic_value <- suppressWarnings(as.numeric(scores[[logistic_col]]))
+    if (any(!is.finite(logistic_value))) ng_stop("logistic_col must be finite for every candidate cross")
+    scores[[logistic_col]] <- logistic_value
+  }
+  # Resolve the breeder-facing automatic diversity floor once, before any
+  # allocator or constraint repair receives it.
+  if (is.character(min_unique_parents)) {
+    if (length(min_unique_parents) != 1L ||
+        !identical(tolower(trimws(min_unique_parents)), "auto")) {
+      ng_stop("min_unique_parents must be NULL, 'auto', or a positive integer")
+    }
+    min_unique_parents <- ng_default_min_unique_parents(scores, n_crosses)
+  } else if (!is.null(min_unique_parents)) {
+    mup <- suppressWarnings(as.numeric(min_unique_parents))
+    if (length(mup) != 1L || !is.finite(mup) || mup < 1 || abs(mup - round(mup)) > 1e-8) {
+      ng_stop("min_unique_parents must be NULL, 'auto', or a positive integer")
+    }
+    min_unique_parents <- min(as.integer(round(mup)), 2L * n_crosses, length(parents))
   }
   # Per-cross relatedness (axis B) — resolved ONCE here, before any dispatch, so both the
   # frontier/strategy handoff below and the direct objective use the same resolved lambdas.
@@ -61,11 +203,8 @@ ng_optimize_mating_plan <- function(scores,
   #                             through as an advanced escape hatch)
   #   avoid_inbreeding       -> lambda_progeny_inbreeding (one-sided inbreeding penalty)
   #   favor_complementarity  -> lambda_mating (two-sided; also rewards complementary pairs)
-  if (!is.finite(lambda_progeny_inbreeding) || lambda_progeny_inbreeding < 0) lambda_progeny_inbreeding <- 0
-  if (!is.finite(lambda_mating) || lambda_mating < 0) lambda_mating <- 0
   mate_relatedness <- match.arg(mate_relatedness)
-  mrw <- suppressWarnings(as.numeric(mate_relatedness_weight)[[1L]])
-  if (!is.finite(mrw) || mrw < 0) mrw <- 0
+  mrw <- nonnegative_scalar(mate_relatedness_weight, "mate_relatedness_weight")
   if (!identical(mate_relatedness, "off")) {
     if (lambda_mating > 0 || lambda_progeny_inbreeding > 0) {
       ng_stop("Set per-cross relatedness via EITHER mate_relatedness OR the raw ",
@@ -118,21 +257,21 @@ ng_optimize_mating_plan <- function(scores,
   #
   # IMPORTANT — the two per-cross relatedness penalties act on the SAME axis (parent-pair
   # relatedness = immediate progeny inbreeding) and ADD; they are not independent:
-  #   * lambda_mating * pair_kinship            : two-sided linear on the VanRaden-G
-  #       relationship; penalizes related pairs AND rewards complementary (negative-G) pairs.
+  #   * lambda_mating * pair_kinship            : two-sided linear on coancestry
+  #       (VanRaden relationship / 2); penalizes related pairs AND rewards complementary pairs.
   #   * lambda_progeny_inbreeding * expected_progeny_inbreeding, where
-  #       expected_progeny_inbreeding = max(0, pair_kinship / 2) : one-sided inbreeding
+  #       expected_progeny_inbreeding = max(0, pair_kinship) : one-sided inbreeding
   #       penalty (an inbreeding coefficient is >= 0 by definition), neutral on
   #       complementary pairs.
-  # For related pairs (pair_kinship > 0) the two are perfectly collinear (differ only by
-  # the 1/2 scale), so setting BOTH double-emphasizes relatedness. Prefer ONE: lambda_mating
+  # For related pairs (pair_kinship > 0) the two are identical, so setting BOTH
+  # double-emphasizes relatedness. Prefer ONE: lambda_mating
   # if you also want to actively favor complementary matings, lambda_progeny_inbreeding for
   # a pure inbreeding-avoidance penalty in interpretable coancestry units. lambda_group is
   # the separate, population-level (plan-wide) diversity/ΔF control.
   epi <- if ("expected_progeny_inbreeding" %in% names(scores)) {
     as.numeric(scores$expected_progeny_inbreeding)
   } else {
-    pmax(0, as.numeric(scores$pair_kinship) / 2)
+    pmax(0, as.numeric(scores$pair_kinship))
   }
   epi[!is.finite(epi)] <- 0
   scores$.linear_gain <- scores[[gain_col]] - lambda_mating * scores$pair_kinship -
@@ -239,7 +378,7 @@ ng_optimize_mating_plan <- function(scores,
     plan <- ng_apply_committed_crosses(scores, plan, committed_idx, parents,
                                        max_crosses_per_parent, n_crosses)
   }
-  min_use <- suppressWarnings(as.numeric(min_crosses_per_parent))
+  min_use <- min_crosses_per_parent
   if (is.finite(min_use) && min_use > 1) {
     plan <- ng_enforce_min_use_if_used(scores, plan, parents, max_crosses_per_parent,
                                        min_use, n_crosses, protected = committed_idx)
@@ -277,6 +416,21 @@ ng_optimize_mating_plan <- function(scores,
     s$total_cost <- plan_cost
     s$budget <- budget
     s$over_budget <- is.finite(budget) && plan_cost > budget + 1e-9
+  }
+  constraint_audit <- ng_audit_mating_constraints(
+    scores = scores, selected = plan, parents = parents,
+    max_crosses_per_parent = max_crosses_per_parent,
+    min_use = min_use, min_unique_parents = min_unique_parents,
+    parent_group = parent_group, group_quota = group_quota,
+    cost_col = cost_col, budget = budget
+  )
+  s$constraint_audit <- constraint_audit
+  s$all_hard_constraints_satisfied <- constraint_audit$all_hard_constraints_satisfied
+  if (!constraint_audit$all_hard_constraints_satisfied) {
+    warning("final mating plan violates requested hard constraints: ",
+            paste(constraint_audit$violations, collapse = "; "),
+            ". This can occur when protected committed crosses make the constraints infeasible.",
+            call. = FALSE)
   }
   attr(out, "summary") <- s
   out
@@ -702,10 +856,14 @@ ng_greedy_local <- function(scores,
   selected <- integer(0)
   counts <- setNames(integer(length(parents)), parents)
   for (idx in ord) {
-    p <- c(scores$parent1[idx], scores$parent2[idx])
-    if (any(counts[p] >= max_crosses_per_parent)) next
+    a <- scores$parent1[idx]; b <- scores$parent2[idx]
+    if (a == b) {
+      if (counts[a] + 2L > max_crosses_per_parent) next
+    } else if (counts[a] + 1L > max_crosses_per_parent ||
+               counts[b] + 1L > max_crosses_per_parent) next
     selected <- c(selected, idx)
-    counts[p] <- counts[p] + 1L
+    counts[a] <- counts[a] + 1L
+    counts[b] <- counts[b] + 1L
     if (length(selected) == n_crosses) break
   }
   if (length(selected) < n_crosses) ng_stop("Greedy allocator could not build a feasible plan")
@@ -790,7 +948,10 @@ ng_fill_best <- function(scores, selected, parents, max_crosses_per_parent, n_cr
   for (idx in ord) {
     if (need <= 0L) break
     a <- p1i[idx]; b <- p2i[idx]
-    if (counts[a] >= max_crosses_per_parent || counts[b] >= max_crosses_per_parent) next
+    if (a == b) {
+      if (counts[a] + 2L > max_crosses_per_parent) next
+    } else if (counts[a] + 1L > max_crosses_per_parent ||
+               counts[b] + 1L > max_crosses_per_parent) next
     if (has_block_parent && (a %in% blocked_parents || b %in% blocked_parents)) next
     if (has_block_pair && (pair_keys[[idx]] %in% blocked_pair_keys)) next
     selected <- c(selected, idx)
@@ -859,10 +1020,13 @@ ng_local_swap <- function(scores, selected, parents, parent_kinship, max_crosses
     for (drop_idx in on) {
       drop_p <- c(scores$parent1[drop_idx], scores$parent2[drop_idx])
       counts2 <- counts
-      counts2[drop_p] <- counts2[drop_p] - 1L
+      for (q in drop_p) counts2[q] <- counts2[q] - 1L
       for (add_idx in head(off, min(1000L, length(off)))) {
         add_p <- c(scores$parent1[add_idx], scores$parent2[add_idx])
-        if (any(counts2[add_p] >= max_crosses_per_parent)) next
+        if (add_p[[1L]] == add_p[[2L]]) {
+          if (counts2[add_p[[1L]]] + 2L > max_crosses_per_parent) next
+        } else if (counts2[add_p[[1L]]] + 1L > max_crosses_per_parent ||
+                   counts2[add_p[[2L]]] + 1L > max_crosses_per_parent) next
         candidate <- c(setdiff(selected, drop_idx), add_idx)
         obj <- ng_plan_objective(scores, candidate, parent_kinship, lambda_group, lambda_parent_use)
         if (obj > best_obj + 1e-10) {
@@ -870,7 +1034,7 @@ ng_local_swap <- function(scores, selected, parents, parent_kinship, max_crosses
           selected_flag[add_idx] <- TRUE
           selected <- candidate
           counts <- counts2
-          counts[add_p] <- counts[add_p] + 1L
+          for (q in add_p) counts[q] <- counts[q] + 1L
           best_obj <- obj
           improved <- TRUE
           break
@@ -905,7 +1069,7 @@ ng_upgrade_repair <- function(scores,
     for (add_idx in off) {
       add_p <- c(scores$parent1[add_idx], scores$parent2[add_idx])
       counts_after <- counts
-      counts_after[add_p] <- counts_after[add_p] + 1L
+      for (q in add_p) counts_after[q] <- counts_after[q] + 1L
       over <- names(counts_after)[counts_after > max_crosses_per_parent]
       over <- intersect(over, add_p)
       if (!length(over)) next
@@ -962,18 +1126,19 @@ ng_parent_counts <- function(plan, parents) {
   setNames(as.integer(tabulate(idx, nbins = length(parents))), parents)
 }
 
-# Group-coancestry term c'Kc of the parent contribution vector c (sums to 1). NOTE
-# on units: parent_kinship is typically a VanRaden genomic relationship matrix
-# (G ~ numerator relationship A ~ 2 x kinship coefficient), so this returns c'Gc ~
-# 2 x Meuwissen group coancestry (i.e. a mean group RELATIONSHIP, not a coancestry
-# coefficient in [0,1]). The optimizer ranking is unaffected (the 2x is absorbed into
-# lambda_group), but do not interpret the reported value as a coancestry/inbreeding
-# rate or compare it to a Delta-F target without dividing by 2.
-ng_group_coancestry <- function(counts, parent_kinship) {
+# Mean group relationship c'Gc of the parent contribution vector c (sums to 1),
+# where G is on the VanRaden/numerator-relationship scale.
+ng_group_relationship <- function(counts, parent_kinship) {
   total <- sum(counts)
   if (total <= 0) return(NA_real_)
   cvec <- counts[rownames(parent_kinship)] / total
   as.numeric(crossprod(cvec, parent_kinship %*% cvec))
+}
+
+# Meuwissen group coancestry is half the group relationship when G is on the
+# numerator-relationship scale.
+ng_group_coancestry <- function(counts, parent_kinship) {
+  ng_group_relationship(counts, parent_kinship) / 2
 }
 
 ng_plan_objective <- function(scores, selected, parent_kinship, lambda_group, lambda_parent_use = 0) {
@@ -982,7 +1147,7 @@ ng_plan_objective <- function(scores, selected, parent_kinship, lambda_group, la
   parents <- rownames(parent_kinship)
   counts <- ng_parent_counts(scores[selected, , drop = FALSE], parents)
   penalty <- 0
-  if (lambda_group > 0) penalty <- penalty + lambda_group * ng_group_coancestry(counts, parent_kinship)
+  if (lambda_group > 0) penalty <- penalty + lambda_group * ng_group_relationship(counts, parent_kinship)
   if (lambda_parent_use > 0) {
     contribution <- counts / sum(counts)
     penalty <- penalty + lambda_parent_use * sum(contribution * contribution)
@@ -1000,7 +1165,7 @@ ng_plan_objective_contribution <- function(scores,
   counts <- ng_parent_counts(scores[selected, , drop = FALSE], parents)
   contribution <- counts / sum(counts)
   parent_use_sq <- sum(contribution * contribution)
-  group <- ng_group_coancestry(counts, parent_kinship)
+  group <- ng_group_relationship(counts, parent_kinship)
   base - lambda_parent_use * parent_use_sq - lambda_group * group
 }
 
@@ -1017,18 +1182,25 @@ ng_plan_summary <- function(selected, scores, gain_col, parent_kinship, lambda_g
   progeny_f <- if ("expected_progeny_inbreeding" %in% names(plan)) {
     as.numeric(plan$expected_progeny_inbreeding)
   } else {
-    as.numeric(plan$pair_kinship) / 2
+    as.numeric(plan$pair_kinship)
   }
+  group_relationship <- ng_group_relationship(counts, parent_kinship)
   attr(plan, "summary") <- list(
     n_crosses = nrow(plan),
     gain_col = gain_col,
     total_gain = sum(plan[[gain_col]], na.rm = TRUE),
     mean_gain = mean(plan[[gain_col]], na.rm = TRUE),
     mean_pair_kinship = mean(plan$pair_kinship, na.rm = TRUE),
+    mean_pair_relationship = if ("pair_relationship" %in% names(plan)) {
+      mean(plan$pair_relationship, na.rm = TRUE)
+    } else {
+      2 * mean(plan$pair_kinship, na.rm = TRUE)
+    },
     mean_progeny_inbreeding = mean(progeny_f, na.rm = TRUE),
     max_progeny_inbreeding = suppressWarnings(max(progeny_f, na.rm = TRUE)),
     lambda_progeny_inbreeding = lambda_progeny_inbreeding,
-    group_coancestry = ng_group_coancestry(counts, parent_kinship),
+    group_relationship = group_relationship,
+    group_coancestry = group_relationship / 2,
     parent_use_sq = sum(contribution * contribution),
     unique_parents = sum(counts > 0),
     max_parent_use = max(counts),
@@ -1218,9 +1390,29 @@ ng_family_selection_threshold <- function(mu, sd, n_progeny, selected_top_n) {
 }
 
 ng_expected_excess_above_threshold <- function(mu, sd, threshold) {
-  sd <- pmax(as.numeric(sd), 1e-6)
-  z <- (threshold - mu) / sd
-  pmax(0, sd * stats::dnorm(z) + (mu - threshold) * stats::pnorm(z, lower.tail = FALSE))
+  mu <- as.numeric(mu)
+  sd <- as.numeric(sd)
+  threshold <- as.numeric(threshold)
+  out_len <- max(length(mu), length(sd), length(threshold))
+  input_lengths <- c(length(mu), length(sd), length(threshold))
+  if (out_len < 1L || any(!(input_lengths %in% c(1L, out_len)))) {
+    ng_stop("mu, sd, and threshold must have length 1 or a common output length")
+  }
+  mu <- rep(mu, length.out = out_len)
+  sd <- rep(sd, length.out = out_len)
+  threshold <- rep(threshold, length.out = out_len)
+  if (any(!is.finite(mu)) || any(!is.finite(sd)) || any(sd < 0) ||
+      any(!is.finite(threshold))) {
+    ng_stop("mu and threshold must be finite and sd must be finite and non-negative")
+  }
+  out <- pmax(mu - threshold, 0)
+  positive <- sd > 0
+  if (any(positive)) {
+    z <- (threshold[positive] - mu[positive]) / sd[positive]
+    out[positive] <- pmax(0, sd[positive] * stats::dnorm(z) +
+      (mu[positive] - threshold[positive]) * stats::pnorm(z, lower.tail = FALSE))
+  }
+  out
 }
 
 ng_pareto_mate_allocation <- function(scores,
@@ -1249,6 +1441,7 @@ ng_pareto_mate_allocation <- function(scores,
       lambda_group = lambdas[i],
       total_gain = s$total_gain,
       mean_gain = s$mean_gain,
+      group_relationship = s$group_relationship,
       group_coancestry = s$group_coancestry,
       mean_pair_kinship = s$mean_pair_kinship,
       unique_parents = s$unique_parents,

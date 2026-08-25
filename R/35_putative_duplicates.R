@@ -1,9 +1,11 @@
 ng_duplicate_recode_to_012 <- function(geno) {
   geno <- as.matrix(geno)
   storage.mode(geno) <- "double"
-  sample_vals <- as.numeric(geno[seq_len(min(nrow(geno), 1000L)), seq_len(min(ncol(geno), 1000L)), drop = FALSE])
-  vals <- unique(sample_vals[is.finite(sample_vals)])
-  if (length(vals) && all(vals %in% c(-1, 0, 1))) geno <- geno + 1
+  vals <- unique(as.numeric(geno[is.finite(geno)]))
+  # A -1 observation disambiguates centered {-1,0,1} coding from ordinary
+  # binary 0/1 data. Inspect the full matrix so a late dosage-2 call is not
+  # converted to the invalid value 3.
+  if (length(vals) && any(vals == -1) && all(vals %in% c(-1, 0, 1))) geno <- geno + 1
   geno
 }
 

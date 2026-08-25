@@ -36,9 +36,31 @@ ng_p_superior_progeny_multitrait <- function(mu, Sigma_c, tau_lower, tau_upper,
   if (!is.matrix(Sigma_c) || nrow(Sigma_c) != t || ncol(Sigma_c) != t) {
     ng_stop("Sigma_c must be a t x t matrix matching length(mu) = ", t)
   }
-  if (!is.finite(k_progeny) || k_progeny < 1) {
-    ng_stop("k_progeny must be >= 1")
+  if (any(!is.finite(mu)) || any(is.na(tau_lower)) || any(is.na(tau_upper))) {
+    ng_stop("mu must be finite and threshold bounds must not be missing")
   }
+  if (any(!is.finite(Sigma_c))) ng_stop("Sigma_c contains non-finite entries")
+  asym <- max(abs(Sigma_c - t(Sigma_c)))
+  if (!is.finite(asym) || asym > 1e-8) ng_stop("Sigma_c must be symmetric")
+  Sigma_c <- (Sigma_c + t(Sigma_c)) / 2
+  ev <- eigen(Sigma_c, symmetric = TRUE)
+  tol <- 1e-8 * max(1, max(abs(ev$values)))
+  if (min(ev$values) < -tol) ng_stop("Sigma_c must be positive semidefinite")
+  if (any(diag(Sigma_c) < -tol)) ng_stop("Sigma_c has a negative marginal variance")
+  if (min(ev$values) < 0) {
+    requested_diag <- pmax(diag(Sigma_c), 0)
+    Sigma_c <- ev$vectors %*% diag(pmax(ev$values, 0), nrow = t) %*% t(ev$vectors)
+    Sigma_c <- (Sigma_c + t(Sigma_c)) / 2
+    current_diag <- pmax(diag(Sigma_c), 0)
+    scale <- ifelse(current_diag > 0, sqrt(requested_diag / current_diag), 0)
+    Sigma_c <- Sigma_c * outer(scale, scale)
+    diag(Sigma_c) <- requested_diag
+  }
+  if (!is.finite(k_progeny) || k_progeny < 1 ||
+      abs(k_progeny - round(k_progeny)) > 1e-8) {
+    ng_stop("k_progeny must be a positive integer")
+  }
+  k_progeny <- as.integer(round(k_progeny))
   if (any(tau_upper <= tau_lower)) return(0)
   diag_var <- diag(Sigma_c)
   if (any(diag_var <= 0)) {
@@ -86,6 +108,10 @@ ng_build_cross_trait_covariance <- function(per_trait_var, G_hat = NULL) {
   if (nrow(G_hat) != t || ncol(G_hat) != t) {
     ng_stop("G_hat must be ", t, " x ", t, " to match per_trait_var")
   }
+  if (any(!is.finite(G_hat))) ng_stop("G_hat contains non-finite entries")
+  asym <- max(abs(G_hat - t(G_hat)))
+  if (!is.finite(asym) || asym > 1e-8) ng_stop("G_hat must be symmetric")
+  G_hat <- (G_hat + t(G_hat)) / 2
   G_diag <- diag(G_hat)
   if (any(G_diag <= 0)) ng_stop("G_hat must have positive diagonal")
   R <- stats::cov2cor(G_hat)
@@ -101,12 +127,24 @@ ng_build_cross_trait_covariance <- function(per_trait_var, G_hat = NULL) {
             sprintf("%.4f", max(abs(off_diag))), "). Ensure |G[i,j]| <= ",
             "sqrt(G[i,i] * G[j,j]) for all i != j.")
   }
+  er <- eigen(R, symmetric = TRUE)
+  tol <- 1e-8 * max(1, max(abs(er$values)))
+  if (min(er$values) < -tol) {
+    ng_stop("G_hat is not positive semidefinite (minimum correlation eigenvalue = ",
+            sprintf("%.6g", min(er$values)), ")")
+  }
+  # Repair only floating-point-scale negative eigenvalues, then restore an exact
+  # correlation diagonal before applying the requested marginal variances.
+  if (min(er$values) < 0) {
+    R <- er$vectors %*% diag(pmax(er$values, 0), nrow = t) %*% t(er$vectors)
+    R <- stats::cov2cor(R)
+    diag(R) <- 1
+  }
   D <- sqrt(pmax(v, 0))
   Sigma <- outer(D, D) * R
   Sigma <- (Sigma + t(Sigma)) / 2
-  eig <- eigen(Sigma, symmetric = TRUE)
-  eig$values <- pmax(eig$values, 1e-10)
-  eig$vectors %*% diag(eig$values, nrow = t) %*% t(eig$vectors)
+  diag(Sigma) <- v
+  Sigma
 }
 
 # EXACT within-family cross-trait covariance for each cross: the recombination-aware two-trait
@@ -184,7 +222,8 @@ ng_cross_trait_within_family_cov <- function(geno, betas, marker_map,
 
 # Assemble a per-cross list of T x T within-family covariance matrices from the EXACT cross-trait
 # covariance table (ng_cross_trait_within_family_cov), matched to `scores` rows by unordered parent
-# pair, in the trait order `trait_order`. Each matrix is symmetrized and PSD-projected.
+# pair, in the trait order `trait_order`. Each matrix is symmetrized; only
+# floating-point-scale negative eigenvalues are clipped to zero.
 ng_multitrait_exact_sigma_list <- function(scores, trait_order, cross_trait_cov) {
   ctc <- as.data.frame(cross_trait_cov, stringsAsFactors = FALSE)
   if (!all(c("parent1", "parent2") %in% names(scores)) ||
@@ -193,7 +232,9 @@ ng_multitrait_exact_sigma_list <- function(scores, trait_order, cross_trait_cov)
   }
   pkey <- function(df) paste(pmin(as.character(df$parent1), as.character(df$parent2)),
                              pmax(as.character(df$parent1), as.character(df$parent2)), sep = "||")
-  idx <- match(pkey(scores), pkey(ctc))
+  ctc_key <- pkey(ctc)
+  if (anyDuplicated(ctc_key)) ng_stop("cross_trait_cov contains duplicate unordered parent pairs")
+  idx <- match(pkey(scores), ctc_key)
   if (anyNA(idx)) ng_stop("cross_trait_cov is missing some crosses present in scores")
   t_n <- length(trait_order)
   cov_at <- function(row, a, b) {
@@ -209,9 +250,23 @@ ng_multitrait_exact_sigma_list <- function(scores, trait_order, cross_trait_cov)
     S <- matrix(0, t_n, t_n)
     for (a in seq_len(t_n)) for (b in seq_len(t_n)) S[a, b] <- cov_at(row, a, b)
     S <- (S + t(S)) / 2
+    if (any(!is.finite(S))) ng_stop("cross_trait_cov produced non-finite covariance entries")
+    requested_diag <- diag(S)
+    if (any(requested_diag < -1e-10)) ng_stop("cross_trait_cov produced a negative marginal variance")
     eig <- eigen(S, symmetric = TRUE)
-    eig$values <- pmax(eig$values, 1e-10)
-    eig$vectors %*% diag(eig$values, nrow = t_n) %*% t(eig$vectors)
+    tol <- 1e-8 * max(1, max(abs(eig$values)))
+    if (min(eig$values) < -tol) {
+      ng_stop("cross_trait_cov is not positive semidefinite (minimum eigenvalue = ",
+              sprintf("%.6g", min(eig$values)), ")")
+    }
+    out <- eig$vectors %*% diag(pmax(eig$values, 0), nrow = t_n) %*% t(eig$vectors)
+    out <- (out + t(out)) / 2
+    target_diag <- pmax(requested_diag, 0)
+    out_diag <- pmax(diag(out), 0)
+    scale <- ifelse(out_diag > 0, sqrt(target_diag / out_diag), 0)
+    out <- out * outer(scale, scale)
+    diag(out) <- target_diag
+    out
   })
 }
 

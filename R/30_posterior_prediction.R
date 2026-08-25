@@ -194,6 +194,17 @@ ng_fit_ridge_effects_posterior <- function(geno, y,
                                            mcmc_thin = 1L,
                                            seed = 1L) {
   method <- match.arg(method)
+  positive_integer <- function(x, name, minimum = 1L) {
+    z <- suppressWarnings(as.numeric(x))
+    if (length(z) != 1L || !is.finite(z) || z < minimum ||
+        abs(z - round(z)) > 1e-8) {
+      ng_stop(name, " must be one integer >= ", minimum)
+    }
+    as.integer(round(z))
+  }
+  n_draws <- positive_integer(n_draws, "n_draws")
+  mcmc_burnin <- positive_integer(mcmc_burnin, "mcmc_burnin", minimum = 0L)
+  mcmc_thin <- positive_integer(mcmc_thin, "mcmc_thin")
   fit <- ng_fit_ridge_effects(geno, y, ids = ids, lambda = lambda,
                               h2_prior = h2_prior, kfold = kfold, seed = seed)
   geno <- ng_as_numeric_matrix(geno, "geno")
@@ -203,6 +214,7 @@ ng_fit_ridge_effects_posterior <- function(geno, y,
   ok <- is.finite(y_vec)
   X <- geno[ok, , drop = FALSE]
   marker_mean <- colMeans(X, na.rm = TRUE)
+  marker_mean[!is.finite(marker_mean)] <- 0
   X <- sweep(X, 2L, marker_mean, "-")
   X[!is.finite(X)] <- 0
   yc <- y_vec[ok] - mean(y_vec[ok])
@@ -249,8 +261,25 @@ ng_fit_ridge_effects_posterior <- function(geno, y,
 ng_p_superior_progeny <- function(mu, sigma, tau, k_progeny) {
   mu <- as.numeric(mu); sigma <- as.numeric(sigma)
   tau <- as.numeric(tau); k_progeny <- as.numeric(k_progeny)
-  if (!all(is.finite(k_progeny)) || any(k_progeny <= 0)) ng_stop("k_progeny must be positive")
-  k_progeny <- pmax(1, k_progeny)
+  out_len <- max(length(mu), length(sigma), length(tau), length(k_progeny))
+  input_lengths <- c(length(mu), length(sigma), length(tau), length(k_progeny))
+  if (out_len < 1L || any(!(input_lengths %in% c(1L, out_len)))) {
+    ng_stop("mu, sigma, tau, and k_progeny must have length 1 or a common output length")
+  }
+  mu <- rep(mu, length.out = out_len)
+  sigma <- rep(sigma, length.out = out_len)
+  tau <- rep(tau, length.out = out_len)
+  k_progeny <- rep(k_progeny, length.out = out_len)
+  if (any(!is.finite(mu))) ng_stop("mu must contain finite family means")
+  if (any(!is.finite(sigma)) || any(sigma < 0)) {
+    ng_stop("sigma must contain finite non-negative family SDs")
+  }
+  if (any(is.na(tau))) ng_stop("tau must not be missing")
+  if (any(!is.finite(k_progeny)) || any(k_progeny < 1) ||
+      any(abs(k_progeny - round(k_progeny)) > 1e-8)) {
+    ng_stop("k_progeny must contain positive integers")
+  }
+  k_progeny <- round(k_progeny)
   z <- (tau - mu) / pmax(sigma, .Machine$double.eps)
   # log-space to avoid (~1)^large precision loss when mu >> tau.
   log_pnorm_below <- stats::pnorm(z, lower.tail = TRUE, log.p = TRUE)
@@ -273,7 +302,11 @@ ng_add_p_superior_progeny <- function(scores,
   if (!(mean_col %in% names(scores))) ng_stop("scores missing mean_col: ", mean_col)
   if (!(var_col %in% names(scores))) ng_stop("scores missing var_col: ", var_col)
   mu <- as.numeric(scores[[mean_col]])
-  v  <- pmax(as.numeric(scores[[var_col]]), 0)
+  v <- suppressWarnings(as.numeric(scores[[var_col]]))
+  if (any(!is.finite(mu))) ng_stop("mean_col must contain finite family means")
+  if (any(!is.finite(v)) || any(v < 0)) {
+    ng_stop("var_col must contain finite non-negative variances")
+  }
   sigma <- sqrt(v)
   scores[[out_col]] <- ng_p_superior_progeny(mu, sigma, tau_superior, k_progeny)
   attr(scores, "p_superior_progeny") <- list(
@@ -354,8 +387,17 @@ ng_posterior_cross_predict <- function(geno,
   beta_draws <- posterior_effects$beta_draws
   sigma_e2_draws <- posterior_effects$sigma_e2_draws
   lambda_draws <- posterior_effects$lambda_draws
+  ci_level <- suppressWarnings(as.numeric(ci_level))
+  if (length(ci_level) != 1L || !is.finite(ci_level) || ci_level <= 0 || ci_level >= 1) {
+    ng_stop("ci_level must be one finite probability in (0, 1)")
+  }
   S <- ncol(beta_draws)
   if (S < 1L) ng_stop("posterior_effects$beta_draws has no draws")
+  if (length(sigma_e2_draws) != S || length(lambda_draws) != S ||
+      any(!is.finite(sigma_e2_draws)) || any(sigma_e2_draws <= 0) ||
+      any(!is.finite(lambda_draws)) || any(lambda_draws <= 0)) {
+    ng_stop("posterior sigma_e2_draws and lambda_draws must be positive, finite, and match beta_draws")
+  }
   fit <- posterior_effects$fit
 
   # Point-estimate base table — gives us the cross identifiers plus the
@@ -376,6 +418,10 @@ ng_posterior_cross_predict <- function(geno,
 
   pmv_mat <- matrix(NA_real_, nrow = n_pairs, ncol = S)
   uc_mat  <- matrix(NA_real_, nrow = n_pairs, ncol = S)
+  mu_mat <- if (!is.null(tau_superior)) matrix(NA_real_, nrow = n_pairs, ncol = S) else NULL
+  if (!is.null(tau_superior) && !(var_col %in% c("vpm", "pmv"))) {
+    ng_stop("tau_superior requires var_col = 'vpm' or 'pmv', a within-family genetic variance")
+  }
   i_intensity <- ng_selection_intensity(selection_prop)
   # cross_mean_gebv changes with beta_draws because GEBV depends on beta.
   pair_p1 <- match(base$parent1, ids)
@@ -393,7 +439,9 @@ ng_posterior_cross_predict <- function(geno,
       intercept = mean(stats::na.omit(intercept_y)) -
                   sum(marker_mean_y * beta_draws[, s] - marker_mean_y * fit$beta),
       marker_mean = marker_mean_y,
-      reliability = fit$reliability
+      reliability = fit$reliability,
+      cv_predictive_r2 = fit$cv_predictive_r2,
+      reliability_is_calibrated = FALSE
     )
     # Centering shift: effects_s$intercept above keeps fitted ~ original.
     scored <- ng_score_crosses(
@@ -406,6 +454,7 @@ ng_posterior_cross_predict <- function(geno,
       parent_type = parent_type
     )
     pmv_mat[, s] <- scored[[var_col]]
+    if (!is.null(mu_mat)) mu_mat[, s] <- scored$cross_mean_gebv
     # `value_fun` lets a caller summarize the metric it actually RANKS on rather than the
     # hardcoded usefulness column. Without it, a posterior interval computed on usefulness would
     # be presented as the uncertainty of a `mean` / `var_complex` run -- the wrong quantity.
@@ -439,11 +488,11 @@ ng_posterior_cross_predict <- function(geno,
   if (!is.null(tau_superior)) {
     tau <- as.numeric(tau_superior)
     k <- as.numeric(k_progeny)
-    # Reconstruct per-draw (mu, sigma) from uc and pmv to compute P(max>=tau).
-    # uc = mu + i * sigma => mu = uc - i * sqrt(pmv).
+    # Use the actual per-draw genetic family mean. Reconstructing mu from the
+    # ranked value is invalid whenever gain_col/value_fun is mean-only,
+    # threshold-penalized, multi-trait, or otherwise not exactly mu + i*sigma.
     pmv_pos <- pmax(pmv_mat, 0)
     sigma_mat <- sqrt(pmv_pos)
-    mu_mat <- uc_mat - i_intensity * sigma_mat
     p_mat <- matrix(NA_real_, nrow = n_pairs, ncol = S)
     for (s in seq_len(S)) {
       p_mat[, s] <- ng_p_superior_progeny(mu_mat[, s], sigma_mat[, s], tau, k)
@@ -451,7 +500,11 @@ ng_posterior_cross_predict <- function(geno,
     base$p_superior_progeny_post_mean  <- rowMeans(p_mat, na.rm = TRUE)
     base$p_superior_progeny_post_lower <- row_quantile(p_mat, q_lower)
     base$p_superior_progeny_post_upper <- row_quantile(p_mat, q_upper)
-    attr(base, "p_superior_progeny") <- list(tau = tau, k_progeny = k)
+    attr(base, "p_superior_progeny") <- list(
+      tau = tau, k_progeny = k,
+      mean_basis = "posterior_draw_cross_mean_gebv",
+      variance_basis = var_col
+    )
   }
 
   # Posterior top-N stability: for each N in top_n_targets, count fraction of
@@ -504,10 +557,22 @@ ng_optimize_robust_mating_plan <- function(posterior_scores,
                                            ocs_iter = 5L) {
   objective <- match.arg(objective)
   posterior_scores <- as.data.frame(posterior_scores, stringsAsFactors = FALSE)
+  posterior_meta <- attr(posterior_scores, "posterior", exact = TRUE)
+  posterior_ci <- suppressWarnings(as.numeric(posterior_meta$ci_level))
+  if (is.null(posterior_meta) || length(posterior_ci) != 1L || !is.finite(posterior_ci)) {
+    ng_stop("posterior_scores must retain posterior metadata from ng_posterior_cross_predict()")
+  }
+  posterior_meta$ci_level <- posterior_ci
   robust_col <- ".robust_gain"
+  quantile_approximation <- FALSE
   if (identical(objective, "posterior_quantile")) {
+    robustness_quantile <- suppressWarnings(as.numeric(robustness_quantile))
+    if (length(robustness_quantile) != 1L || !is.finite(robustness_quantile) ||
+        robustness_quantile <= 0 || robustness_quantile >= 1) {
+      ng_stop("robustness_quantile must be one finite probability in (0, 1)")
+    }
     lower_col <- paste0(gain_col, "_post_lower")
-    if (robustness_quantile == (1 - attr(posterior_scores, "posterior")$ci_level) / 2 &&
+    if (abs(robustness_quantile - (1 - posterior_meta$ci_level) / 2) <= 1e-12 &&
         lower_col %in% names(posterior_scores)) {
       # Reuse the cached lower CI when the user requested the same quantile.
       posterior_scores[[robust_col]] <- posterior_scores[[lower_col]]
@@ -518,8 +583,9 @@ ng_optimize_robust_mating_plan <- function(posterior_scores,
       mean_col <- paste0(gain_col, "_post_mean")
       upper_col <- paste0(gain_col, "_post_upper")
       if (mean_col %in% names(posterior_scores) && upper_col %in% names(posterior_scores)) {
+        quantile_approximation <- TRUE
         z_target <- stats::qnorm(robustness_quantile)
-        z_upper  <- stats::qnorm(1 - (1 - attr(posterior_scores, "posterior")$ci_level) / 2)
+        z_upper  <- stats::qnorm(1 - (1 - posterior_meta$ci_level) / 2)
         spread   <- (posterior_scores[[upper_col]] - posterior_scores[[mean_col]]) / z_upper
         posterior_scores[[robust_col]] <- posterior_scores[[mean_col]] + z_target * spread
       } else {
@@ -528,7 +594,13 @@ ng_optimize_robust_mating_plan <- function(posterior_scores,
     }
   } else {
     if (is.null(top_n_target)) ng_stop("posterior_topn_prob objective requires top_n_target")
-    target_col <- paste0("posterior_topn_prob_", as.integer(top_n_target))
+    top_n_num <- suppressWarnings(as.numeric(top_n_target))
+    if (length(top_n_num) != 1L || !is.finite(top_n_num) || top_n_num < 1 ||
+        abs(top_n_num - round(top_n_num)) > 1e-8) {
+      ng_stop("top_n_target must be one positive integer")
+    }
+    top_n_target <- as.integer(round(top_n_num))
+    target_col <- paste0("posterior_topn_prob_", top_n_target)
     if (!(target_col %in% names(posterior_scores))) {
       ng_stop("posterior_scores missing column: ", target_col,
               ". Re-run ng_posterior_cross_predict() with top_n_targets including ",
@@ -552,6 +624,7 @@ ng_optimize_robust_mating_plan <- function(posterior_scores,
   s <- attr(plan, "summary")
   s$robust_objective <- objective
   s$robustness_quantile <- if (identical(objective, "posterior_quantile")) robustness_quantile else NA_real_
+  s$robustness_quantile_is_normal_approximation <- quantile_approximation
   s$robust_top_n_target <- if (identical(objective, "posterior_topn_prob")) as.integer(top_n_target) else NA_integer_
   s$robust_gain_col <- gain_col
   attr(plan, "summary") <- s

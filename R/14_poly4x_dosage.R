@@ -54,7 +54,7 @@ ng_poly4x_parent_relationship <- function(geno, ploidy = 4L) {
   K
 }
 
-ng_poly4x_pair_coancestry <- function(parent_kinship, pairs) {
+ng_poly4x_pair_relationship <- function(parent_kinship, pairs) {
   parent_kinship <- as.matrix(parent_kinship)
   if (!is.numeric(parent_kinship)) ng_stop("parent_kinship must be numeric")
   if (nrow(parent_kinship) != ncol(parent_kinship)) ng_stop("parent_kinship must be a square matrix")
@@ -76,4 +76,8 @@ ng_poly4x_pair_coancestry <- function(parent_kinship, pairs) {
   vapply(seq_len(nrow(pairs)), function(i) {
     parent_kinship[as.character(pairs$parent1[[i]]), as.character(pairs$parent2[[i]])]
   }, numeric(1))
+}
+
+ng_poly4x_pair_coancestry <- function(parent_kinship, pairs) {
+  ng_poly4x_pair_relationship(parent_kinship, pairs) / 2
 }

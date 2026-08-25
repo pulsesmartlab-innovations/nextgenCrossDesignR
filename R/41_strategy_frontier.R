@@ -142,11 +142,9 @@ ng_select_by_strategy <- function(scores,
 # reports -- a target group coancestry -- and we auto-solve the lambda_group that maximizes
 # gain while staying at/under it.
 #
-# `target_coancestry` is on the SAME scale that ng_plan_summary reports `group_coancestry`,
-# i.e. c'Gc on a VanRaden genomic-relationship matrix, which is ~2x the Meuwissen coancestry
-# coefficient and ~2x the expected progeny rate of inbreeding dF. Set it to ~2 * your
-# desired dF (see the units note on ng_group_coancestry). Kept as one explicit argument on
-# the reported scale to avoid a hidden 2x conversion.
+# `target_coancestry` is on the SAME scale that ng_plan_summary reports
+# `group_coancestry`: c'Gc/2 for a VanRaden genomic-relationship matrix G.
+# `group_relationship = c'Gc` is reported separately.
 #
 # group_coancestry decreases monotonically as lambda_group increases, so the max-gain plan
 # meeting the cap is the SMALLEST lambda whose coancestry <= target. We locate it on the

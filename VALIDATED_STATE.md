@@ -1,7 +1,30 @@
 # Validated Software State
 
-Last reviewed: 2026-08-18 for the exact phased autopolyploid variance and posterior-ON
-cross confidence.
+Last reviewed: 2026-08-25 for the installed-package statistical release gate.
+
+## Statistical Release Gate (2026-08-25)
+
+The production package was installed with its compiled kernels and evaluated
+directly, without sourcing package test files. The reproducible audit and its
+machine-readable results are in
+[`docs/STATISTICAL_RELEASE_GATE.md`](docs/STATISTICAL_RELEASE_GATE.md) and
+[`docs/STATISTICAL_RELEASE_GATE_RESULTS.csv`](docs/STATISTICAL_RELEASE_GATE_RESULTS.csv).
+
+- **Mathematical/software quantitative-genetics gate: PASS (29/29).** This
+  includes exact DH enumeration, the RIL-infinity identity, fast-versus-dense
+  PMV, diagonal full-posterior reduction, 60 randomized graph-LD oracle cases,
+  relationship/coancestry scales, optimizer hard constraints, Smith-Hazel and
+  Pesek-Baker identities, polyploid model-domain checks, probability identities,
+  and the installed one-call workflow. Graph LD pruning and fast PMV remain
+  enabled and were explicitly validated.
+- **R package gate: PASS.** The staged `R CMD build` and `R CMD check
+  --no-manual --no-build-vignettes` completed with `Status: OK`.
+- **Historical forward-validation gate: NOT RUN.** The code gate does not
+  establish crop-specific prediction accuracy or realized genetic gain.
+- **Unrestricted worldwide production release: HOLD** until leakage-free
+  historical cross-by-progeny forward validation and an independent
+  quantitative-genetics review pass. This hold is an evidence boundary, not a
+  defect in graph LD pruning or fast PMV.
 
 ## Phased Autopolyploid Variance & Posterior Confidence Note (v0.21.0, 2026-08-18)
 

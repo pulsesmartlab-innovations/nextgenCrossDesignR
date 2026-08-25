@@ -42,9 +42,12 @@ ng_cheap_cross_screen <- function(geno,
   out <- pairs
   out$mean_source <- mean_source$source
   out$effect_reliability <- mean_source$reliability
+  out$effect_reliability_is_calibrated <- isTRUE(mean_source$reliability_is_calibrated)
+  out$effect_cv_predictive_r2 <- suppressWarnings(as.numeric((mean_source$cv_predictive_r2 %||% NA_real_)[[1L]]))
   out$cross_mean <- 0.5 * (mean_source$value[p1] + mean_source$value[p2])
   out$mid_parent_value <- 0.5 * (gebv[p1] + gebv[p2])
   out$parent_distance <- rel_var$parent_distance
+  out$pair_relationship <- rel_var$pair_relationship
   out$pair_kinship <- rel_var$pair_kinship
   out$usefulness_le <- out$cross_mean + i * sqrt(pmax(out$parent_distance, 0))
   if (!is.null(adjusted_pheno)) {

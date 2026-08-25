@@ -300,6 +300,7 @@ ng_polyploid_subgenome_score_crosses <- function(geno_by_subgenome,
     poly_gain = as.numeric(gain),
     poly_var = as.numeric(variance),
     poly_usefulness = as.numeric(gain + intensity * sqrt(pmax(variance, 0))),
+    pair_relationship = ng_poly4x_pair_relationship(parent_kinship, candidate_pairs),
     pair_kinship = ng_poly4x_pair_coancestry(parent_kinship, candidate_pairs),
     poly_variance_model = variance_model,
     stringsAsFactors = FALSE

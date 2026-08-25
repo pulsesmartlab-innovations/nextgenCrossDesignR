@@ -1,4 +1,4 @@
-# Dominance-aware mate design for clonal / heterosis crops (cassava, sugarcane, potato), any ploidy.
+# Dominance-aware mate design for clonal / heterosis crops (cassava, sugarcane, potato), even ploidy.
 #
 # For these crops a cross's value is the distribution of TOTAL genotypic value among its progeny
 # clones -- so both the heterosis-inclusive cross mean AND the within-family variance matter. From
@@ -7,8 +7,9 @@
 #   cross_var     = additive segregation + dominance segregation (+ their covariance)
 #   cross_usefulness = mean + i*sqrt(var)
 # ng_polyploid_design_crosses(dominance = TRUE) does fit -> score -> allocate in one call, and forwards
-# every native control (strategy dial, target_coancestry, committed matings, ...). Set
-# double_reduction > 0 for autopolyploid double reduction (ploidy >= 4). Additive-only is the default.
+# every native control (strategy dial, target_coancestry, committed matings, ...). Nonzero
+# double_reduction is currently restricted to the autotetraploid single-IBD-pair model.
+# Additive-only is the default; dominance requires an explicit experimental opt-in.
 
 library(nextgenCrossDesign)
 
@@ -30,7 +31,10 @@ phenotype <- as.numeric(W %*% rnorm(m)) + as.numeric(Dd %*% rnorm(m, 0, 1.2)) + 
 names(phenotype) <- ids
 
 # --- lower-level: fit A+D effects, then score crosses (with double reduction) ---
-fit <- ng_polyploid_fit_effects(dosage, phenotype, ploidy = ploidy, model = "additive_dominance")
+fit <- ng_polyploid_fit_effects(
+  dosage, phenotype, ploidy = ploidy, model = "additive_dominance",
+  allow_experimental_dominance = TRUE
+)
 scores <- ng_polyploid_score_crosses_dominance(fit, dosage, selection_prop = 0.10, double_reduction = 0.08)
 cat(sprintf("Scored %d crosses. Heterosis range [%.2f, %.2f]; usefulness range [%.2f, %.2f]\n",
             nrow(scores), min(scores$heterosis), max(scores$heterosis),
@@ -41,8 +45,9 @@ print(utils::head(scores[order(-scores$cross_usefulness),
 # --- one-call: QC -> A+D fit -> dominance cross scoring -> allocation with a strategy dial ---
 plan <- ng_polyploid_design_crosses(
   dosage = dosage, n_crosses = 12L, ploidy = ploidy, phenotype = phenotype,
-  dominance = TRUE, gain = "usefulness",          # optimize dominance-aware usefulness
-  double_reduction = 0.08,                        # autopolyploid double reduction
+  dominance = TRUE, allow_experimental_dominance = TRUE,
+  gain = "usefulness",                            # optimize dominance-aware usefulness
+  double_reduction = 0.08,                        # autotetraploid IBD-pair coefficient
   grm_method = "vanraden",                        # or "yang"
   strategy = "balanced",                          # gain-vs-diversity dial (native control)
   max_crosses_per_parent = 4L, method = "greedy_local")

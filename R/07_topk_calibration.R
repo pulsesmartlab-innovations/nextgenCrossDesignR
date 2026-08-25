@@ -168,10 +168,21 @@ ng_rank_normal_score <- function(x) {
   out
 }
 
+# Cross-validated phenotype predictive R2 is useful for tuning these optional
+# rank-ensemble heuristics, but it is not breeding-value accuracy squared and
+# must never be exposed or thresholded as reliability. Missing evidence maps
+# to zero predictive support, rather than to an invented reliability constant.
+ng_score_cv_predictive_r2 <- function(scores) {
+  if (!("effect_cv_predictive_r2" %in% names(scores))) return(0)
+  value <- suppressWarnings(stats::median(
+    as.numeric(scores$effect_cv_predictive_r2), na.rm = TRUE
+  ))
+  if (!is.finite(value)) value <- 0
+  max(0, min(1, value))
+}
+
 ng_default_portfolio_weights <- function(scores, score_cols) {
-  rel <- suppressWarnings(stats::median(as.numeric(scores$effect_reliability), na.rm = TRUE))
-  if (!is.finite(rel)) rel <- 0.35
-  rel <- max(0, min(1, rel))
+  rel <- ng_score_cv_predictive_r2(scores)
 
   mean_w <- c(
     gebv = max(0.05, rel),
@@ -294,7 +305,8 @@ ng_add_local_portfolio_scores <- function(scores,
   }
   scores$ng_portfolio_score <- raw
   scores$ng_portfolio_var <- as.numeric(var_terms %*% weights)
-  scores$ng_portfolio_reliability <- suppressWarnings(stats::median(as.numeric(scores$effect_reliability), na.rm = TRUE))
+  scores$ng_portfolio_reliability <- NA_real_
+  scores$ng_portfolio_cv_predictive_r2 <- ng_score_cv_predictive_r2(scores)
   scores$ng_portfolio_history_weight <- history_weight
   attr(scores, "local_portfolio_weights") <- weights
   scores
@@ -302,40 +314,41 @@ ng_add_local_portfolio_scores <- function(scores,
 
 ng_adaptive_stack_parent_use <- function(n_parents,
                                          n_crosses,
-                                         reliability,
+                                         cv_predictive_r2,
                                          min_value = 0.75,
                                          max_value = 2.25) {
   n_parents <- as.numeric(n_parents)
   n_crosses <- as.numeric(n_crosses)
-  reliability <- as.numeric(reliability)
+  cv_predictive_r2 <- as.numeric(cv_predictive_r2)
   if (!is.finite(n_parents) || n_parents <= 0) n_parents <- 2 * n_crosses
   if (!is.finite(n_crosses) || n_crosses <= 0) n_crosses <- 10
-  if (!is.finite(reliability)) reliability <- 0.35
-  reliability <- max(0, min(1, reliability))
+  if (!is.finite(cv_predictive_r2)) cv_predictive_r2 <- 0
+  cv_predictive_r2 <- max(0, min(1, cv_predictive_r2))
   parent_pressure <- max(0, min(1, n_crosses / n_parents))
-  value <- 0.75 + 2.0 * parent_pressure + 0.5 * (1 - reliability)
+  value <- 0.75 + 2.0 * parent_pressure + 0.5 * (1 - cv_predictive_r2)
   max(min_value, min(max_value, value))
 }
 
-ng_adaptive_stack_fallback_weight <- function(reliability,
+ng_adaptive_stack_fallback_weight <- function(cv_predictive_r2,
                                               history_n = 0L,
                                               min_history_n = 20L,
-                                              low_reliability = 0.55,
-                                              very_low_reliability = 0.30,
+                                              low_cv_predictive_r2 = 0.55,
+                                              very_low_cv_predictive_r2 = 0.30,
                                               max_weight = 0.35) {
-  reliability <- as.numeric(reliability)
-  if (!is.finite(reliability)) reliability <- 0.35
-  reliability <- max(0, min(1, reliability))
+  cv_predictive_r2 <- as.numeric(cv_predictive_r2)
+  if (!is.finite(cv_predictive_r2)) cv_predictive_r2 <- 0
+  cv_predictive_r2 <- max(0, min(1, cv_predictive_r2))
   history_n <- as.numeric(history_n)
   if (!is.finite(history_n) || history_n < 0) history_n <- 0
   min_history_n <- max(1, as.numeric(min_history_n))
-  low_reliability <- max(very_low_reliability + 1e-6, as.numeric(low_reliability))
+  low_cv_predictive_r2 <- max(very_low_cv_predictive_r2 + 1e-6,
+                              as.numeric(low_cv_predictive_r2))
   max_weight <- max(0, min(0.75, as.numeric(max_weight)))
 
-  reliability_gap <- max(0, (low_reliability - reliability) /
-                           (low_reliability - very_low_reliability))
+  predictive_gap <- max(0, (low_cv_predictive_r2 - cv_predictive_r2) /
+                           (low_cv_predictive_r2 - very_low_cv_predictive_r2))
   history_gap <- max(0, 1 - history_n / min_history_n)
-  value <- max_weight * reliability_gap * (0.70 + 0.30 * history_gap)
+  value <- max_weight * predictive_gap * (0.70 + 0.30 * history_gap)
   max(0, min(max_weight, value))
 }
 
@@ -343,9 +356,7 @@ ng_adaptive_stack_prior_weights <- function(scores,
                                             score_cols,
                                             n_parents = NULL,
                                             n_crosses = NULL) {
-  rel <- suppressWarnings(stats::median(as.numeric(scores$effect_reliability), na.rm = TRUE))
-  if (!is.finite(rel)) rel <- 0.35
-  rel <- max(0, min(1, rel))
+  rel <- ng_score_cv_predictive_r2(scores)
   if (is.null(n_parents)) n_parents <- length(unique(c(scores$parent1, scores$parent2)))
   if (is.null(n_crosses)) n_crosses <- max(1L, ceiling(0.10 * n_parents))
   pressure <- max(0, min(1, as.numeric(n_crosses) / max(1, as.numeric(n_parents))))
@@ -353,7 +364,7 @@ ng_adaptive_stack_prior_weights <- function(scores,
   out <- numeric(length(score_cols))
   names(out) <- score_cols
   fallback_boost <- ng_adaptive_stack_fallback_weight(
-    reliability = rel,
+    cv_predictive_r2 = rel,
     history_n = 0L,
     min_history_n = 20L,
     max_weight = 0.35
@@ -421,9 +432,7 @@ ng_add_adaptive_stack_scores <- function(scores,
   }
   if (is.null(n_parents)) n_parents <- length(unique(c(scores$parent1, scores$parent2)))
   if (is.null(n_crosses)) n_crosses <- max(1L, ceiling(0.10 * n_parents))
-  rel <- suppressWarnings(stats::median(as.numeric(scores$effect_reliability), na.rm = TRUE))
-  if (!is.finite(rel)) rel <- 0.35
-  rel <- max(0, min(1, rel))
+  rel <- ng_score_cv_predictive_r2(scores)
 
   prior_w <- ng_adaptive_stack_prior_weights(
     scores = scores,
@@ -478,7 +487,7 @@ ng_add_adaptive_stack_scores <- function(scores,
   if (nzchar(fallback_col) && fallback_col %in% names(scores)) {
     if (is.null(fallback_weight) || !is.finite(fallback_weight)) {
       fallback_weight <- ng_adaptive_stack_fallback_weight(
-        reliability = rel,
+        cv_predictive_r2 = rel,
         history_n = hist_n,
         min_history_n = min_history_n,
         max_weight = fallback_max_weight
@@ -504,19 +513,21 @@ ng_add_adaptive_stack_scores <- function(scores,
   scores$ng_adaptive_score_raw <- raw
   scores$ng_adaptive_score <- guarded
   scores$ng_adaptive_var <- as.numeric(var_terms %*% weights)
-  scores$ng_adaptive_reliability <- rel
+  scores$ng_adaptive_reliability <- NA_real_
+  scores$ng_adaptive_cv_predictive_r2 <- rel
   scores$ng_adaptive_history_weight <- history_weight
   scores$ng_adaptive_fallback_weight <- fallback_weight
   scores$ng_adaptive_fallback_col <- fallback_col
   scores$ng_adaptive_parent_use_input <- ng_adaptive_stack_parent_use(
     n_parents = n_parents,
     n_crosses = n_crosses,
-    reliability = rel
+    cv_predictive_r2 = rel
   )
   attr(scores, "adaptive_stack") <- list(
     weights = weights,
     score_cols = names(weights),
-    reliability = rel,
+    reliability = NA_real_,
+    cv_predictive_r2 = rel,
     history_weight = history_weight,
     history_n = hist_n,
     champion_weight = champion_weight,
@@ -534,9 +545,7 @@ ng_meta_portfolio_prior_weights <- function(scores,
                                             n_parents = NULL,
                                             n_crosses = NULL) {
   scores <- as.data.frame(scores, stringsAsFactors = FALSE)
-  rel <- suppressWarnings(stats::median(as.numeric(scores$effect_reliability), na.rm = TRUE))
-  if (!is.finite(rel)) rel <- 0.35
-  rel <- max(0, min(1, rel))
+  rel <- ng_score_cv_predictive_r2(scores)
   if (is.null(n_parents)) n_parents <- length(unique(c(scores$parent1, scores$parent2)))
   if (is.null(n_crosses)) n_crosses <- max(1L, ceiling(0.10 * n_parents))
   n_parents <- max(2, as.numeric(n_parents))
@@ -734,9 +743,7 @@ ng_add_meta_portfolio_scores <- function(scores,
   }
   if (is.null(n_parents)) n_parents <- length(unique(c(scores$parent1, scores$parent2)))
   if (is.null(n_crosses)) n_crosses <- max(1L, ceiling(0.10 * n_parents))
-  rel <- suppressWarnings(stats::median(as.numeric(scores$effect_reliability), na.rm = TRUE))
-  if (!is.finite(rel)) rel <- 0.35
-  rel <- max(0, min(1, rel))
+  rel <- ng_score_cv_predictive_r2(scores)
 
   prior_w <- ng_meta_portfolio_prior_weights(scores, score_cols, n_parents, n_crosses)
   hist_w <- ng_history_portfolio_weights(
@@ -823,7 +830,8 @@ ng_add_meta_portfolio_scores <- function(scores,
   }
   scores$ng_meta_score <- raw
   scores$ng_meta_var <- as.numeric(var_terms %*% weights)
-  scores$ng_meta_reliability <- rel
+  scores$ng_meta_reliability <- NA_real_
+  scores$ng_meta_cv_predictive_r2 <- rel
   scores$ng_meta_history_weight <- history_weight
   scores$ng_meta_method_history_weight <- method_history_weight
   scores$ng_meta_leader_col <- leader_col
@@ -851,12 +859,13 @@ ng_add_meta_portfolio_scores <- function(scores,
   scores$ng_meta_parent_use_input <- ng_adaptive_stack_parent_use(
     n_parents = n_parents,
     n_crosses = n_crosses,
-    reliability = rel
+    cv_predictive_r2 = rel
   )
   attr(scores, "meta_portfolio") <- list(
     weights = weights,
     score_cols = names(weights),
-    reliability = rel,
+    reliability = NA_real_,
+    cv_predictive_r2 = rel,
     history_weight = history_weight,
     history_n = hist_n,
     method_history_weight = method_history_weight,

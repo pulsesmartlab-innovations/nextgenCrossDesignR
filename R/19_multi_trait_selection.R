@@ -132,8 +132,18 @@ ng_multitrait_spec <- function(trait,
   spec$threshold_weight <- suppressWarnings(as.numeric(spec$threshold_weight))
   spec$desired_change <- suppressWarnings(as.numeric(spec$desired_change))
   spec$economic_weight <- suppressWarnings(as.numeric(spec$economic_weight))
-  spec$threshold_weight[!is.finite(spec$threshold_weight) | spec$threshold_weight < 0] <- 1
-  spec$economic_weight[is.finite(spec$economic_weight) & spec$economic_weight < 0] <- NA_real_
+  if (any(!is.finite(spec$threshold_weight) | spec$threshold_weight < 0)) {
+    ng_stop("threshold_weight must be finite and non-negative for every trait")
+  }
+  if (any(is.finite(spec$weight) & spec$weight < 0)) {
+    ng_stop("weight must be non-negative; use direction = 'minimize' for an unfavorable trait")
+  }
+  if (any(is.finite(spec$economic_weight) & spec$economic_weight < 0)) {
+    ng_stop("economic_weight must be non-negative; use direction = 'minimize' for an unfavorable trait")
+  }
+  if (any(is.finite(spec$desired_change) & spec$desired_change < 0)) {
+    ng_stop("desired_change must be non-negative; use direction = 'minimize' for a requested decrease")
+  }
   both <- is.finite(spec$min_value) & is.finite(spec$max_value)
   if (any(both & spec$min_value > spec$max_value)) ng_stop("min_value cannot exceed max_value")
   rownames(spec) <- NULL
@@ -193,7 +203,7 @@ ng_breeder_selection_objective <- function(trait,
   has_weight <- finite_positive(traits$weight)
   method_reason <- paste0("requested_", method_requested)
   if (identical(method_requested, "auto")) {
-    if (has_desired && (has_economic || has_weight)) {
+    if (has_desired) {
       method <- "desired_gain"
       method_reason <- "auto_promoted_desired_gain"
     } else if (has_economic) {
@@ -236,39 +246,40 @@ ng_multitrait_resolve_weights <- function(spec, method) {
   method <- trimws(tolower(as.character(method)[[1]]))
   raw <- suppressWarnings(as.numeric(spec$weight))
   if (identical(method, "weighted")) {
-    if (!any(is.finite(raw) & raw > 0)) raw <- suppressWarnings(as.numeric(spec$economic_weight))
-    if (any(!is.finite(raw) | raw <= 0)) ng_stop("weighted multi-trait scoring requires positive finite weights")
+    if (any(!is.finite(raw) | raw < 0) || !any(raw > 0)) {
+      ng_stop("weighted multi-trait scoring requires one finite non-negative weight per trait and at least one positive weight")
+    }
   } else if (identical(method, "economic_index")) {
-    raw <- suppressWarnings(as.numeric(spec$economic_weight))
-    if (!any(is.finite(raw) & raw > 0)) raw <- suppressWarnings(as.numeric(spec$weight))
+    return(ng_multitrait_economic_weights(spec, required = TRUE))
   } else if (identical(method, "desired_gain")) {
-    raw <- suppressWarnings(as.numeric(spec$economic_weight))
-    if (!any(is.finite(raw) & raw > 0)) raw <- suppressWarnings(as.numeric(spec$weight))
-    if (!any(is.finite(raw) & raw > 0)) raw <- abs(suppressWarnings(as.numeric(spec$desired_change)))
+    raw <- suppressWarnings(as.numeric(spec$desired_change))
+    if (any(!is.finite(raw) | raw < 0) || !any(raw > 0)) {
+      ng_stop("desired_gain requires one finite non-negative desired_change per trait and at least one positive desired_change")
+    }
+  } else if (any(is.finite(raw))) {
+    if (any(!is.finite(raw) | raw < 0) || !any(raw > 0)) {
+      ng_stop("partially specified trait weights are not allowed; provide one finite non-negative weight per trait with at least one positive weight")
+    }
   }
 
-  positive <- is.finite(raw) & raw > 0
-  if (!any(positive)) {
+  if (!any(is.finite(raw))) {
     raw <- rep(1, nrow(spec))
-  } else if (any(!positive)) {
-    raw[!positive] <- stats::median(raw[positive], na.rm = TRUE)
   }
-  raw[!is.finite(raw) | raw <= 0] <- 1
   weights <- raw / sum(raw)
   names(weights) <- spec$trait
   weights
 }
 
-ng_multitrait_economic_weights <- function(spec) {
+ng_multitrait_economic_weights <- function(spec, required = TRUE) {
   raw <- suppressWarnings(as.numeric(spec$economic_weight))
-  if (!any(is.finite(raw) & raw > 0)) raw <- suppressWarnings(as.numeric(spec$weight))
-  positive <- is.finite(raw) & raw > 0
-  if (!any(positive)) {
-    raw <- rep(1, nrow(spec))
-  } else if (any(!positive)) {
-    raw[!positive] <- stats::median(raw[positive], na.rm = TRUE)
+  if (!any(is.finite(raw)) && !isTRUE(required)) {
+    out <- rep(NA_real_, nrow(spec))
+    names(out) <- spec$trait
+    return(out)
   }
-  raw[!is.finite(raw) | raw <= 0] <- 1
+  if (any(!is.finite(raw) | raw < 0) || !any(raw > 0)) {
+    ng_stop("economic_index requires one finite non-negative economic_weight per trait and at least one positive economic_weight")
+  }
   out <- raw / sum(raw)
   names(out) <- spec$trait
   out
@@ -290,64 +301,61 @@ ng_multitrait_diag_col <- function(trait, suffix) {
   paste0("multi_trait_", make.names(as.character(trait)), "_", suffix)
 }
 
-# Build the covariance matrix used to solve the index. Sources, in order of
-# preference:
-#   1. `genetic_covariance` (G) supplied by the caller (Smith-Hazel / Pesek-Baker
-#      ideal). Use directly if `index_basis = "genetic"` (default when supplied).
-#   2. `phenotypic_covariance` (P) supplied by the caller, used as Smith-Hazel
-#      P alongside `genetic_covariance` (b = P^{-1} G a).
-#   3. Sample Pearson covariance of the oriented candidate-cross trait predictions
-#      (legacy "phenotypic proxy"). This is NOT a population-genetic parameter
-#      and should be treated as an empirical approximation only.
+# Build the covariance matrices used to solve a formal selection index. Both
+# caller-supplied P and G are required. Candidate-cross score covariance is not
+# a substitute for phenotypic or additive-genetic covariance.
 ng_multitrait_index_covariance <- function(value_z, traits,
                                            phenotypic_covariance = NULL,
-                                           genetic_covariance = NULL) {
+                                           genetic_covariance = NULL,
+                                           purpose = c("economic_index", "desired_gain")) {
+  purpose <- match.arg(purpose)
   value_z <- as.matrix(value_z)
   p <- ncol(value_z)
-  ensure_pxp <- function(M) {
+  ensure_pxp <- function(M, name) {
     if (is.null(M)) return(NULL)
     M <- as.matrix(M)
-    if (nrow(M) != p || ncol(M) != p) return(NULL)
-    M[!is.finite(M)] <- 0
+    if (nrow(M) != p || ncol(M) != p) {
+      ng_stop(name, " must be a ", p, " x ", p, " matrix")
+    }
+    if (any(!is.finite(M))) ng_stop(name, " contains non-finite entries")
+    asym <- max(abs(M - t(M)))
+    if (!is.finite(asym) || asym > 1e-8) ng_stop(name, " must be symmetric")
+    M <- (M + t(M)) / 2
+    if (any(diag(M) <= 0)) ng_stop(name, " must have positive diagonal variances")
+    ev <- eigen(M, symmetric = TRUE, only.values = TRUE)$values
+    tol <- 1e-8 * max(1, max(abs(ev)))
+    if (min(ev) < -tol) ng_stop(name, " must be positive semidefinite")
     M
   }
-  G <- ensure_pxp(genetic_covariance)
-  P <- ensure_pxp(phenotypic_covariance)
-  if (!is.null(G) && !is.null(P)) {
+  G <- ensure_pxp(genetic_covariance, "genetic_covariance")
+  P <- ensure_pxp(phenotypic_covariance, "phenotypic_covariance")
+  if (is.null(G) || is.null(P)) {
+    ng_stop(purpose, " requires both phenotypic_covariance (P) and genetic_covariance (G); ",
+            "candidate-score covariance is not a substitute for quantitative-genetic covariance")
+  }
+  if (identical(purpose, "economic_index")) {
     return(list(target_matrix = P, projection = G,
+                response_G = G, response_P = P,
                 source = "smith_hazel", solve_form = "b = P^{-1} G a"))
   }
-  if (!is.null(G)) {
-    return(list(target_matrix = G, projection = NULL,
-                source = "genetic_covariance", solve_form = "b = G^{-1} a"))
-  }
-  if (!is.null(P)) {
-    return(list(target_matrix = P, projection = NULL,
-                source = "phenotypic_covariance", solve_form = "b = P^{-1} a"))
-  }
-  complete <- stats::complete.cases(value_z)
-  cov_mat <- if (sum(complete) > 1L) {
-    stats::cov(value_z[complete, , drop = FALSE])
-  } else {
-    diag(p)
-  }
-  cov_mat <- as.matrix(cov_mat)
-  cov_mat[!is.finite(cov_mat)] <- 0
-  if (nrow(cov_mat) != p || ncol(cov_mat) != p) cov_mat <- diag(p)
-  list(target_matrix = cov_mat, projection = NULL,
-       source = "phenotypic_proxy", solve_form = "b = Sigma_hat^{-1} a")
+  list(target_matrix = G, projection = NULL,
+       response_G = G, response_P = P,
+       source = "pesek_baker", solve_form = "b = G^{-1} d")
 }
 
 # Single-ridge solve: solve_mat = target_matrix + ridge * diag_scale * I.
 # Previously the diagonal was pre-inflated AND a ridge term was added, applying
 # the penalty twice. Returns the coefficients and the predicted response under
 # the index theory:
-#   - phenotypic_proxy: predicted = Sigma_hat %*% b (sample covariance proxy)
-#   - genetic_covariance: predicted = G %*% b (Pesek-Baker realized response)
 #   - smith_hazel: predicted = G %*% b (Smith-Hazel realized response)
+#   - pesek_baker: predicted = G %*% b (desired-gain response direction)
 ng_multitrait_solve_index <- function(target, cov_info, ridge = 1e-6) {
   p <- length(target)
   M <- cov_info$target_matrix
+  ridge <- suppressWarnings(as.numeric(ridge))
+  if (length(ridge) != 1L || !is.finite(ridge) || ridge < 0) {
+    ng_stop("index ridge must be one finite non-negative number")
+  }
   diag_scale <- mean(diag(M), na.rm = TRUE)
   if (!is.finite(diag_scale) || diag_scale <= 0) diag_scale <- 1
   solve_mat <- M + diag(ridge * diag_scale, p)
@@ -359,15 +367,27 @@ ng_multitrait_solve_index <- function(target, cov_info, ridge = 1e-6) {
   # (projection = NULL) rhs stays `target`, preserving b = G^{-1} a / P^{-1} a /
   # Sigma^{-1} a exactly as before.
   rhs <- if (!is.null(cov_info$projection)) as.numeric(cov_info$projection %*% target) else target
-  coefficients <- tryCatch(
-    as.numeric(qr.solve(solve_mat, rhs)),
-    error = function(e) target
-  )
-  coefficients[!is.finite(coefficients)] <- target[!is.finite(coefficients)]
-  if (!any(is.finite(coefficients) & abs(coefficients) > 0)) coefficients <- target
+  # Symmetric Moore-Penrose solve. With ridge > 0 this is the ordinary
+  # inverse; with ridge = 0 it gives the uniquely defined minimum-norm
+  # solution for a singular PSD P or G. Falling back to `target` would not
+  # satisfy either the Smith-Hazel or Pesek-Baker equation.
+  es <- eigen(solve_mat, symmetric = TRUE)
+  solve_tol <- max(dim(solve_mat)) * .Machine$double.eps * max(1, max(abs(es$values)))
+  keep <- es$values > solve_tol
+  if (!any(keep)) ng_stop("selection-index covariance has no estimable positive-eigenvalue subspace")
+  coefficients <- as.numeric(es$vectors[, keep, drop = FALSE] %*%
+    (crossprod(es$vectors[, keep, drop = FALSE], rhs) / es$values[keep]))
+  if (any(!is.finite(coefficients)) || !any(abs(coefficients) > solve_tol)) {
+    ng_stop("selection-index target has no estimable component in the covariance column space")
+  }
   coefficients <- coefficients / sum(abs(coefficients))
-  proj <- if (!is.null(cov_info$projection)) cov_info$projection else cov_info$target_matrix
-  predicted <- as.numeric(proj %*% coefficients)
+  sigma_i <- sqrt(max(as.numeric(crossprod(
+    coefficients, cov_info$response_P %*% coefficients)), 0))
+  predicted <- if (is.finite(sigma_i) && sigma_i > 0) {
+    as.numeric(cov_info$response_G %*% coefficients) / sigma_i
+  } else {
+    rep(0, p)
+  }
   predicted[!is.finite(predicted)] <- 0
   list(coefficients = coefficients, predicted = predicted)
 }
@@ -378,14 +398,17 @@ ng_multitrait_desired_gain_fit <- function(value_z, traits, value_scales, ridge 
   value_z <- as.matrix(value_z)
   p <- ncol(value_z)
   if (!p) ng_stop("desired-gain optimizer needs at least one trait")
-  economic <- ng_multitrait_economic_weights(traits)
-  desired <- abs(suppressWarnings(as.numeric(traits$desired_change)))
-  desired[!is.finite(desired) | desired <= 0] <- value_scales[!is.finite(desired) | desired <= 0]
-  desired[!is.finite(desired) | desired <= 0] <- 1
+  economic <- ng_multitrait_economic_weights(traits, required = FALSE)
+  desired <- suppressWarnings(as.numeric(traits$desired_change))
+  if (any(!is.finite(desired)) || any(desired < 0)) {
+    ng_stop("desired_gain requires an explicit finite non-negative desired_change for every trait; ",
+            "use 0 for a trait with no requested response")
+  }
+  if (!any(desired > 0)) ng_stop("desired_gain requires at least one positive desired_change")
   desired_sd <- desired / pmax(value_scales, 1e-8)
-  target <- desired_sd * economic
-  if (!any(is.finite(target) & target > 0)) target <- rep(1, p)
-  target[!is.finite(target) | target < 0] <- 0
+  # Pesek-Baker desired gains replace economic weights; multiplying desired
+  # changes by economic weights would define a different target.
+  target <- desired_sd
   target <- target / sum(target)
   names(target) <- traits$trait
 
@@ -398,7 +421,8 @@ ng_multitrait_desired_gain_fit <- function(value_z, traits, value_scales, ridge 
 
   cov_info <- ng_multitrait_index_covariance(value_z, traits,
                                              phenotypic_covariance = phenotypic_covariance,
-                                             genetic_covariance = genetic_covariance)
+                                             genetic_covariance = genetic_covariance,
+                                             purpose = "desired_gain")
   solved <- ng_multitrait_solve_index(target, cov_info, ridge = ridge)
   coefficients <- solved$coefficients
   predicted <- solved$predicted
@@ -434,7 +458,7 @@ ng_multitrait_economic_index_fit <- function(value_z, traits, ridge = 1e-6,
   value_z <- as.matrix(value_z)
   p <- ncol(value_z)
   if (!p) ng_stop("economic-index optimizer needs at least one trait")
-  economic <- ng_multitrait_economic_weights(traits)
+  economic <- ng_multitrait_economic_weights(traits, required = TRUE)
   target <- economic
   target[!is.finite(target) | target < 0] <- 0
   if (!any(target > 0)) target <- rep(1 / p, p)
@@ -453,7 +477,8 @@ ng_multitrait_economic_index_fit <- function(value_z, traits, ridge = 1e-6,
 
   cov_info <- ng_multitrait_index_covariance(value_z, traits,
                                              phenotypic_covariance = phenotypic_covariance,
-                                             genetic_covariance = genetic_covariance)
+                                             genetic_covariance = genetic_covariance,
+                                             purpose = "economic_index")
   solved <- ng_multitrait_solve_index(target, cov_info, ridge = ridge)
   coefficients <- solved$coefficients
   predicted <- solved$predicted
@@ -485,6 +510,21 @@ ng_add_multitrait_score <- function(scores,
   if (!(method %in% methods)) ng_stop("method must be one of: ", paste(methods, collapse = ", "))
   scores <- as.data.frame(scores, stringsAsFactors = FALSE)
   traits <- ng_multitrait_spec(traits)
+  if (identical(method, "auto")) {
+    has_positive <- function(x) {
+      x <- suppressWarnings(as.numeric(x))
+      any(is.finite(x) & x > 0)
+    }
+    method <- if (has_positive(traits$desired_change)) {
+      "desired_gain"
+    } else if (has_positive(traits$economic_weight)) {
+      "economic_index"
+    } else if (has_positive(traits$weight)) {
+      "weighted"
+    } else {
+      "auto"
+    }
+  }
   missing_cols <- setdiff(traits$column, names(scores))
   if (length(missing_cols)) ng_stop("scores missing multi-trait columns: ", paste(missing_cols, collapse = ", "))
   weights <- ng_multitrait_resolve_weights(traits, method)
@@ -501,7 +541,14 @@ ng_add_multitrait_score <- function(scores,
     } else if (nrow(M) != nrow(traits) || ncol(M) != nrow(traits)) {
       ng_stop(name, " must be square with rows/cols equal to the number of traits (", nrow(traits), ")")
     }
-    M[!is.finite(M)] <- 0
+    if (any(!is.finite(M))) ng_stop(name, " contains non-finite entries")
+    asym <- max(abs(M - t(M)))
+    if (!is.finite(asym) || asym > 1e-8) ng_stop(name, " must be symmetric")
+    M <- (M + t(M)) / 2
+    if (any(diag(M) <= 0)) ng_stop(name, " must have positive diagonal variances")
+    ev <- eigen(M, symmetric = TRUE, only.values = TRUE)$values
+    tol <- 1e-8 * max(1, max(abs(ev)))
+    if (min(ev) < -tol) ng_stop(name, " must be positive semidefinite")
     M
   }
   phenotypic_covariance <- ng_multitrait_check_cov(phenotypic_covariance, "phenotypic_covariance")
@@ -547,24 +594,25 @@ ng_add_multitrait_score <- function(scores,
 
   desired_gain <- NULL
   economic_index <- NULL
-  penalty_weights <- weights
   if (identical(method, "desired_gain")) {
     desired_gain <- ng_multitrait_desired_gain_fit(value_z, traits, value_scales,
                                                    phenotypic_covariance = phenotypic_covariance,
                                                    genetic_covariance = genetic_covariance)
     weighted_score <- as.numeric(value_z %*% desired_gain$coefficients)
-    penalty_weights <- desired_gain$target
   } else if (identical(method, "economic_index")) {
     economic_index <- ng_multitrait_economic_index_fit(value_z, traits,
                                                        phenotypic_covariance = phenotypic_covariance,
                                                        genetic_covariance = genetic_covariance,
                                                        value_scales = value_scales)
     weighted_score <- as.numeric(value_z %*% economic_index$coefficients)
-    penalty_weights <- economic_index$target
   } else {
     weighted_score <- as.numeric(z %*% weights)
   }
-  weighted_violation <- as.numeric(violation %*% penalty_weights)
+  # Threshold importance is controlled explicitly by threshold_weight in the
+  # trait specification. Economic weights or desired-gain targets must not
+  # silently weaken a biological/quality threshold (especially when a desired
+  # response is exactly zero), so soft violations add independently here.
+  weighted_violation <- rowSums(violation)
   # Auto-scale the threshold penalty so a one-SD threshold violation costs
   # ~`threshold_penalty_weight * score_iqr` units of index score. Without
   # this, the multiplicative interaction of per-trait threshold_weight and
@@ -581,10 +629,10 @@ ng_add_multitrait_score <- function(scores,
   scores$multi_trait_threshold_violation <- rowSums(violation)
   # Design invariant (deliberate; do not "normalize" this away): the emitted index
   # is oriented higher = better for EVERY method. This is guaranteed upstream of the
-  # combination, not by rescaling out_col -- each trait is orientation-corrected
-  # before standardization (minimize traits are sign-flipped in both `z` and
-  # `value_z`) and aggregate index weights are constrained positive, so no method can
-  # produce a "lower = better" index. The RAW SCALE of out_col is method-dependent by
+  # combination, not by rescaling out_col: every breeding objective is oriented so
+  # selection proceeds upward. Smith-Hazel coefficients themselves need not all be
+  # positive because a correlated trait can improve prediction of aggregate merit.
+  # The RAW SCALE of out_col is method-dependent by
   # design (rank-normal units for the weighted/rank-sum path, IQR units for the
   # economic_index/desired_gain solves); this is harmless because any consumer either
   # feeds out_col straight into allocation (ng_gain_scale rescales) or re-ingests it
@@ -670,9 +718,15 @@ ng_multitrait_select_topn <- function(scores,
                                       out_col = "multi_trait_score",
                                       strict_thresholds = FALSE,
                                       threshold_penalty_weight = 1.0,
+                                      phenotypic_covariance = NULL,
+                                      genetic_covariance = NULL,
                                       source = ng_multitrait_default_source()) {
-  n_crosses <- suppressWarnings(as.integer(n_crosses[[1]]))
-  if (!is.finite(n_crosses) || n_crosses < 1L) ng_stop("n_crosses must be a positive integer")
+  n_crosses_num <- suppressWarnings(as.numeric(n_crosses))
+  if (length(n_crosses_num) != 1L || !is.finite(n_crosses_num) || n_crosses_num < 1 ||
+      abs(n_crosses_num - round(n_crosses_num)) > 1e-8) {
+    ng_stop("n_crosses must be a positive integer")
+  }
+  n_crosses <- as.integer(round(n_crosses_num))
   scored <- ng_add_multitrait_score(
     scores = scores,
     traits = traits,
@@ -680,6 +734,8 @@ ng_multitrait_select_topn <- function(scores,
     out_col = out_col,
     strict_thresholds = strict_thresholds,
     threshold_penalty_weight = threshold_penalty_weight,
+    phenotypic_covariance = phenotypic_covariance,
+    genetic_covariance = genetic_covariance,
     source = source
   )
   feasible <- is.finite(scored[[out_col]])
@@ -731,6 +787,8 @@ ng_optimize_breeder_selection_plan <- function(scores,
                                                out_col = "multi_trait_score",
                                                threshold_penalty_weight = 1.0,
                                                threshold_penalty_autoscale = TRUE,
+                                               phenotypic_covariance = NULL,
+                                               genetic_covariance = NULL,
                                                marker_target_spec = NULL,
                                                marker_geno = NULL,
                                                lambda_marker = 0,
@@ -741,12 +799,16 @@ ng_optimize_breeder_selection_plan <- function(scores,
     objective = objective,
     out_col = out_col,
     threshold_penalty_weight = threshold_penalty_weight,
-    threshold_penalty_autoscale = threshold_penalty_autoscale
+    threshold_penalty_autoscale = threshold_penalty_autoscale,
+    phenotypic_covariance = phenotypic_covariance,
+    genetic_covariance = genetic_covariance
   )
-  n_crosses_int <- suppressWarnings(as.integer(n_crosses[[1]]))
-  if (!is.finite(n_crosses_int) || n_crosses_int < 1L) {
+  n_crosses_num <- suppressWarnings(as.numeric(n_crosses))
+  if (length(n_crosses_num) != 1L || !is.finite(n_crosses_num) || n_crosses_num < 1 ||
+      abs(n_crosses_num - round(n_crosses_num)) > 1e-8) {
     ng_stop("n_crosses must be a positive integer")
   }
+  n_crosses_int <- as.integer(round(n_crosses_num))
   feasible <- is.finite(scored[[out_col]])
   if (sum(feasible) < n_crosses_int) {
     ng_stop("breeder objective leaves only ", sum(feasible),
@@ -805,6 +867,8 @@ ng_optimize_multitrait_mating_plan <- function(scores,
                                                out_col = "multi_trait_score",
                                                strict_thresholds = FALSE,
                                                threshold_penalty_weight = 1.0,
+                                               phenotypic_covariance = NULL,
+                                               genetic_covariance = NULL,
                                                source = ng_multitrait_default_source(),
                                                ...) {
   scored <- ng_add_multitrait_score(
@@ -814,6 +878,8 @@ ng_optimize_multitrait_mating_plan <- function(scores,
     out_col = out_col,
     strict_thresholds = strict_thresholds,
     threshold_penalty_weight = threshold_penalty_weight,
+    phenotypic_covariance = phenotypic_covariance,
+    genetic_covariance = genetic_covariance,
     source = source
   )
   meta <- attr(scored, "multi_trait")

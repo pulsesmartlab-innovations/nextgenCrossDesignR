@@ -45,13 +45,15 @@ ng_design_crosses <- function(geno,
   geno <- ng_check_same_ids(geno, ids, "geno")
   ld_pruning_report <- NULL
   if (isTRUE(ld_pruning)) {
+    ld_marker_map <- ng_prepare_marker_map(marker_map, colnames(geno), model = recomb_model)
     geno <- ng_ld_prune_geno(
       geno = geno,
       window = ld_window,
       r2_threshold = ld_r2_threshold,
       maf_threshold = ld_maf_threshold,
       ploidy = ld_ploidy,
-      backend = ld_backend
+      backend = ld_backend,
+      marker_map = ld_marker_map
     )
     ld_pruning_report <- attr(geno, "ld_pruning_report", exact = TRUE)
   }
@@ -90,8 +92,12 @@ ng_design_crosses <- function(geno,
       gain_col <- "marker_adjusted_gain"
     }
   }
-  n_crosses <- suppressWarnings(as.integer(n_crosses[[1L]]))
-  if (!is.finite(n_crosses) || n_crosses < 1L) ng_stop("n_crosses must be a positive integer")
+  n_crosses_num <- suppressWarnings(as.numeric(n_crosses))
+  if (length(n_crosses_num) != 1L || !is.finite(n_crosses_num) || n_crosses_num < 1 ||
+      abs(n_crosses_num - round(n_crosses_num)) > 1e-8) {
+    ng_stop("n_crosses must be a positive integer")
+  }
+  n_crosses <- as.integer(round(n_crosses_num))
   if (isTRUE(n_crosses_was_missing)) {
     n_crosses <- min(n_crosses, max(1L, nrow(scores)))
   }

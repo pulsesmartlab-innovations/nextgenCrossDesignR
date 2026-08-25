@@ -143,8 +143,8 @@ plan <- ng_optimize_multitrait_mating_plan(scores, traits, n_crosses = 100)
 ```
 
 Methods: `auto` (rank-normalized, equal weights unless supplied),
-`economic_index` (covariance-aware from relative economic weights),
-`desired_gain` (desired-gain index from target changes), and `weighted`.
+`economic_index` (Smith–Hazel; requires caller-supplied P and G),
+`desired_gain` (Pesek–Baker; requires caller-supplied P and G), and `weighted`.
 Thresholds are **soft by default** (missing a target is penalized, not
 discarded); use `strict_thresholds = TRUE` for hard quality/market cutoffs. For
 user-facing workflows prefer `ng_breeder_selection_objective()`.
@@ -247,6 +247,12 @@ Two distinct, biologically-correct paths — pick by inheritance, not crop:
   PopVar/SimpleMating/AlphaMate/polyploid comparisons. Read this before describing
   a method as "better than" an external tool. [`BENCHMARK_NOTES.md`](BENCHMARK_NOTES.md)
   is the long-form history.
+- **Statistical release gate** —
+  [`docs/STATISTICAL_RELEASE_GATE.md`](docs/STATISTICAL_RELEASE_GATE.md): a
+  reproducible installed-package audit of quantitative-genetic identities,
+  compiled-kernel parity, LD graph pruning, relationship scales, formal
+  multi-trait indices, probability metrics, and allocation constraints. This
+  code gate is separate from the required historical forward-validation gate.
 - **Capability registry** — `ng_backend_capability_registry()` enumerates the
   methods, breeding systems, and UI controls a front-end can discover.
 
@@ -272,6 +278,15 @@ overrides: `NG_USE_CPP=1` (C++ kernel for 5K-marker runs),
 `NG_ALPHASIMR_THREADS=1` (required for fair same-seed comparisons),
 `NG_SHARED_SCORING=1` (shared score table across methods). See the runner headers
 and `docs/BACKEND_USER_GUIDE.md` for the full menu.
+
+The production-namespace statistical gate installs the package first and does
+not source the test suite:
+
+```bash
+mkdir -p /tmp/ngcd_release_gate_lib
+R CMD INSTALL --preclean --no-multiarch --library=/tmp/ngcd_release_gate_lib .
+NGCD_RELEASE_LIB=/tmp/ngcd_release_gate_lib Rscript tools/run_statistical_release_gate.R
+```
 
 ## Design note: DH/RIL target
 
@@ -299,8 +314,8 @@ for full notes. Recent highlights:
   split (dominance orthogonalized against the additive design), correct
   frequency-centred GRM for `poly4x` coancestry, simulated-variance Monte-Carlo SE
   surfaced, and the autopolyploid `variance_model` stated
-  (`unlinked_phase_marginalized` — unbiased over unknown phase, but it cannot
-  separate crosses differing only in linkage phase).
+  (`uniform_phase_prior_expectation` — an expectation under a uniform prior over
+  compatible phase, but it cannot separate crosses differing only in linkage phase).
 - **0.19.0** — multi-trait portfolio & risk on the selection index: `cross_level` =
   w′m, `cross_upside` = √(w′Sw) from the exact cross-trait covariance, plus
   `portfolio_basis` and per-cross risk attribution.

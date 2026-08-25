@@ -43,10 +43,10 @@ R.
   user-supplied relative trait weights through `trait_weights`.
 - `12_multitrait_method_economic_index.R`: third multi-trait method example.
   Shows `multi_trait_method = "economic_index"` with `economic_weight` in the
-  direction file.
+  direction file and caller-supplied phenotypic/genetic covariance matrices.
 - `13_multitrait_method_desired_gain.R`: fourth multi-trait method example.
   Shows `multi_trait_method = "desired_gain"` with `desired_change` and
-  `economic_weight` in the direction file.
+  caller-supplied phenotypic/genetic covariance matrices.
 - `14_qc_duplicate_removal_and_reporting.R`: QC example for putative
   duplicate genotype reporting, duplicate heatmap output, and removal through
   `duplicate_action = "remove"` inside the package workflow.
@@ -98,11 +98,13 @@ R.
   relationship matrices -- additive `ng_polyploid_grm(method = "vanraden" | "yang")` and digenic
   dominance `ng_polyploid_dominance_grm()`.
 - `30_polyploid_additive_dominance_effects.R`: additive + dominance genomic prediction --
-  `ng_polyploid_fit_effects(model = "additive_dominance")` and `ng_polyploid_predict_value(type =
+  experimental `ng_polyploid_fit_effects(model = "additive_dominance",
+  allow_experimental_dominance = TRUE)` and `ng_polyploid_predict_value(type =
   "genotypic" | "breeding")`. Select clones on genotypic value, parents on breeding value.
 - `31_polyploid_dominance_crossing.R`: dominance-aware mate design for clonal/heterosis crops
   (cassava, sugarcane) -- `ng_polyploid_score_crosses_dominance()` (heterosis mean + within-family
-  variance) and `ng_polyploid_design_crosses(dominance = TRUE, gain =, double_reduction =, grm_method =)`.
+  variance) and `ng_polyploid_design_crosses(dominance = TRUE,
+  allow_experimental_dominance = TRUE, gain =, double_reduction =, grm_method =)`.
 - `32_exact_cross_trait_covariance.R`: exact recombination-aware within-family cross-trait
   covariance `ng_cross_trait_within_family_cov()` (a_t' R a_s) feeding the multi-trait threshold
   probability via `ng_add_p_superior_progeny_multitrait(cross_trait_cov = ...)`, versus the

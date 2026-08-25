@@ -98,6 +98,9 @@ ng_parent_kinship <- function(geno, method = c("vanraden", "yang")) {
   }
   rownames(K) <- rownames(geno)
   colnames(K) <- rownames(geno)
+  attr(K, "method") <- method
+  attr(K, "relationship_scale") <- "additive_relationship"
+  attr(K, "coancestry_divisor") <- 2
   K
 }
 

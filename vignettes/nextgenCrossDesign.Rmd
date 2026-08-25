@@ -241,7 +241,7 @@ The result is a structured list. The fields you will use most:
 ```{r}
 result$qc$status               # "ok" / "warnings" / "error"
 result$input_match_audit       # how many parents/markers matched across tables
-result$effect_summary          # per-trait ridge reliability and lambda
+result$effect_summary          # per-trait CV predictive R2 and ridge lambda
 head(result$candidate_crosses) # every scored candidate cross
 head(result$selected_crosses)  # the chosen crossing plan
 result$plan_summary            # gain, diversity, parent-use, and constraint status
@@ -428,7 +428,7 @@ result <- ng_run_cross_prediction(
 result$input_match_audit$matched_parent_count   # candidate parents (crossed)
 result$input_match_audit$training_only_count    # extra individuals used for effects only
 result$input_match_audit$effect_training_n      # total individuals training the effects
-result$effect_summary$marker_effect_reliability # sharper effects -> higher reliability
+result$effect_summary$cv_predictive_r2 # out-of-fold phenotype predictive R2
 ```
 
 Notes: the training individuals must carry the **same markers** (matching column names) and a
@@ -486,7 +486,7 @@ target above. It governs how residual heterozygosity in the parent genotypes is 
   genotyping/data error and are **blocked** in QC (`"dh"` uses a strict ~0.5% fraction floor;
   `"inbred"` a looser ~2% tolerance).
 - `"ril"` — recombinant inbred lines legitimately retain heterozygosity at a few loci after
-  finite selfing, so residual het is **accepted**.
+  finite selfing. Residual het is accepted only with complete phased haplotypes.
 
 Real programs rarely have parents that are homozygous at *every* locus — only DH lines are, by
 construction. When RIL parents carry residual heterozygosity, the usual inbred `a'Ra` variance
@@ -494,13 +494,13 @@ kernel is biased **low**, because it ignores the extra p(1−p) gametic segregat
 heterozygous loci contribute. Supplying **`phased_haplotypes`** (a per-parent phased haplotype
 array) lets the engine apply the *exact* within-cross additive variance for phased parents —
 validated to Monte-Carlo precision for DH and RIL-infinite progeny, and reducing byte-identically
-to `a'Ra` for fully inbred parents. Without phased haplotypes the `"ril"` path still runs but
-treats parents as inbred at those loci and is biased low; the run emits a warning saying so. See
+to `a'Ra` for fully inbred parents. Without phased haplotypes, a residual-heterozygous `"ril"`
+run is blocked rather than returning the known downward-biased approximation. See
 `docs/design/residual-het-parent-variance.md`.
 
 ```{r}
-# RIL parents that carry residual heterozygosity: accept it with parent_type = "ril"
-# (and pass phased_haplotypes when you have phase, to use the exact residual-het variance).
+# Fully inbred RIL parents need only parent_type = "ril". If any parent retains
+# heterozygosity, also pass complete phased_haplotypes.
 result_ril <- ng_run_cross_prediction(
   phenotype = pheno, genotype = geno, marker_map = map, trait_direction = direction,
   id_col = "NAME", map_position_unit = "bp", bp_per_cm = 1e6,
@@ -957,8 +957,9 @@ attr(scored_mt, "multi_trait")$breeder_objective_method_reason
 
 **Which method?** This is input-driven, not a performance race — the methods optimize different
 objectives. Use `auto` with only directions, `weighted` for declared weights, `economic_index` with
-reliable economic weights and a genetic covariance matrix, `desired_gain` for target changes, and
-`threshold` for constraints.
+economic weights plus validated phenotypic and genetic covariance matrices, `desired_gain` with
+target changes plus those same covariance matrices, and `threshold` for constraints. The package
+does not substitute candidate-cross score covariance for P or G.
 
 ## Under the hood: ng_multitrait_spec
 
@@ -1223,7 +1224,7 @@ Fit ridge marker effects for one trait and score every candidate cross:
 
 ```{r}
 effects <- ng_fit_ridge_effects(geno = geno_matrix, y = y, ids = ids, kfold = 5, seed = 20260704)
-effects$reliability
+effects$cv_predictive_r2  # phenotype predictive ability; not breeding-value reliability
 effects$lambda
 
 yield_scores <- ng_score_crosses(
@@ -1428,15 +1429,18 @@ plan <- ng_polyploid_design_crosses(dosage, n_crosses = 20, ploidy = 4,
 carries its dominance deviation, select clones on **total genotypic value**
 (`ng_polyploid_fit_effects` + `ng_polyploid_predict_value`, `inst/examples/30_*`), and design
 crosses on a **heterosis-inclusive** mean and **within-family additive+dominance variance**
-(`ng_polyploid_score_crosses_dominance`, `inst/examples/31_*`). Set `double_reduction > 0` for
-autopolyploid double reduction (ploidy >= 4). Dominance is off by default; turn it on only when
-non-additive variance is substantial and well estimated.
+(`ng_polyploid_score_crosses_dominance`, `inst/examples/31_*`). Nonzero
+`double_reduction` is currently implemented only for the autotetraploid single-IBD-pair model and
+uses the conventional coefficient \(\alpha\), bounded from 0 to 1/6. Dominance is off by default
+and experimental because the current fit uses one
+ridge penalty for additive and dominance effects.
 
 ```{r polyploid_dominance}
 plan <- ng_polyploid_design_crosses(dosage, n_crosses = 20, ploidy = 4, phenotype = poly_pheno,
   dominance = TRUE,                  # estimate additive + dominance marker effects
+  allow_experimental_dominance = TRUE,
   gain = "usefulness",               # dominance-aware usefulness = mean(+heterosis) + i*SD
-  double_reduction = 0.08)           # autopolyploid double reduction (ignored for diploids)
+  double_reduction = 0.08)           # autotetraploid single-IBD-pair coefficient
 plan$heterosis                       # expected progeny dominance per chosen cross
 ```
 
@@ -1450,6 +1454,12 @@ of the public API.
 
 Probability that progeny exceed a threshold, and expected excess above it (note the argument names:
 `mu`, `sigma`/`sd`, `tau`, `k_progeny`):
+
+These probabilities assume independent progeny draws from the stated Gaussian
+within-family distribution. In posterior cross prediction, the probability uses
+the actual per-draw `cross_mean_gebv` plus the within-family genetic variance; it
+does not reconstruct a family mean from a custom or threshold-penalized ranking
+score.
 
 ```{r}
 # A per-trait scored table for the posterior demos: single-trait scoring gives the
@@ -1539,7 +1549,9 @@ posterior <- ng_posterior_cross_predict(
 
 Y_traits <- as.matrix(pheno[, direction$Trait])
 rownames(Y_traits) <- pheno$NAME
-G_hat <- ng_estimate_genetic_covariance(geno = geno_matrix, Y = Y_traits)
+G_hat <- ng_estimate_genetic_covariance(
+  geno = geno_matrix, Y = Y_traits, method = "auto"
+) # requires sommer multivariate REML; otherwise supply an externally validated G
 ```
 
 ## Calibration and validation

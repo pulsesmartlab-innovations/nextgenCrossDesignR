@@ -28,13 +28,13 @@ ng_poly_cp__build_ctx <- function(config) {
   d$grm_method <- match.arg(d$grm_method %||% "vanraden", c("vanraden", "yang"))
   d$ploidy <- as.integer(d$ploidy %||% 2L)
   known <- c("dosage", "n_crosses", "ploidy", "effects", "phenotype", "pairs",
-             "max_crosses_per_parent", "ridge_seed", "run_qc", "qc", "dominance", "gain",
+             "max_crosses_per_parent", "ridge_seed", "run_qc", "qc", "dominance", "allow_experimental_dominance", "gain",
              "selection_prop", "double_reduction", "grm_method")
   d$alloc_dots <- d[setdiff(names(d), c(known, "alloc_dots"))]
   d
 }
 
-# --- stage: QC (clean dosage; never blocks -- matches the one-shot) ----------
+# --- stage: QC (fail closed when cleaned dosage is still unsafe) --------------
 ng_poly_cp__stage_qc <- function(ctx) {
   ctx$marker_keep <- rep(TRUE, ncol(ctx$dosage))
   if (isTRUE(ctx$run_qc %||% TRUE)) {
@@ -43,7 +43,7 @@ ng_poly_cp__stage_qc <- function(ctx) {
     ctx$dosage <- qc_res$clean
     ctx$marker_keep <- !qc_res$marker_report$dropped
     dropped <- (qc_res$summary$n_markers_dropped %||% 0L) + (qc_res$summary$n_samples_dropped %||% 0L)
-    ctx$qc <- list(status = if (dropped > 0) "warning" else "pass",
+    ctx$qc <- list(status = if (!isTRUE(qc_res$pass)) "blocker" else if (dropped > 0) "warning" else "pass",
                    summary = qc_res$summary,
                    marker_report = qc_res$marker_report,
                    duplicate_samples = qc_res$duplicate_samples)
@@ -63,7 +63,8 @@ ng_poly_cp__stage_predict <- function(ctx) {
     y <- suppressWarnings(as.numeric(ctx$phenotype))
     names(y) <- if (!is.null(names(ctx$phenotype))) names(ctx$phenotype) else rownames(geno)
     fit <- ng_polyploid_fit_effects(geno, y[rownames(geno)], ploidy = ctx$ploidy,
-                                    model = "additive_dominance", seed = seed)
+                                    model = "additive_dominance", seed = seed,
+                                    allow_experimental_dominance = isTRUE(ctx$allow_experimental_dominance))
     scores <- ng_polyploid_score_crosses_dominance(fit, geno, pairs = ctx$pairs,
                 selection_prop = ctx$selection_prop %||% 0.10,
                 double_reduction = ctx$double_reduction %||% 0, grm_method = ctx$grm_method)
@@ -157,7 +158,9 @@ ng_poly_stage_write_json <- function(run_dir, stage, ctx) {
     allocate = {
       s <- attr(ctx$plan, "summary")
       list(plan_summary = list(n_crosses = nrow(as.data.frame(ctx$plan)),
-                               mean_gain = s$mean_gain, group_coancestry = s$group_coancestry))
+                               mean_gain = s$mean_gain,
+                               group_relationship = s$group_relationship,
+                               group_coancestry = s$group_coancestry))
     },
     rank = NULL)
   jsonlite::write_json(payload, file.path(art, paste0(stage, ".json")),

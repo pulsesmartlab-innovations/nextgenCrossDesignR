@@ -137,11 +137,19 @@ ng_run_cp_marker_map <- function(marker_map,
     map_chr_col <- if (length(chr_hit)) names(marker_map)[[chr_hit[[1L]]]] else NULL
   }
 
-  bp_per_cm <- if (is.null(bp_per_cm)) map_pos_cm_divisor else bp_per_cm
-  bp_per_cm <- suppressWarnings(as.numeric(bp_per_cm[[1L]]))
-  if (!is.finite(bp_per_cm) || bp_per_cm <= 0) ng_stop("bp_per_cm must be a positive number")
-
   if (identical(map_position_unit, "bp")) {
+    if (is.null(bp_per_cm)) {
+      legacy_divisor <- suppressWarnings(as.numeric(map_pos_cm_divisor[[1L]]))
+      if (is.finite(legacy_divisor) && legacy_divisor > 0 && !identical(legacy_divisor, 1)) {
+        warning("map_pos_cm_divisor is deprecated; use bp_per_cm", call. = FALSE)
+        bp_per_cm <- legacy_divisor
+      } else {
+        ng_stop("bp_per_cm must be supplied explicitly when map_position_unit = 'bp'; ",
+                "physical base-pair positions cannot be treated as centimorgans")
+      }
+    }
+    bp_per_cm <- suppressWarnings(as.numeric(bp_per_cm[[1L]]))
+    if (!is.finite(bp_per_cm) || bp_per_cm <= 0) ng_stop("bp_per_cm must be a positive number")
     if (is.null(map_pos_bp_col)) map_pos_bp_col <- map_pos_col
     if (is.null(map_pos_bp_col)) {
       pos_hit <- match(
@@ -162,6 +170,7 @@ ng_run_cp_marker_map <- function(marker_map,
     pos_cm <- pos_bp / bp_per_cm
     position_col <- map_pos_bp_col
   } else {
+    bp_per_cm <- NA_real_
     if (is.null(map_pos_cm_col)) map_pos_cm_col <- map_pos_col
     if (is.null(map_pos_cm_col)) {
       pos_hit <- match(
@@ -183,7 +192,7 @@ ng_run_cp_marker_map <- function(marker_map,
       if (!(map_pos_bp_col %in% names(marker_map))) ng_stop("marker_map is missing map_pos_bp_col: ", map_pos_bp_col)
       suppressWarnings(as.numeric(marker_map[[map_pos_bp_col]]))
     } else {
-      pos_cm * bp_per_cm
+      rep(NA_real_, length(pos_cm))
     }
     position_col <- map_pos_cm_col
   }
@@ -381,11 +390,12 @@ ng_run_cp_ril_mode <- function(ril_mode) {
 }
 
 ng_run_cp_integer <- function(x, name, min_value = 0L) {
-  out <- suppressWarnings(as.integer(x[[1L]]))
-  if (!is.finite(out) || out < min_value) {
+  raw <- suppressWarnings(as.numeric(x))
+  if (length(raw) != 1L || !is.finite(raw) || raw < min_value ||
+      abs(raw - round(raw)) > 1e-8) {
     ng_stop(name, " must be an integer >= ", min_value)
   }
-  out
+  as.integer(round(raw))
 }
 
 ng_run_cp_logical <- function(x, name) {
@@ -467,6 +477,10 @@ ng_run_cp_variance_col <- function(trait_value_metric,
   metric <- trimws(tolower(as.character(trait_value_metric[[1L]])))
   source <- trimws(tolower(as.character(uc_variance_source[[1L]])))
   if (identical(metric, "usefulness")) metric <- source
+  if (metric %in% c("parent_distance", "le") &&
+      identical(trimws(tolower(as.character(trait_value_metric[[1L]]))), "usefulness")) {
+    ng_stop("uc_variance_source cannot be parent_distance: genomic distance is not a trait variance")
+  }
   if (identical(metric, "pmv")) {
     if (is.null(scored_trait)) return("pmv")
     return(ng_run_cp_pmv_col(scored_trait, method_varPMV))
@@ -485,7 +499,7 @@ ng_run_cp_variance_col <- function(trait_value_metric,
 
 ng_run_cp_var_complex_col <- function(scored_trait, method_varPMV = "fast") {
   pmv_col <- ng_run_cp_pmv_col(scored_trait, method_varPMV)
-  candidates <- c(pmv_col, "vpm", "parent_distance")
+  candidates <- c(pmv_col, "vpm")
   hit <- candidates[candidates %in% names(scored_trait)]
   if (!length(hit)) ng_stop("scored trait table is missing a usable var_complex variance column")
   hit[[1L]]
@@ -501,6 +515,12 @@ ng_run_cp_trait_value <- function(scored_trait,
   metric <- trimws(tolower(as.character(trait_value_metric[[1L]])))
   mean_value <- suppressWarnings(as.numeric(scored_trait$cross_mean_blend))
   if (identical(metric, "mean")) return(mean_value)
+  if (metric %in% c("parent_distance", "le")) {
+    if (!("parent_distance" %in% names(scored_trait))) {
+      ng_stop("scored trait table is missing parent_distance")
+    }
+    return(suppressWarnings(as.numeric(scored_trait$parent_distance)))
+  }
   # Pure-variance objectives rank crosses by the predicted family variance
   # itself (PopVar-style), not by mean + i*SD. The usefulness path
   # (trait_value_metric = "usefulness") still combines this variance with the
@@ -696,8 +716,7 @@ ng_cp__build_ctx <- function(config) {
   ctx$n_iter <- ng_run_cp_integer(ctx$n_iter, "n_iter", min_value = 1L)
   ctx$burn_in <- ng_run_cp_integer(ctx$burn_in, "burn_in", min_value = 0L)
   ctx$posterior_n_draws <- max(1L, ctx$n_iter - ctx$burn_in)
-  ctx$n_crosses <- suppressWarnings(as.integer(ctx$n_crosses[[1L]]))
-  if (!is.finite(ctx$n_crosses) || ctx$n_crosses < 1L) ng_stop("n_crosses must be a positive integer")
+  ctx$n_crosses <- ng_run_cp_integer(ctx$n_crosses, "n_crosses", min_value = 1L)
   ctx
 }
 
@@ -818,7 +837,8 @@ ng_cp__stage_predict <- function(ctx) {
   if (isTRUE(ld_pruning)) {
     geno <- ng_ld_prune_geno(
       geno = geno, window = ld_window, r2_threshold = ld_r2_threshold,
-      maf_threshold = ld_maf_threshold, ploidy = ld_ploidy, backend = ld_backend
+      maf_threshold = ld_maf_threshold, ploidy = ld_ploidy, backend = ld_backend,
+      marker_map = marker_map_std
     )
     ld_pruning_report <- attr(geno, "ld_pruning_report", exact = TRUE)
     # subset the already-aligned map to the retained markers, preserving its column attrs
@@ -1000,7 +1020,8 @@ ng_cp__stage_predict <- function(ctx) {
         column = column,
         direction = trait_spec$direction[[i]],
         value_column = paste0(clean_trait, "_value"),
-        marker_effect_reliability = fit$reliability,
+        marker_effect_reliability = NA_real_,
+        cv_predictive_r2 = fit$cv_predictive_r2,
         marker_effect_training_n = as.integer(n_effect_training),
         ridge_lambda = fit$lambda,
         method_varPMV = method_varPMV,
@@ -1030,7 +1051,9 @@ ng_cp__stage_predict <- function(ctx) {
     scored_trait <- item$scored_trait
     clean_trait <- item$clean_trait
     if (is.null(cross_table)) {
-      cross_table <- scored_trait[, c("parent1", "parent2", "pair_kinship"), drop = FALSE]
+      pair_cols <- intersect(c("parent1", "parent2", "pair_relationship", "pair_kinship"),
+                             names(scored_trait))
+      cross_table <- scored_trait[, pair_cols, drop = FALSE]
     }
     cross_table[[paste0(clean_trait, "_value")]] <- item$value
     cross_table[[paste0(clean_trait, "_mean")]] <- scored_trait$cross_mean_blend
@@ -1043,6 +1066,7 @@ ng_cp__stage_predict <- function(ctx) {
     cross_table[[paste0(clean_trait, "_parent_distance")]] <- scored_trait$parent_distance
     cross_table[[paste0(clean_trait, "_var_complex")]] <- scored_trait[[item$var_complex_col]]
     cross_table[[paste0(clean_trait, "_reliability")]] <- scored_trait$effect_reliability
+    cross_table[[paste0(clean_trait, "_cv_predictive_r2")]] <- scored_trait$effect_cv_predictive_r2
     # Per-trait mid-parent PEV (cross-priority risk). NA when Sigma_beta was not requested.
     cross_table[[paste0(clean_trait, "_midparent_pev")]] <- item$midparent_pev
     if (!is.null(item$post_sd))   cross_table[[paste0(clean_trait, "_post_sd")]]   <- item$post_sd
@@ -1227,7 +1251,9 @@ ng_cp__stage_index <- function(ctx) {
     cross_table,
     objective,
     threshold_penalty_weight = threshold_penalty_weight,
-    threshold_penalty_autoscale = threshold_penalty_autoscale
+    threshold_penalty_autoscale = threshold_penalty_autoscale,
+    phenotypic_covariance = phenotypic_covariance,
+    genetic_covariance = genetic_covariance
   )
   # Marker steering (Module 4): attach the target-allele score (and, when lambda_marker != 0,
   # the blended merit) to the reported candidate table and drive the criterion the native /
@@ -1476,12 +1502,13 @@ ng_cp__stage_rank <- function(ctx) {
         pm <- grab_rt(pev_cols)
         pev_share <- col_mean(if (is.null(pm)) NULL else
           ng_multitrait_pev_shares(pm, ib$w, trait_spec$trait))
-        rel <- col_mean(grab_rt(paste0(traits_clean, "_reliability")))
+        pred_r2 <- col_mean(grab_rt(paste0(traits_clean, "_cv_predictive_r2")))
         priority_risk_diagnostics$index_traits <- lapply(seq_len(nrow(trait_spec)), function(k)
           list(trait = trait_spec$trait[[k]],
                direction = trait_spec$direction[[k]],
                weight = unname(ib$w[[k]]),
-               marker_effect_reliability = unname(rel[[k]]),
+               marker_effect_reliability = NA_real_,
+               cv_predictive_r2 = unname(pred_r2[[k]]),
                mean_variance_share = unname(var_share[[k]]),
                mean_pev_share = unname(pev_share[[k]])))
         # Traits that buy more uncertainty than opportunity: carrying above an equal share of
@@ -1510,7 +1537,7 @@ ng_cp__stage_rank <- function(ctx) {
             "index confidence is dominated by '%s' (%.0f%% of the index prediction-error ",
             "variance), so risk_bin ranks crosses on that trait rather than on the index. ",
             "Per-trait PEVs are only comparable when their residual variances are; check ",
-            "ridge_lambda and marker_effect_reliability per trait (a lambda at the grid floor ",
+            "ridge_lambda and cv_predictive_r2 per trait (a lambda at the grid floor ",
             "interpolates its training rows and reports a near-zero PEV)."),
             trait_spec$trait[[which.max(replace(pev_share, !is.finite(pev_share), -Inf))]],
             100 * conc) else NA_character_
@@ -1607,7 +1634,7 @@ utils::globalVariables(c(
   "evol_iterations", "evol_seed", "evol_solutions", "evol_stop",
   "exclude_threshold_violators", "geno", "genotype", "genotype_file",
   "genotype_id_col_used", "grm_method", "group_permission", "group_quota",
-  "id_col", "ids", "include_trait_gebv", "index_col",
+  "id_col", "ids", "include_trait_gebv", "index_col", "phenotypic_covariance", "genetic_covariance",
   "index_direction", "lambda_cost", "lambda_group", "lambda_logistic",
   "lambda_marker", "lambda_mating", "lambda_parent_use", "lambda_parent_use_mode",
   "lambda_progeny_inbreeding", "ld_backend", "ld_maf_threshold", "ld_ploidy",
@@ -1760,6 +1787,8 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
                                     uc_variance_source = c("pmv", "vpm", "parent_distance", "le"),
                                     multi_trait_method = "auto",
                                     trait_weights = NULL,
+                                    phenotypic_covariance = NULL,
+                                    genetic_covariance = NULL,
                                     threshold_policy = c("soft", "strict"),
                                     threshold_penalty_weight = 1.0,
                                     threshold_penalty_autoscale = TRUE,

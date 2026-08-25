@@ -33,16 +33,20 @@ ng_cross_confidence <- function(pev, effect_based_x = TRUE,
   na_bin <- factor(rep(NA_character_, n), levels = c("low", "med", "high"), ordered = TRUE)
   if (is.null(pev) || !any(is.finite(pev)) ||
       length(unique(pev[is.finite(pev)])) < 2L) {
-    return(list(cross_confidence = rep(NA_real_, n), risk_bin = na_bin,
-                confidence_method = "reliability"))
+    return(list(cross_confidence = rep(NA_real_, n), relative_precision = rep(NA_real_, n),
+                risk_bin = na_bin, precision_bin = na_bin,
+                confidence_method = "relative_precision_unavailable",
+                is_calibrated = FALSE))
   }
   spread <- sqrt(pmax(as.numeric(pev), 0))
   fin <- is.finite(spread)
   rng <- range(spread[fin])
-  # Degenerate spread (all clamped to same value): fallback to reliability
+  # Degenerate spread contains no relative-precision information.
   if (diff(rng) <= 0) {
-    return(list(cross_confidence = rep(NA_real_, n), risk_bin = na_bin,
-                confidence_method = "reliability"))
+    return(list(cross_confidence = rep(NA_real_, n), relative_precision = rep(NA_real_, n),
+                risk_bin = na_bin, precision_bin = na_bin,
+                confidence_method = "relative_precision_unavailable",
+                is_calibrated = FALSE))
   }
   norm <- rep(NA_real_, n)
   norm[fin] <- (spread[fin] - rng[1L]) / (rng[2L] - rng[1L])
@@ -55,10 +59,14 @@ ng_cross_confidence <- function(pev, effect_based_x = TRUE,
     r <- rank(spread, ties.method = "first", na.last = "keep")
     cut(r, breaks = 3L, labels = c("low", "med", "high"))
   }
-  method <- if (isTRUE(effect_based_x)) paste0(method_prefix, "_partial") else method_prefix
+  method <- paste0("relative_", if (isTRUE(effect_based_x)) paste0(method_prefix, "_partial") else method_prefix)
+  bin <- factor(bin, levels = c("low", "med", "high"), ordered = TRUE)
   list(cross_confidence = conf,
-       risk_bin = factor(bin, levels = c("low", "med", "high"), ordered = TRUE),
-       confidence_method = method)
+       relative_precision = conf,
+       risk_bin = bin,
+       precision_bin = bin,
+       confidence_method = method,
+       is_calibrated = FALSE)
 }
 
 # Classify crosses into a 2x2 quadrant (level x upside) based on median cuts.
@@ -96,8 +104,11 @@ ng_annotate_cross_priority <- function(crosses, level, vpm, pev = NULL,
     ng_cross_confidence(pev, effect_based_x = effect_based_x)
   }
   crosses$cross_confidence  <- cf$cross_confidence
+  crosses$relative_precision <- cf$relative_precision
   crosses$risk_bin          <- cf$risk_bin
+  crosses$precision_bin     <- cf$precision_bin
   crosses$confidence_method <- cf$confidence_method
+  crosses$cross_confidence_is_calibrated <- cf$is_calibrated
   crosses$portfolio_profile <- ng_cross_portfolio_profile(crosses$cross_level,
                                                           crosses$cross_upside)
   crosses$portfolio_basis <- "single_trait"
@@ -381,8 +392,11 @@ ng_annotate_cross_priority_multitrait <- function(crosses, trait_order, mean_geb
   cf <- ng_cross_confidence(pev, effect_based_x = effect_based_x,
                             method_prefix = "midparent_pev_index")
   crosses$cross_confidence  <- cf$cross_confidence
+  crosses$relative_precision <- cf$relative_precision
   crosses$risk_bin          <- cf$risk_bin
+  crosses$precision_bin     <- cf$precision_bin
   crosses$confidence_method <- cf$confidence_method
+  crosses$cross_confidence_is_calibrated <- cf$is_calibrated
   # "This cross is high risk -- because of protein (62% of the index PEV)."
   crosses$risk_driver_trait <- risk_driver$trait
   crosses$risk_driver_share <- risk_driver$share

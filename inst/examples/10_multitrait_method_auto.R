@@ -9,8 +9,8 @@
 # your inputs, not a performance race:
 #   * only trait directions (+ rough thresholds)     -> "auto"  (RECOMMENDED default; this file)
 #   * declared relative importance weights           -> "weighted"        (example 11)
-#   * reliable economic weights + genetic cov matrix -> "economic_index"  (example 12)
-#   * target genetic changes per trait               -> "desired_gain"    (example 13)
+#   * economic weights + validated P and G -> "economic_index"  (example 12)
+#   * target genetic changes + validated P and G -> "desired_gain" (example 13)
 #   * hard/soft min/max constraints per trait        -> "threshold" (combinable with the above)
 # economic_index is NOT the default: reliable economic weights are hard to get and users often
 # substitute phenotypic for genetic correlations (violating Smith-Hazel) -- when in doubt, auto.

@@ -64,8 +64,8 @@ Use `tools/check_r_package.R` as the backend package gate.
 | Choose the relationship matrix (GRM) | `grm_method = "vanraden"` (default) or `"yang"` on `ng_design_crosses()`, `ng_run_cross_prediction()`, `ng_score_crosses()`, and `ng_design_crosses_poly()` | VanRaden uses one overall allele-frequency scaling; Yang/GCTA standardizes each marker to unit variance. |
 | Steer allocation toward a target allele | `marker_target_spec = ng_marker_target_spec(...)` with `lambda_marker` on `ng_design_crosses()` or `ng_run_cross_prediction()` | Blends a marker-target score into the merit the allocator optimizes; pair with `lethal_spec` to also drop carrier x carrier crosses. |
 | Breeder has several traits but no reliable weights | `ng_add_multitrait_score(method = "auto")` | Rank-normalized default with soft threshold penalties. Safer than forcing arbitrary weights. |
-| Breeder has relative economic weights | `method = "economic_index"` | Uses oriented/scaled trait covariance to build a covariance-aware economic index. |
-| Breeder has desired response targets | `method = "desired_gain"` | Uses desired changes, economic weights, and stabilized covariance to estimate index coefficients. |
+| Breeder has relative economic weights plus validated P and G | `method = "economic_index"` | Uses the Smith-Hazel equation `b = P^-1 G a`. |
+| Breeder has desired response targets plus validated P and G | `method = "desired_gain"` | Uses the Pesek-Baker direction `b` proportional to `G^-1 d`, with P determining index variance. |
 | Some traits must increase and others decrease | Always define `direction` in `ng_multitrait_spec()` | Prevents disease, lodging, height, or risk traits from being optimized in the wrong direction. |
 | Must meet hard market/disease cutoffs | Start with soft thresholds; use `strict_thresholds = TRUE` only when necessary | Soft thresholds avoid empty feasible sets; strict thresholds are best for true non-negotiable cutoffs. |
 | Need diversity and parent-use control | `ng_optimize_mating_plan(method = "auto", lambda_group > 0, lambda_parent_use > 0)` | Balances gain, group coancestry, and parent contribution. |
@@ -342,8 +342,10 @@ as the lower-level API, so the end-to-end runner reaches them without dropping t
 compatibility; prefer `trait_value_metric = "usefulness"` with
 `uc_variance_source = "reliable_family_variance"`, which is exactly equivalent.
 It does not call PopVar. It scores oriented cross mean plus or minus selection
-intensity times within-family standard deviation, using the reliable
-(uncertainty-aware) family variance.
+intensity times within-family standard deviation, using PMV: the
+marker-effect-uncertainty-aware family variance. The historical token
+`reliable_family_variance` is retained for compatibility; PMV is not itself a
+calibrated breeding-value reliability.
 
 ### Choosing A Trait-Value Metric
 
@@ -354,8 +356,9 @@ The metrics differ in how they score a cross:
 - `usefulness` with `uc_variance_source = "family_variance"` (raw token `vpm`) --
   usefulness = mean +/- i * SD using the recombination-aware within-family variance.
 - `usefulness` with `uc_variance_source = "reliable_family_variance"` (raw token
-  `pmv`; this is the default) -- usefulness using the reliable variance, which adds
-  marker-effect estimation uncertainty to the recombination variance.
+  `pmv`; this is the default) -- usefulness using prediction-aware variance, which adds
+  marker-effect estimation uncertainty to the recombination variance. It does not turn
+  phenotype CV R2 into breeding-value reliability.
 - Bare `family_variance` / `reliable_family_variance` (raw tokens `vpm` / `pmv` passed
   directly as `trait_value_metric`) are pure-variance metrics -- they rank crosses by
   the variance value itself, with no mean term. Use these only when variance alone
@@ -457,9 +460,12 @@ shortcut), then runs `ng_optimize_mating_plan()` with everything you pass throug
 `ng_poly_score_crosses()` is the lower-level scorer, and `ng_polyploid_grm()` / `ng_polyploid_qc()`
 are usable standalone. Selectable metric: `gain = "mean"` (mid-parent breeding value) or
 `gain = "usefulness"` (mean + i·within-family SD; the additive segregation variance comes from the
-progeny-moment table). For clonal/heterosis crops set `dominance = TRUE` to add mid-parent heterosis
-and dominance segregation variance (and `double_reduction` for autopolyploids); additive-only is the
-default.
+progeny-moment table). For clonal/heterosis crops, `dominance = TRUE` adds mid-parent heterosis and
+dominance segregation variance, but currently requires `allow_experimental_dominance = TRUE`
+because additive and dominance effects share one ridge penalty. Nonzero `double_reduction` is
+currently restricted to the conventional autotetraploid single-IBD-pair coefficient
+\(\alpha\) in the range 0 to 1/6. Additive-only is
+the default.
 
 ## Basic Lower-Level Diploid DH/RIL Workflow
 
@@ -547,16 +553,16 @@ Pick by your inputs:
 |---|---|---|
 | only trait directions (+ maybe rough min/max thresholds) | **`auto`** (recommended default) | rank-normalizes each oriented trait and uses equal normalized weights; robust when weights/units are unknown, hard to misuse |
 | declared relative importance weights per trait | **`weighted`** | applies your weights to rank-normalized, direction-oriented traits |
-| reliable economic values AND a trustworthy genetic variance–covariance matrix | **`economic_index`** (Smith–Hazel) | maximizes aggregate economic merit `b = P^-1 a` |
-| target genetic changes per trait (a desired-gain vector) | **`desired_gain`** (Pesek–Baker) | solves for the index that delivers the requested change profile |
+| reliable economic values AND trustworthy phenotypic (P) and genetic (G) covariance matrices | **`economic_index`** (Smith–Hazel) | maximizes aggregate economic merit with `b = P^-1 G a` |
+| target genetic changes per trait plus trustworthy P and G | **`desired_gain`** (Pesek–Baker) | uses `b` proportional to `G^-1 d`; P determines the index variance and response scale |
 | hard/soft minimum or maximum constraints per trait | **`threshold`** | keeps crosses within bounds (soft penalty by default); can combine with the above |
 
 Recommendation: **default to `auto`.** Economic-index is deliberately NOT the default because
 reliable economic weights are hard to obtain, and users often substitute *phenotypic* for
 *genetic* correlations, which violates the Smith–Hazel assumptions and can mislead -- when in
 doubt, the rank-normalized `auto` (a rank-summation-style index) is the safe choice. Use
-`economic_index` / `desired_gain` only when you genuinely have trustworthy economic weights or
-desired-gain targets. See the per-method sections below and examples
+`economic_index` / `desired_gain` only when you genuinely have trustworthy targets and both P and
+G. Candidate-cross score covariance is not a substitute. See the per-method sections below and examples
 `10_multitrait_method_auto.R` … `13_multitrait_method_desired_gain.R`.
 
 ### Practical Breeder Objective
@@ -580,7 +586,9 @@ plan <- ng_optimize_breeder_selection_plan(
   scores = scores,
   objective = objective,
   n_crosses = 100,
-  parent_K = parent_K,
+  parent_kinship = parent_K,
+  phenotypic_covariance = P,
+  genetic_covariance = G,
   optimizer_method = "greedy_local",
   max_crosses_per_parent = 6,
   lambda_group = 0.05
@@ -647,12 +655,20 @@ traits <- ng_multitrait_spec(
   direction = c("maximize", "minimize", "maximize"),
   economic_weight = c(1, 4, 2)
 )
-
-scored <- ng_add_multitrait_score(scores, traits, method = "economic_index")
 ```
 
-This estimates the covariance among oriented/scaled traits and solves
-stabilized index coefficients from economic weights.
+Supply covariance matrices in raw trait units:
+
+```r
+scored <- ng_add_multitrait_score(
+  scores, traits, method = "economic_index",
+  phenotypic_covariance = P,
+  genetic_covariance = G
+)
+```
+
+This solves the Smith-Hazel equation `b = P^-1 G a`. It does not estimate P or
+G from the candidate-cross score table.
 
 Recommended when:
 
@@ -668,15 +684,19 @@ Use `method = "desired_gain"` when the breeder can state desired changes.
 traits <- ng_multitrait_spec(
   trait = c("yield", "disease", "quality"),
   direction = c("maximize", "minimize", "maximize"),
-  desired_change = c(5, 30, 3),
-  economic_weight = c(1, 4, 2)
+  desired_change = c(5, 30, 3)  # explicit non-negative target for every trait; 0 means no requested response
 )
 
-scored <- ng_add_multitrait_score(scores, traits, method = "desired_gain")
+scored <- ng_add_multitrait_score(
+  scores, traits, method = "desired_gain",
+  phenotypic_covariance = P,
+  genetic_covariance = G
+)
 ```
 
-This uses desired changes, economic weights, and stabilized covariance to
-estimate the index coefficients. Diagnostics are stored in:
+This uses the desired-change vector itself (not economic weights) and solves
+the Pesek-Baker direction `b` proportional to `G^-1 d`. P determines index
+variance and response per unit selection intensity. Diagnostics are stored in:
 
 ```r
 attr(scored, "multi_trait")
@@ -1132,8 +1152,8 @@ Use this decision path:
 5. If the target is diploid DH/RIL and one trait dominates, start with
    `ng_design_crosses()`.
 6. If multiple traits matter and weights are unknown, use multi-trait `auto`.
-7. If economic weights are credible, use `economic_index`.
-8. If desired changes are credible, use `desired_gain`.
+7. If economic weights and validated P/G are credible, use `economic_index`.
+8. If desired changes and validated P/G are credible, use `desired_gain`.
 9. Add `lambda_group` and parent-use constraints when diversity matters.
 10. Use native `var_complex`, SimpleMating-style, and AlphaMate-style
     components as add-ons or benchmarks, not as hard dependencies.

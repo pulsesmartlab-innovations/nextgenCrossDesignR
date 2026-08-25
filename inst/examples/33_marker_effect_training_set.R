@@ -48,13 +48,13 @@ res_trained <- run(training_genotype = train_geno, training_phenotype = train_ph
 
 cat("Parents only:\n")
 cat("  individuals training the effects:", res_parents$input_match_audit$effect_training_n, "\n")
-cat("  effect reliability:", round(res_parents$effect_summary$marker_effect_reliability, 3), "\n")
+cat("  CV phenotype predictive R2:", round(res_parents$effect_summary$cv_predictive_r2, 3), "\n")
 
 cat("With extra training individuals:\n")
 cat("  candidate parents (crossed):     ", res_trained$input_match_audit$matched_parent_count, "\n")
 cat("  training-only individuals:       ", res_trained$input_match_audit$training_only_count, "\n")
 cat("  individuals training the effects:", res_trained$input_match_audit$effect_training_n, "\n")
-cat("  effect reliability:", round(res_trained$effect_summary$marker_effect_reliability, 3), "\n")
+cat("  CV phenotype predictive R2:", round(res_trained$effect_summary$cv_predictive_r2, 3), "\n")
 
 # The crossing plan is built ONLY from the real parents -- no training-only individual is crossed.
 sel_ids <- unique(c(res_trained$selected_crosses$parent1, res_trained$selected_crosses$parent2))
