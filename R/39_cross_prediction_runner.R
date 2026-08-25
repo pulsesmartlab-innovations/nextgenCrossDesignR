@@ -1455,14 +1455,20 @@ ng_cp__stage_rank <- function(ctx) {
         effect_based_x = effect_based_x, index_method = mt_method, basis = mt_basis)
     }
   }
-  selected <- ann_one(selected)
+  # Resolve every relative cut (confidence min/max, risk tertiles, portfolio
+  # medians) once on the full post-filter candidate pool, then copy those exact
+  # annotations to the selected subset. Otherwise one cross can receive two
+  # different labels in the two tables returned by the same run.
   scored_crosses <- ann_one(scored_crosses)
+  selected <- ng_copy_cross_priority_annotations(selected, scored_crosses)
   if (nrow(selected) > 0L && "confidence_method" %in% names(selected)) {
     cm1 <- selected$confidence_method[[1L]]
     priority_risk_diagnostics <- list(
       confidence_method = if (is.null(cm1)) NA_character_ else cm1,
       basis = if (length(trait_spec$column) == 1L) "single_trait" else "multi_trait_index",
       n_traits = nrow(trait_spec),
+      reference_population = "candidate_crosses_after_filters_before_allocation",
+      n_reference_crosses = nrow(scored_crosses),
       n_by_risk    = as.list(table(selected$risk_bin)),
       n_by_profile = as.list(table(selected$portfolio_profile)),
       top_tier_high_risk = sum(as.character(selected$priority_tier) ==

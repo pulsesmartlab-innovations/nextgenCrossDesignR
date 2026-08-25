@@ -1046,7 +1046,8 @@ augments the priority tiers with a decision-support layer that decomposes each c
   could add above the mid-parent — note this is √VPM, the *pure* genetic spread, not √PMV which
   folds in estimation error),
 - `risk_bin` — a `low` / `med` / `high` binning of the mid-parent prediction-error variance
-  (`confidence_method` records how it was obtained),
+  within the full post-filter candidate pool (`confidence_method` records how it was obtained;
+  selected crosses retain the identical candidate-pool label),
 - `portfolio_profile` — a median split of level × upside into `breakthrough` (high/high),
   `workhorse` (high level, modest spread), `long_shot` (modest level, high spread), or
   `deprioritize`.

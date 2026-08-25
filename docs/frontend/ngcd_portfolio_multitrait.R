@@ -261,9 +261,9 @@ ngcdPortfolioServer <- function(id, run, axis_x = c("upside", "level")) {
 ## 3. Rules to enforce in the UI =============================================================
 #
 # WITHIN-RUN ONLY. `cross_confidence` is a min-max normalization and `risk_bin` is tertiles of
-# the crosses on screen. A plan therefore always contains roughly one third "high risk" whether
-# the whole plan is well estimated or badly estimated. Never carry these across runs, and never
-# phrase a count of high-risk crosses as an absolute statement about plan quality.
+# the full post-filter candidate pool, copied unchanged to selected rows. Never carry these
+# across runs, and never phrase a count of high-risk crosses as an absolute statement about plan
+# quality. Ties are kept together, so bins may deliberately be unequal.
 #
 # NEGATIVE IS MEANINGFUL, twice over:
 #   - a minimized trait has a negative index weight (higher raw value lowers the index);

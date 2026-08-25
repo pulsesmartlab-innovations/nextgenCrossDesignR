@@ -140,17 +140,16 @@ ng_cpw_gebv_label <- function(col) {
 # list when the run carries no portfolio annotation at all.
 #
 # risk_bin / cross_confidence are WITHIN-RUN quantities (tertiles and a min-max normalization of
-# the crosses in this plan), so the header carries that caveat -- a spreadsheet outlives the app
-# session that explains it, and a plan always contains roughly a third "high" whether it is well
-# or badly estimated.
+# the full post-filter candidate pool), so the header carries that caveat -- a spreadsheet
+# outlives the app session that explains it, and these labels are not comparable across runs.
 ng_cpw_portfolio_cols <- function(crosses, n) {
   has <- function(col) col %in% names(crosses) && !all(is.na(crosses[[col]]))
   out <- list()
   if (has("portfolio_profile")) out[["portfolio_profile"]] <- as.character(crosses$portfolio_profile)
   if (has("cross_level"))       out[["cross_level"]]       <- ng_cpw_numeric(crosses$cross_level)
   if (has("cross_upside"))      out[["cross_upside"]]      <- ng_cpw_numeric(crosses$cross_upside)
-  if (has("risk_bin"))          out[["risk_bin_within_plan"]] <- as.character(crosses$risk_bin)
-  if (has("cross_confidence"))  out[["cross_confidence_within_plan"]] <- ng_cpw_numeric(crosses$cross_confidence)
+  if (has("risk_bin"))          out[["risk_bin_within_candidate_pool"]] <- as.character(crosses$risk_bin)
+  if (has("cross_confidence"))  out[["cross_confidence_within_candidate_pool"]] <- ng_cpw_numeric(crosses$cross_confidence)
   # Multi-trait only: names the component trait contributing most of the index prediction error.
   if (has("risk_driver_trait")) out[["risk_driver_trait"]] <- as.character(crosses$risk_driver_trait)
   if (has("risk_driver_share")) out[["risk_driver_share"]] <- ng_cpw_numeric(crosses$risk_driver_share)

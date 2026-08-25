@@ -181,6 +181,78 @@ add_check(
   diag_posterior_error <= tol_identity
 )
 
+# Native-boundary safety: malformed marker dimensions must produce an ordinary
+# R error, never an out-of-bounds native access. This calls the installed C++
+# wrapper directly so the check remains effective even if an R caller bypasses
+# the higher-level map preparation contract.
+native_dimension_guard <- expect_error(ng_internal("ng_dh_recomb_pairs_cpp")(
+  geno = geno_small,
+  beta = as.numeric(beta_small),
+  beta_var = as.numeric(beta_var_small),
+  chr = integer(0L),
+  pos_cm = map_small$pos_cm,
+  ids = rownames(geno_small),
+  pair_parent1 = pairs_small$parent1,
+  pair_parent2 = pairs_small$parent2,
+  window_cm = Inf
+))
+add_check(
+  "Diploid variance", "Compiled-kernel malformed-input guard",
+  "Installed native wrapper called with a zero-length chromosome vector",
+  "ordinary R error (no native crash)", native_dimension_guard, native_dimension_guard
+)
+
+# Public posterior multi-trait usefulness must be invariant to arbitrary marker
+# file-column order. This also exercises the per-draw PMV caller that feeds the
+# compiled DH recursion.
+set.seed(20260826)
+post_ids <- sprintf("O%02d", seq_len(12L))
+post_markers <- sprintf("o%02d", seq_len(8L))
+post_geno <- matrix(
+  2 * stats::rbinom(length(post_ids) * length(post_markers), 1L, 0.5),
+  nrow = length(post_ids), dimnames = list(post_ids, post_markers)
+)
+post_Y <- matrix(
+  c(stats::rnorm(12L) + as.numeric(post_geno %*% stats::rnorm(8L, 0.2, 0.05)),
+    stats::rnorm(12L) + as.numeric(post_geno %*% stats::rnorm(8L, -0.1, 0.05))),
+  nrow = 12L, ncol = 2L, dimnames = list(post_ids, c("trait1", "trait2"))
+)
+post_traits <- data.frame(
+  trait = c("trait1", "trait2"), column = c("trait1", "trait2"),
+  direction = c("increase", "increase"), weight = c(1, 1),
+  stringsAsFactors = FALSE
+)
+post_map <- data.frame(
+  marker = post_markers,
+  chr = c(2, 1, 2, 1, 2, 1, 2, 1),
+  pos_cm = c(40, 30, 20, 10, 10, 40, 30, 20),
+  stringsAsFactors = FALSE
+)
+post_pairs <- data.frame(parent1 = post_ids[1:4], parent2 = post_ids[5:8],
+                         stringsAsFactors = FALSE)
+post_a <- suppressWarnings(ng_posterior_multitrait_cross_predict(
+  post_geno, post_Y, post_traits, marker_map = post_map, pairs = post_pairs,
+  n_draws = 10L, kfold = 3L, index_method = "weighted", value_mode = "usefulness",
+  target = "DH", use_cpp = TRUE, seed = 41L
+))
+post_perm <- c(5, 2, 8, 1, 6, 3, 7, 4)
+post_b <- suppressWarnings(ng_posterior_multitrait_cross_predict(
+  post_geno[, post_perm, drop = FALSE], post_Y, post_traits,
+  marker_map = post_map, pairs = post_pairs,
+  n_draws = 10L, kfold = 3L, index_method = "weighted", value_mode = "usefulness",
+  target = "DH", use_cpp = TRUE, seed = 41L
+))
+post_numeric <- intersect(names(post_a)[vapply(post_a, is.numeric, logical(1L))],
+                          names(post_b)[vapply(post_b, is.numeric, logical(1L))])
+posterior_order_error <- max_abs(as.matrix(post_a[post_numeric]) -
+                                   as.matrix(post_b[post_numeric]))
+add_check(
+  "Diploid variance", "Posterior multi-trait marker-order invariance",
+  "Installed public PMV-aware posterior workflow with permuted genotype columns and fixed named map",
+  paste0("max posterior-summary error <= ", tol_identity), fmt(posterior_order_error),
+  posterior_order_error <= tol_identity
+)
+
 # -----------------------------------------------------------------------------
 # 2. Graph LD pruning: installed R/C++ production paths versus graph oracle
 # -----------------------------------------------------------------------------
@@ -603,6 +675,43 @@ add_check(
   poly_cpp_error <= tol_identity && poly_label_ok
 )
 
+# Disomic allopolyploid/subgenome scoring delegates to the diploid recursion
+# per subgenome. Arbitrary marker columns must therefore be sorted with their
+# effects and maps, not interpreted as adjacent loci in file order.
+sg_geno <- list(
+  A = geno_fast[seq_len(8L), seq_len(6L), drop = FALSE],
+  B = geno_fast[seq_len(8L), 7:12, drop = FALSE]
+)
+sg_effect <- lapply(sg_geno, function(g) {
+  stats::setNames(stats::rnorm(ncol(g), 0, 0.2), colnames(g))
+})
+sg_map <- lapply(sg_geno, function(g) {
+  mm <- map_fast[match(colnames(g), map_fast$marker), c("marker", "chr", "pos_cm")]
+  rownames(mm) <- NULL
+  mm
+})
+sg_pairs <- data.frame(parent1 = ids_fast[1:4], parent2 = ids_fast[5:8],
+                       stringsAsFactors = FALSE)
+sg_a <- ng_polyploid_subgenome_score_crosses(
+  sg_geno, sg_effect, candidate_pairs = sg_pairs,
+  map_by_subgenome = sg_map, use_cpp = TRUE
+)
+sg_perm <- list(A = c(6, 2, 5, 1, 4, 3), B = c(3, 6, 1, 5, 2, 4))
+sg_geno_perm <- Map(function(g, ord) g[, ord, drop = FALSE], sg_geno, sg_perm)
+sg_effect_perm <- Map(function(b, ord) b[ord], sg_effect, sg_perm)
+sg_b <- ng_polyploid_subgenome_score_crosses(
+  sg_geno_perm, sg_effect_perm, candidate_pairs = sg_pairs,
+  map_by_subgenome = sg_map, use_cpp = TRUE
+)
+sg_columns <- c("poly_gain", "poly_var", "poly_usefulness")
+sg_order_error <- max_abs(as.matrix(sg_a[sg_columns]) - as.matrix(sg_b[sg_columns]))
+add_check(
+  "Polyploid", "Disomic subgenome marker-order invariance",
+  "Installed public recombination-aware subgenome scorer with independent column permutations",
+  paste0("max score error <= ", tol_identity), fmt(sg_order_error),
+  sg_order_error <= tol_identity
+)
+
 # -----------------------------------------------------------------------------
 # 7. Probability metrics
 # -----------------------------------------------------------------------------
@@ -655,7 +764,273 @@ add_check(
 )
 
 # -----------------------------------------------------------------------------
-# 8. Installed one-call production workflow with graph LD pruning + fast PMV
+# 8. Portfolio risk, posterior isolation, and robust allocation
+# -----------------------------------------------------------------------------
+
+# Mid-parent PEV: exact centered-genotype quadratic form, with covariance and
+# marker-mean names deliberately presented in a different order.
+risk_markers <- paste0("r", 1:4)
+risk_geno <- rbind(
+  R1 = c(0, 2, 1, 0), R2 = c(2, 0, 1, 2),
+  R3 = c(1, 2, 0, 2), R4 = c(0, 1, 2, 1)
+)
+colnames(risk_geno) <- risk_markers
+risk_pairs <- data.frame(parent1 = c("R1", "R1", "R2", "R3"),
+                         parent2 = c("R2", "R3", "R4", "R4"),
+                         stringsAsFactors = FALSE)
+risk_A <- matrix(c(
+  1.0, 0.2, -0.1, 0.3,
+  0.1, 0.9,  0.4, 0.2,
+  0.3, 0.1,  0.8, 0.2,
+  0.2, 0.4,  0.1, 0.7
+), 4L, 4L, byrow = TRUE)
+risk_B <- crossprod(risk_A) / 4
+dimnames(risk_B) <- list(risk_markers, risk_markers)
+risk_mean <- stats::setNames(colMeans(risk_geno), risk_markers)
+risk_xc <- sweep(risk_geno, 2L, risk_mean, "-")
+risk_pev_oracle <- vapply(seq_len(nrow(risk_pairs)), function(i) {
+  s <- risk_xc[risk_pairs$parent1[[i]], ] + risk_xc[risk_pairs$parent2[[i]], ]
+  0.25 * as.numeric(crossprod(s, risk_B %*% s))
+}, numeric(1))
+risk_pev_prod <- ng_internal("ng_midparent_pev")(
+  risk_geno, risk_pairs, risk_B, risk_mean
+)
+risk_perm <- c(3L, 1L, 4L, 2L)
+risk_pev_perm <- ng_internal("ng_midparent_pev")(
+  risk_geno[, risk_perm, drop = FALSE], risk_pairs,
+  risk_B[c(4L, 2L, 1L, 3L), c(4L, 2L, 1L, 3L), drop = FALSE],
+  risk_mean[c(2L, 4L, 1L, 3L)]
+)
+risk_pev_error <- max_abs(c(risk_pev_prod - risk_pev_oracle,
+                            risk_pev_perm - risk_pev_oracle))
+add_check(
+  "Portfolio risk", "Mid-parent PEV quadratic identity and marker-name alignment",
+  "Independent 1/4 (xc1+xc2)' Sigma_beta (xc1+xc2) oracle; genotype/covariance/mean orders permuted independently",
+  paste0("max absolute error <= ", tol_identity), fmt(risk_pev_error),
+  risk_pev_error <= tol_identity
+)
+
+risk_bad_names <- risk_B
+rownames(risk_bad_names)[[1L]] <- "not_a_marker"
+risk_alignment_guard <- expect_error(ng_internal("ng_midparent_pev")(
+  risk_geno, risk_pairs, risk_bad_names, risk_mean
+))
+add_check(
+  "Portfolio risk", "PEV marker mismatch fails closed",
+  "Installed PEV helper called with a covariance row name absent from genotype markers",
+  "ordinary R error", risk_alignment_guard, risk_alignment_guard
+)
+
+# Confidence must decrease monotonically with uncertainty, preserve ties under
+# arbitrary row order, use the documented method labels, and remain independent
+# of P(top-N), which is a merit x uncertainty probability rather than precision.
+risk_spread <- c(0.10, 0.10, 0.25, 0.25, 0.55, 0.90, 0.90)
+risk_cf <- ng_internal("ng_cross_confidence")(risk_spread^2, effect_based_x = TRUE)
+risk_order <- c(7L, 2L, 5L, 1L, 4L, 6L, 3L)
+risk_cf_perm <- ng_internal("ng_cross_confidence")(
+  risk_spread[risk_order]^2, effect_based_x = TRUE
+)
+risk_bin_back <- as.character(risk_cf_perm$risk_bin)[order(risk_order)]
+risk_conf_back <- risk_cf_perm$cross_confidence[order(risk_order)]
+risk_post_method <- ng_internal("ng_cross_confidence")(
+  NULL, effect_based_x = FALSE, method_prefix = "posterior_ci", spread = risk_spread
+)$confidence_method
+risk_tie_ok <- identical(as.character(risk_cf$risk_bin), risk_bin_back) &&
+  max_abs(risk_cf$cross_confidence - risk_conf_back) <= tol_identity &&
+  all(diff(risk_cf$cross_confidence[order(risk_spread)]) <= tol_identity) &&
+  risk_cf$confidence_method == "midparent_pev_partial" &&
+  risk_post_method == "posterior_ci"
+add_check(
+  "Portfolio risk", "Confidence monotonicity, tie invariance, and method provenance",
+  "Installed confidence resolver on tied spreads before/after row permutation",
+  "same tied labels; non-increasing confidence; documented method labels",
+  paste0("tie_equal=", identical(as.character(risk_cf$risk_bin), risk_bin_back),
+         "; methods=", risk_cf$confidence_method, "/", risk_post_method), risk_tie_ok
+)
+
+risk_rows <- data.frame(parent1 = paste0("Q", seq_along(risk_spread)),
+                        parent2 = paste0("Z", seq_along(risk_spread)),
+                        stringsAsFactors = FALSE)
+risk_ann_a <- ng_internal("ng_annotate_cross_priority")(
+  risk_rows, level = seq_along(risk_spread), vpm = rev(seq_along(risk_spread)),
+  post_sd = risk_spread, prob_top_tier = seq(0.05, 0.95, length.out = length(risk_spread))
+)
+risk_ann_b <- ng_internal("ng_annotate_cross_priority")(
+  risk_rows, level = seq_along(risk_spread), vpm = rev(seq_along(risk_spread)),
+  post_sd = risk_spread, prob_top_tier = rev(seq(0.05, 0.95, length.out = length(risk_spread)))
+)
+risk_probability_separate <-
+  max_abs(risk_ann_a$cross_confidence - risk_ann_b$cross_confidence) <= tol_identity &&
+  identical(as.character(risk_ann_a$risk_bin), as.character(risk_ann_b$risk_bin)) &&
+  !isTRUE(all.equal(risk_ann_a$prob_top_tier, risk_ann_b$prob_top_tier))
+add_check(
+  "Portfolio risk", "P(top-tier) is not used as confidence",
+  "Same posterior SD with deliberately reversed P(top-N)",
+  "confidence and risk unchanged; probability changes",
+  risk_probability_separate, risk_probability_separate
+)
+
+# Multi-trait opportunity and risk: exact covariance quadratic form, including
+# the off-diagonal term, plus exact block-diagonal PEV propagation and shares.
+mt_risk_crosses <- data.frame(
+  wf_var_yield = c(4, 9), wf_var_protein = c(1, 4),
+  wf_cov_yield_protein = c(-1.2, 1.5), stringsAsFactors = FALSE
+)
+mt_risk_w <- c(yield = 0.7, protein = -0.4)
+mt_risk_vpm <- as.matrix(mt_risk_crosses[c("wf_var_yield", "wf_var_protein")])
+mt_upside_prod <- ng_internal("ng_multitrait_index_upside")(
+  mt_risk_crosses, c("yield", "protein"), mt_risk_w, vpm = mt_risk_vpm
+)
+mt_upside_oracle <- vapply(seq_len(nrow(mt_risk_crosses)), function(i) {
+  S <- matrix(c(mt_risk_crosses$wf_var_yield[[i]],
+                mt_risk_crosses$wf_cov_yield_protein[[i]],
+                mt_risk_crosses$wf_cov_yield_protein[[i]],
+                mt_risk_crosses$wf_var_protein[[i]]), 2L, 2L)
+  sqrt(as.numeric(crossprod(mt_risk_w, S %*% mt_risk_w)))
+}, numeric(1))
+mt_pev <- matrix(c(0.20, 0.50, 0.40, 0.10), nrow = 2L, byrow = TRUE)
+mt_pev_prod <- ng_internal("ng_multitrait_index_pev")(mt_pev, mt_risk_w)
+mt_pev_oracle <- rowSums(sweep(mt_pev, 2L, mt_risk_w^2, "*"))
+mt_pev_shares <- ng_internal("ng_multitrait_pev_shares")(
+  mt_pev, mt_risk_w, c("yield", "protein")
+)
+mt_risk_error <- max_abs(c(mt_upside_prod - mt_upside_oracle,
+                           mt_pev_prod - mt_pev_oracle,
+                           rowSums(mt_pev_shares) - 1))
+add_check(
+  "Portfolio risk", "Multi-trait index upside and PEV propagation",
+  "Independent sqrt(w'Sw) with nonzero covariance; sum w_k^2 PEV_k; contribution shares",
+  paste0("max absolute error <= ", tol_identity), fmt(mt_risk_error),
+  mt_risk_error <= tol_identity
+)
+
+# The explicit robust allocator must reduce exactly to the standard allocator
+# on the cached lower posterior quantile and preserve every hard constraint.
+robust_scores <- alloc_scores
+robust_scores$merit <- seq(10, 24, length.out = nrow(robust_scores))
+robust_scores$merit_post_mean <- robust_scores$merit
+robust_scores$merit_post_lower <- robust_scores$merit -
+  c(7, 6, 5, 4, 3, 2, 1, 0, 1, 2, 3, 4, 5, 6, 7)
+robust_scores$merit_post_upper <- robust_scores$merit + 2
+robust_scores$posterior_topn_prob_4 <- seq(0.95, 0.05, length.out = nrow(robust_scores))
+attr(robust_scores, "posterior") <- list(ci_level = 0.95, n_draws = 100L)
+robust_plan <- ng_optimize_robust_mating_plan(
+  robust_scores, n_crosses = 4L, gain_col = "merit",
+  max_crosses_per_parent = 2L, min_unique_parents = 5L,
+  method = "greedy_local", local_iter = 200L
+)
+oracle_scores <- robust_scores
+oracle_scores$.lower_oracle <- oracle_scores$merit_post_lower
+oracle_plan <- ng_optimize_mating_plan(
+  oracle_scores, n_crosses = 4L, gain_col = ".lower_oracle",
+  max_crosses_per_parent = 2L, min_unique_parents = 5L,
+  method = "greedy_local", local_iter = 200L
+)
+pair_key <- function(x) paste(pmin(as.character(x$parent1), as.character(x$parent2)),
+                              pmax(as.character(x$parent1), as.character(x$parent2)), sep = "||")
+robust_summary <- attr(robust_plan, "summary")
+robust_exact <- identical(pair_key(robust_plan), pair_key(oracle_plan)) &&
+  isFALSE(robust_summary$robustness_quantile_is_normal_approximation) &&
+  abs(robust_summary$robustness_quantile - 0.025) <= tol_probability &&
+  isTRUE(robust_summary$all_hard_constraints_satisfied) &&
+  robust_summary$max_parent_use <= 2L && robust_summary$unique_parents >= 5L
+add_check(
+  "Portfolio risk", "Explicit robust allocation uses exact cached lower quantile",
+  "Public robust allocator versus standard allocator on the same empirical lower-CI column",
+  "same plan; no normal approximation; hard constraints satisfied",
+  paste0("same=", identical(pair_key(robust_plan), pair_key(oracle_plan)),
+         "; audit=", robust_summary$all_hard_constraints_satisfied), robust_exact
+)
+
+robust_uncached_guard <- expect_error(ng_optimize_robust_mating_plan(
+  robust_scores, n_crosses = 4L, gain_col = "merit", robustness_quantile = 0.25,
+  max_crosses_per_parent = 2L, min_unique_parents = 5L,
+  method = "greedy_local", local_iter = 50L
+))
+robust_approx <- suppressWarnings(ng_optimize_robust_mating_plan(
+  robust_scores, n_crosses = 4L, gain_col = "merit", robustness_quantile = 0.25,
+  allow_normal_approximation = TRUE,
+  max_crosses_per_parent = 2L, min_unique_parents = 5L,
+  method = "greedy_local", local_iter = 50L
+))
+robust_approx_flag <- isTRUE(attr(robust_approx, "summary")$
+                               robustness_quantile_is_normal_approximation)
+robust_approximation_control <- robust_uncached_guard && robust_approx_flag
+add_check(
+  "Portfolio risk", "Uncached robust quantile requires explicit approximation opt-in",
+  "Public robust allocator at q=0.25 with a cached q=0.025 empirical interval",
+  "default call errors; explicit opt-in is flagged in plan summary",
+  robust_approximation_control, robust_approximation_control
+)
+
+robust_topn <- ng_optimize_robust_mating_plan(
+  robust_scores, n_crosses = 4L, gain_col = "merit",
+  objective = "posterior_topn_prob", top_n_target = 4L,
+  max_crosses_per_parent = 2L, min_unique_parents = 5L,
+  method = "greedy_local", local_iter = 200L
+)
+topn_scores <- robust_scores
+topn_scores$.topn_oracle <- topn_scores$posterior_topn_prob_4
+topn_oracle <- ng_optimize_mating_plan(
+  topn_scores, n_crosses = 4L, gain_col = ".topn_oracle",
+  max_crosses_per_parent = 2L, min_unique_parents = 5L,
+  method = "greedy_local", local_iter = 200L
+)
+robust_topn_summary <- attr(robust_topn, "summary")
+bad_topn_scores <- robust_scores
+bad_topn_scores$posterior_topn_prob_4[[1L]] <- 1.01
+robust_topn_domain_guard <- expect_error(ng_optimize_robust_mating_plan(
+  bad_topn_scores, n_crosses = 4L, gain_col = "merit",
+  objective = "posterior_topn_prob", top_n_target = 4L,
+  max_crosses_per_parent = 2L, method = "greedy_local", local_iter = 10L
+))
+robust_topn_exact <- identical(pair_key(robust_topn), pair_key(topn_oracle)) &&
+  identical(robust_topn_summary$robust_objective, "posterior_topn_prob") &&
+  robust_topn_summary$robust_top_n_target == 4L &&
+  isTRUE(robust_topn_summary$all_hard_constraints_satisfied) &&
+  robust_topn_domain_guard
+add_check(
+  "Portfolio risk", "Explicit P(top-N) robust allocation reduction",
+  "Public robust allocator versus standard allocator on the same posterior_topn_prob_4 column",
+  "same plan; hard constraints satisfied; invalid probability rejected",
+  paste0("same=", identical(pair_key(robust_topn), pair_key(topn_oracle)),
+         "; audit=", robust_topn_summary$all_hard_constraints_satisfied,
+         "; domain_guard=", robust_topn_domain_guard),
+  robust_topn_exact
+)
+
+# Posterior sampling must be reproducible while leaving the caller's RNG state
+# untouched, otherwise reporting can leak into a later stochastic allocator.
+rng_X <- matrix(c(-1, 0, 1, 1, -1, 0, 0.5, -0.5, 0), 3L, 3L)
+rng_y <- c(-0.5, 0.1, 0.4)
+set.seed(20260829)
+rng_before <- .Random.seed
+rng_bcm_1 <- ng_sample_ridge_posterior_bcm(
+  rng_X, rng_y, sigma_e2 = 0.8, lambda = 2, n_draws = 5L, seed = 91L,
+  use_cpp = TRUE
+)
+rng_after_bcm <- .Random.seed
+rng_bcm_2 <- ng_sample_ridge_posterior_bcm(
+  rng_X, rng_y, sigma_e2 = 0.8, lambda = 2, n_draws = 5L, seed = 91L,
+  use_cpp = TRUE
+)
+rng_after_repeat <- .Random.seed
+invisible(ng_sample_ridge_posterior_mcmc(
+  rng_X, rng_y, n_draws = 3L, burnin = 2L, seed = 92L
+))
+rng_after_mcmc <- .Random.seed
+rng_isolation <- identical(rng_before, rng_after_bcm) &&
+  identical(rng_before, rng_after_repeat) && identical(rng_before, rng_after_mcmc) &&
+  max_abs(rng_bcm_1 - rng_bcm_2) <= tol_identity
+add_check(
+  "Portfolio risk", "Posterior sampler RNG isolation",
+  "Exported compiled BCM and R MCMC samplers called between saved RNG-state comparisons",
+  "caller RNG state unchanged and repeated seeded draws identical",
+  rng_isolation, rng_isolation
+)
+
+# -----------------------------------------------------------------------------
+# 9. Installed one-call production workflow with graph LD pruning + fast PMV
 # -----------------------------------------------------------------------------
 
 n_e2e <- 24L
@@ -703,12 +1078,133 @@ add_check(
          "; audit=", e2e$plan_summary$all_hard_constraints_satisfied), e2e_ok
 )
 
+# Enabling posterior confidence must not change the ordinary point-estimate
+# mating plan. Its risk annotations are resolved on candidate_crosses and must
+# be copied bit-for-bit to every matching selected row.
+e2e_post <- ng_run_cross_prediction(
+  phenotype = pheno_e2e, genotype = geno_e2e, marker_map = map_e2e,
+  trait_direction = direction_e2e,
+  phenotype_id_col = "parent", genotype_id_col = "parent",
+  map_marker_col = "marker", map_chr_col = "chr", map_pos_cm_col = "pos_cm",
+  map_position_unit = "cM", progeny = "DH", parent_type = "inbred",
+  trait_value_metric = "usefulness", uc_variance_source = "pmv",
+  method_varPMV = "fast", ld_pruning = TRUE, ld_backend = "auto",
+  ld_window = 8L, ld_r2_threshold = 0.95, ld_maf_threshold = 0.01,
+  n_crosses = 6L, max_crosses_per_parent = 3L, min_unique_parents = 5L,
+  optimizer = "greedy_local", lambda_group = 0.02, local_iter = 200L,
+  duplicate_action = "none", use_cpp = TRUE, seed = 20260825,
+  run_posterior_prediction = TRUE, posterior_method = "closed_form",
+  n_iter = 31L, burn_in = 1L
+)
+portfolio_selection_isolation <- identical(pair_key(e2e$selected_crosses),
+                                           pair_key(e2e_post$selected_crosses)) &&
+  isTRUE(e2e_post$priority_risk_diagnostics$posterior_used) &&
+  identical(e2e_post$priority_risk_diagnostics$confidence_method, "posterior_ci")
+add_check(
+  "End-to-end", "Posterior reporting does not alter default allocation",
+  "Same installed one-call workflow with posterior confidence OFF versus ON",
+  "identical ordered selected pairs; posterior_used TRUE only on ON run",
+  paste0("same_plan=", identical(pair_key(e2e$selected_crosses),
+                                 pair_key(e2e_post$selected_crosses)),
+         "; method=", e2e_post$priority_risk_diagnostics$confidence_method),
+  portfolio_selection_isolation
+)
+
+annotation_matches_candidates <- function(result) {
+  selected <- result$selected_crosses
+  candidates <- result$candidate_crosses
+  idx <- match(pair_key(selected), pair_key(candidates))
+  if (anyNA(idx)) return(FALSE)
+  numeric_cols <- intersect(c("cross_level", "cross_upside", "cross_confidence",
+                              "relative_precision", "prob_top_tier"), names(selected))
+  categorical_cols <- intersect(c("risk_bin", "precision_bin", "portfolio_profile",
+                                  "confidence_method", "portfolio_basis"), names(selected))
+  numeric_ok <- all(vapply(numeric_cols, function(nm) {
+    a <- as.numeric(selected[[nm]])
+    b <- as.numeric(candidates[[nm]][idx])
+    same_na <- identical(is.na(a), is.na(b))
+    same_na && (all(is.na(a)) || max_abs(a[!is.na(a)] - b[!is.na(b)]) <= tol_identity)
+  }, logical(1)))
+  categorical_ok <- all(vapply(categorical_cols, function(nm) {
+    identical(as.character(selected[[nm]]), as.character(candidates[[nm]][idx]))
+  }, logical(1)))
+  numeric_ok && categorical_ok
+}
+reference_frame_ok <- annotation_matches_candidates(e2e) &&
+  annotation_matches_candidates(e2e_post) &&
+  identical(e2e$priority_risk_diagnostics$reference_population,
+            "candidate_crosses_after_filters_before_allocation") &&
+  e2e$priority_risk_diagnostics$n_reference_crosses == nrow(e2e$candidate_crosses)
+add_check(
+  "End-to-end", "One candidate-pool portfolio-risk reference frame",
+  "Every selected row joined to its candidate row in posterior-OFF and posterior-ON installed runs",
+  "all risk/portfolio values and labels exactly equal; reference metadata reconciles",
+  reference_frame_ok, reference_frame_ok
+)
+
+# Multi-trait top-level integration uses the same reference-frame invariant and
+# must expose the selection-index basis/risk attribution, not a single-trait
+# shortcut or a diagonal-only upside.
+set.seed(20260830)
+pheno_mt_e2e <- pheno_e2e
+pheno_mt_e2e$protein <- as.numeric(
+  18 + G_e2e %*% stats::rnorm(m_e2e, 0, 0.09) + stats::rnorm(n_e2e, 0, 0.45)
+)
+direction_mt_e2e <- data.frame(
+  trait = c("yield", "protein"), direction = c("increase", "decrease"),
+  stringsAsFactors = FALSE
+)
+e2e_mt <- ng_run_cross_prediction(
+  phenotype = pheno_mt_e2e, genotype = geno_e2e, marker_map = map_e2e,
+  trait_direction = direction_mt_e2e,
+  phenotype_id_col = "parent", genotype_id_col = "parent",
+  map_marker_col = "marker", map_chr_col = "chr", map_pos_cm_col = "pos_cm",
+  map_position_unit = "cM", progeny = "DH", parent_type = "inbred",
+  trait_value_metric = "usefulness", uc_variance_source = "pmv",
+  multi_trait_method = "weighted", trait_weights = c(yield = 0.65, protein = 0.35),
+  method_varPMV = "fast", ld_pruning = TRUE, ld_backend = "auto",
+  ld_window = 8L, ld_r2_threshold = 0.95, ld_maf_threshold = 0.01,
+  n_crosses = 6L, max_crosses_per_parent = 3L, min_unique_parents = 5L,
+  optimizer = "greedy_local", lambda_group = 0.02, local_iter = 200L,
+  duplicate_action = "none", use_cpp = TRUE, seed = 20260825
+)
+mt_diag <- e2e_mt$priority_risk_diagnostics
+mt_e2e_ok <- annotation_matches_candidates(e2e_mt) &&
+  identical(e2e_mt$selected_crosses$portfolio_basis[[1L]],
+            "linearized_rank_index") &&
+  identical(mt_diag$basis, "multi_trait_index") &&
+  identical(mt_diag$upside_method, "exact_within_family_cov") &&
+  length(mt_diag$index_weights) == 2L &&
+  all(is.finite(e2e_mt$selected_crosses$cross_upside)) &&
+  all(e2e_mt$selected_crosses$risk_driver_trait %in% c("yield", "protein"))
+add_check(
+  "End-to-end", "Multi-trait portfolio-risk runner integration",
+  "Installed two-trait weighted-index run joined selected/candidate annotations and inspected diagnostics",
+  "same candidate reference; linearized-rank basis disclosed; exact covariance upside; risk trait attributed",
+  mt_e2e_ok, mt_e2e_ok
+)
+
 # -----------------------------------------------------------------------------
 # Report
 # -----------------------------------------------------------------------------
 
 results <- do.call(rbind, checks)
 code_gate_pass <- all(results$status == "PASS")
+
+alpha_results_path <- file.path("docs", "ALPHASIMR_FORWARD_VALIDATION_RESULTS.csv")
+alpha_results <- if (file.exists(alpha_results_path)) {
+  tryCatch(utils::read.csv(alpha_results_path, stringsAsFactors = FALSE),
+           error = function(e) NULL)
+} else NULL
+alpha_gate_pass <- !is.null(alpha_results) && nrow(alpha_results) > 0L &&
+  all(alpha_results$status == "PASS")
+alpha_gate_label <- if (is.null(alpha_results)) {
+  "NOT RUN"
+} else if (alpha_gate_pass) {
+  "PASS"
+} else {
+  "FAIL"
+}
 
 csv_path <- Sys.getenv(
   "NGCD_STAT_GATE_CSV",
@@ -748,14 +1244,16 @@ lines <- c(
   paste0("- Mathematical/software quantitative-genetics gate: **",
          if (code_gate_pass) "PASS" else "FAIL", "** (", sum(results$status == "PASS"),
          "/", nrow(results), " checks passed)."),
-  "- Historical forward-validation gate: **NOT RUN**. No historical cross-by-progeny outcome table was supplied to this gate.",
-  "- Unrestricted worldwide production release: **HOLD** until the historical gate and an independent quantitative-genetics review pass.",
+  paste0("- Controlled AlphaSimR forward-validation gate: **", alpha_gate_label,
+         "**. See [`ALPHASIMR_FORWARD_VALIDATION.md`](ALPHASIMR_FORWARD_VALIDATION.md)."),
+  "- Historical field forward-validation gate: **NOT RUN**. No observed cross-by-progeny field outcome table was supplied.",
+  "- Unrestricted worldwide production release: **HOLD** until crop/population-specific field evidence and an independent quantitative-genetics review pass.",
   "",
   "A code-gate pass proves that the installed implementation satisfies the identities and invariants below within stated numerical tolerances. It does not prove prediction accuracy in every germplasm, crop, environment, generation, or breeding program.",
   "",
   "## Scope and method",
   "",
-  "This runner loads an installed package and calls its production namespace, including compiled kernels. It does not source package test files. Mathematical identities use independent calculations; randomized graph checks compare exact retained-marker sets; the final check uses the public one-call workflow.",
+  "This runner loads an installed package and calls its production namespace, including compiled kernels. It does not source package test files. Mathematical identities use independent calculations; randomized graph checks compare exact retained-marker sets; portfolio-risk checks use independent quadratic-form oracles and public allocation calls; the final checks use the public one-call workflow.",
   "",
   "Numerical identity checks use an absolute tolerance of `1e-10`; probability identities use `1e-12`; positive-semidefinite checks allow minimum eigenvalues down to `-1e-10` for floating-point roundoff. Discrete graph, domain, and hard-constraint checks require exact agreement.",
   "",
@@ -770,6 +1268,7 @@ lines <- c(
   "- The installed diploid DH and infinite-selfed-RIL variance implementation matches the stated quantitative-genetic formulas for the checked models.",
   "- The fast Haldane-DH PMV recursion matches the dense quadratic form, and graph LD pruning matches its connected-component specification.",
   "- Relationship/coancestry scaling, formal Smith-Hazel and Pesek-Baker coefficients, probability metrics, and tested optimizer constraints are internally coherent.",
+  "- Portfolio-risk PEV, multi-trait index variance, monotone/tie-stable risk labeling, candidate-pool reference consistency, posterior RNG isolation, and the checked robust-allocation reduction satisfy their stated identities and invariants.",
   "- The tested polyploid single-locus/dosage identities and additive-dominance R/C++ parity hold inside the explicitly reported model domain.",
   "",
   "## Claims not permitted by this gate",

@@ -1,23 +1,24 @@
 # Statistical Release Gate
 
-Generated: 2026-08-25 15:45:45 CDT
-Package: `nextgenCrossDesign 0.21.0`
-Installed namespace: `/private/tmp/ngcd_release_gate_lib_20260825/nextgenCrossDesign`
-Source Git commit: `f88da827df7e` (working tree dirty: `TRUE`)
+Generated: 2026-08-25 18:09:44 CDT
+Package: `nextgenCrossDesign 0.22.0`
+Installed namespace: `/private/tmp/ngcd_alphasimr_gate.LsRRIC/nextgenCrossDesign`
+Source Git commit: `a1c530dffa49` (working tree dirty: `TRUE`)
 R: `R version 4.6.1 (2026-06-24)`
 Compiled LD backend available: `TRUE`
 
 ## Decision
 
-- Mathematical/software quantitative-genetics gate: **PASS** (29/29 checks passed).
-- Historical forward-validation gate: **NOT RUN**. No historical cross-by-progeny outcome table was supplied to this gate.
-- Unrestricted worldwide production release: **HOLD** until the historical gate and an independent quantitative-genetics review pass.
+- Mathematical/software quantitative-genetics gate: **PASS** (44/44 checks passed).
+- Controlled AlphaSimR forward-validation gate: **PASS**. See [`ALPHASIMR_FORWARD_VALIDATION.md`](ALPHASIMR_FORWARD_VALIDATION.md).
+- Historical field forward-validation gate: **NOT RUN**. No observed cross-by-progeny field outcome table was supplied.
+- Unrestricted worldwide production release: **HOLD** until crop/population-specific field evidence and an independent quantitative-genetics review pass.
 
 A code-gate pass proves that the installed implementation satisfies the identities and invariants below within stated numerical tolerances. It does not prove prediction accuracy in every germplasm, crop, environment, generation, or breeding program.
 
 ## Scope and method
 
-This runner loads an installed package and calls its production namespace, including compiled kernels. It does not source package test files. Mathematical identities use independent calculations; randomized graph checks compare exact retained-marker sets; the final check uses the public one-call workflow.
+This runner loads an installed package and calls its production namespace, including compiled kernels. It does not source package test files. Mathematical identities use independent calculations; randomized graph checks compare exact retained-marker sets; portfolio-risk checks use independent quadratic-form oracles and public allocation calls; the final checks use the public one-call workflow.
 
 Numerical identity checks use an absolute tolerance of `1e-10`; probability identities use `1e-12`; positive-semidefinite checks allow minimum eigenvalues down to `-1e-10` for floating-point roundoff. Discrete graph, domain, and hard-constraint checks require exact agreement.
 
@@ -31,11 +32,13 @@ Graph LD pruning and fast PMV are retained. The gate explicitly checks them; nei
 | Diploid variance | RIL-infinity Haldane-Waddington identity | Independent pairwise RIL recombination transformation | max absolute error <= 1e-10 |     0 | PASS |
 | Diploid variance | Fast PMV retained: compiled recursion versus dense form | Installed compiled Haldane-DH kernel versus chromosome-block quadratic form | max absolute error <= 1e-10 | 2.22e-16 | PASS |
 | Diploid variance | Diagonal posterior reduction | Full posterior covariance specialized to diagonal marker-effect covariance | max absolute error <= 1e-10 | 2.22e-16 | PASS |
+| Diploid variance | Compiled-kernel malformed-input guard | Installed native wrapper called with a zero-length chromosome vector | ordinary R error (no native crash) | TRUE | PASS |
+| Diploid variance | Posterior multi-trait marker-order invariance | Installed public PMV-aware posterior workflow with permuted genotype columns and fixed named map | max posterior-summary error <= 1e-10 |     0 | PASS |
 | LD pruning | Graph pruning versus independent connected-component oracle | Randomized map-aware cases with missing calls, MAF filtering, and LD edges | 60/60 exact marker-set matches | 60/60 | PASS |
 | LD pruning | Installed C++/auto versus R graph parity | Same randomized cases through both production backends | 60/60 exact marker-set matches | 60/60 | PASS |
 | LD pruning | Map-order invariance | Marker columns permuted while chromosome/position map is held fixed | 60/60 invariant marker sets | 60/60 | PASS |
 | LD pruning | Compiled graph backend loaded | Installed namespace backend registry | TRUE | TRUE | PASS |
-| Marker effects | Fold-local centering translation invariance | Every marker shifted by a different constant; installed fit and CV rerun | prediction/CV difference <= 1e-10 | 1.776e-15 | PASS |
+| Marker effects | Fold-local centering translation invariance | Every marker shifted by a different constant; installed fit and CV rerun | prediction/CV difference <= 1e-10 | 3.553e-15 | PASS |
 | Marker effects | Predictive diagnostics are not mislabeled reliability | Installed ridge fit metadata | reliability=NA, calibrated flag FALSE, CV R2/correlation separately reported | reliability=NA; calibrated=FALSE | PASS |
 | Marker effects | Small-sample CV is not replaced by in-sample fit | Eight training records, below the package CV floor | both CV diagnostics are NA | R2=NA; cor=NA | PASS |
 | Marker effects | Reliability gating requires explicit calibration | Same numeric reliability with calibration flag FALSE then TRUE | uncalibrated cannot gate; calibrated can gate | adjusted_pheno / GEBV | PASS |
@@ -51,17 +54,31 @@ Graph LD pruning and fast PMV are retained. The gate explicitly checks them; nei
 | Polyploid | Autotetraploid double-reduction probability and mean identities | All parental dosages at conventional alpha=1/6 | PMF sum, gamete mean, and progeny mean error <= 1e-12 | 8.882e-16 | PASS |
 | Polyploid | Double-reduction model domain fails closed | Nonzero alpha at ploidy 6 and alpha above 1/6 at ploidy 4 | both calls error | TRUE | PASS |
 | Polyploid | Additive-dominance R/C++ kernel parity and phase label | Same autotetraploid crosses through both production kernels | max absolute error <= 1e-10 and dosage-only phase-prior label present | error=8.882e-16; label=TRUE | PASS |
+| Polyploid | Disomic subgenome marker-order invariance | Installed public recombination-aware subgenome scorer with independent column permutations | max score error <= 1e-10 | 2.22e-16 | PASS |
 | Probability | At-least-one superior progeny closed form | Independent 1 - Phi((tau-mu)/sigma)^k calculation | max absolute error <= 1e-12 |     0 | PASS |
 | Probability | Zero-SD deterministic boundary | Degenerate family distributions below and above threshold | exactly c(0,1) | 0,1 | PASS |
 | Probability | Expected excess above threshold identity | Independent truncated-normal first moment plus deterministic limit | max absolute error <= 1e-12 |     0 | PASS |
 | Probability | Invalid probability domains fail closed | Negative SD and fractional progeny count | all invalid calls error | TRUE | PASS |
+| Portfolio risk | Mid-parent PEV quadratic identity and marker-name alignment | Independent 1/4 (xc1+xc2)' Sigma_beta (xc1+xc2) oracle; genotype/covariance/mean orders permuted independently | max absolute error <= 1e-10 | 2.776e-17 | PASS |
+| Portfolio risk | PEV marker mismatch fails closed | Installed PEV helper called with a covariance row name absent from genotype markers | ordinary R error | TRUE | PASS |
+| Portfolio risk | Confidence monotonicity, tie invariance, and method provenance | Installed confidence resolver on tied spreads before/after row permutation | same tied labels; non-increasing confidence; documented method labels | tie_equal=TRUE; methods=midparent_pev_partial/posterior_ci | PASS |
+| Portfolio risk | P(top-tier) is not used as confidence | Same posterior SD with deliberately reversed P(top-N) | confidence and risk unchanged; probability changes | TRUE | PASS |
+| Portfolio risk | Multi-trait index upside and PEV propagation | Independent sqrt(w'Sw) with nonzero covariance; sum w_k^2 PEV_k; contribution shares | max absolute error <= 1e-10 | 4.441e-16 | PASS |
+| Portfolio risk | Explicit robust allocation uses exact cached lower quantile | Public robust allocator versus standard allocator on the same empirical lower-CI column | same plan; no normal approximation; hard constraints satisfied | same=TRUE; audit=TRUE | PASS |
+| Portfolio risk | Uncached robust quantile requires explicit approximation opt-in | Public robust allocator at q=0.25 with a cached q=0.025 empirical interval | default call errors; explicit opt-in is flagged in plan summary | TRUE | PASS |
+| Portfolio risk | Explicit P(top-N) robust allocation reduction | Public robust allocator versus standard allocator on the same posterior_topn_prob_4 column | same plan; hard constraints satisfied; invalid probability rejected | same=TRUE; audit=TRUE; domain_guard=TRUE | PASS |
+| Portfolio risk | Posterior sampler RNG isolation | Exported compiled BCM and R MCMC samplers called between saved RNG-state comparisons | caller RNG state unchanged and repeated seeded draws identical | TRUE | PASS |
 | End-to-end | Installed production runner | One-call DH workflow with compiled scoring, graph LD pruning, fast PMV, and allocation | 6 finite selected crosses; fast PMV; map-aware LD; hard audit TRUE | n=6; fast=TRUE; map_aware=TRUE; audit=TRUE | PASS |
+| End-to-end | Posterior reporting does not alter default allocation | Same installed one-call workflow with posterior confidence OFF versus ON | identical ordered selected pairs; posterior_used TRUE only on ON run | same_plan=TRUE; method=posterior_ci | PASS |
+| End-to-end | One candidate-pool portfolio-risk reference frame | Every selected row joined to its candidate row in posterior-OFF and posterior-ON installed runs | all risk/portfolio values and labels exactly equal; reference metadata reconciles | TRUE | PASS |
+| End-to-end | Multi-trait portfolio-risk runner integration | Installed two-trait weighted-index run joined selected/candidate annotations and inspected diagnostics | same candidate reference; linearized-rank basis disclosed; exact covariance upside; risk trait attributed | TRUE | PASS |
 
 ## Claims permitted by this gate
 
 - The installed diploid DH and infinite-selfed-RIL variance implementation matches the stated quantitative-genetic formulas for the checked models.
 - The fast Haldane-DH PMV recursion matches the dense quadratic form, and graph LD pruning matches its connected-component specification.
 - Relationship/coancestry scaling, formal Smith-Hazel and Pesek-Baker coefficients, probability metrics, and tested optimizer constraints are internally coherent.
+- Portfolio-risk PEV, multi-trait index variance, monotone/tie-stable risk labeling, candidate-pool reference consistency, posterior RNG isolation, and the checked robust-allocation reduction satisfy their stated identities and invariants.
 - The tested polyploid single-locus/dosage identities and additive-dominance R/C++ parity hold inside the explicitly reported model domain.
 
 ## Claims not permitted by this gate

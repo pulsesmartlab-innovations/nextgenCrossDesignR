@@ -55,37 +55,42 @@ ng_sample_ridge_posterior_bcm <- function(X, yc, sigma_e2, lambda, n_draws,
   A <- tcrossprod(X) + diag(lambda, n)
   # Cholesky factorize once and reuse for all draws.
   A_chol <- tryCatch(chol(A), error = function(e) NULL)
-  if (isTRUE(use_cpp) && !is.null(A_chol) &&
-      exists("ng_bcm_posterior_sampler_cpp", mode = "function", inherits = TRUE)) {
-    # C++ kernel: per-draw rnorm via R::rnorm (no callback overhead) +
-    # hand-rolled forward/back triangular solve on the upper Cholesky factor +
-    # cache-friendly X' w multiplication. Reproduces stats::rnorm under the
-    # same seed for numerical equivalence with the R reference.
-    return(ng_bcm_posterior_sampler_cpp(
-      X_centered = X, yc = as.numeric(yc),
-      A_chol_upper = A_chol,
-      sigma_e2 = sigma_e2, lambda = lambda,
-      n_draws = as.integer(n_draws), seed = as.integer(seed)
-    ))
-  }
-  set.seed(seed)
-  solve_A <- if (is.null(A_chol)) {
-    function(b) as.numeric(solve(A, b))
-  } else {
-    function(b) as.numeric(backsolve(A_chol, backsolve(A_chol, b, transpose = TRUE)))
-  }
-  beta_draws <- matrix(0, nrow = p, ncol = n_draws)
-  sd_prior <- sqrt(sigma_e2 / lambda)
-  sd_noise <- sqrt(sigma_e2)
-  for (s in seq_len(n_draws)) {
-    theta <- stats::rnorm(p, sd = sd_prior)
-    eta   <- stats::rnorm(n, sd = sd_noise)
-    nu    <- as.numeric(X %*% theta + eta)
-    w     <- solve_A(yc - nu)
-    beta_draws[, s] <- theta + as.numeric(crossprod(X, w))
-  }
-  rownames(beta_draws) <- colnames(X)
-  beta_draws
+  # Posterior reporting must not perturb the caller's RNG stream: doing so can
+  # indirectly change a later unseeded stochastic allocation even though none
+  # of these posterior columns belongs to the default allocation objective.
+  ng_with_rng_seed(seed, {
+    if (isTRUE(use_cpp) && !is.null(A_chol) &&
+        exists("ng_bcm_posterior_sampler_cpp", mode = "function", inherits = TRUE)) {
+      # C++ kernel: per-draw rnorm via R::rnorm (no callback overhead) +
+      # hand-rolled forward/back triangular solve on the upper Cholesky factor +
+      # cache-friendly X' w multiplication. Reproduces stats::rnorm under the
+      # same seed for numerical equivalence with the R reference.
+      ng_bcm_posterior_sampler_cpp(
+        X_centered = X, yc = as.numeric(yc),
+        A_chol_upper = A_chol,
+        sigma_e2 = sigma_e2, lambda = lambda,
+        n_draws = as.integer(n_draws), seed = as.integer(seed)
+      )
+    } else {
+      solve_A <- if (is.null(A_chol)) {
+        function(b) as.numeric(solve(A, b))
+      } else {
+        function(b) as.numeric(backsolve(A_chol, backsolve(A_chol, b, transpose = TRUE)))
+      }
+      beta_draws <- matrix(0, nrow = p, ncol = n_draws)
+      sd_prior <- sqrt(sigma_e2 / lambda)
+      sd_noise <- sqrt(sigma_e2)
+      for (s in seq_len(n_draws)) {
+        theta <- stats::rnorm(p, sd = sd_prior)
+        eta   <- stats::rnorm(n, sd = sd_noise)
+        nu    <- as.numeric(X %*% theta + eta)
+        w     <- solve_A(yc - nu)
+        beta_draws[, s] <- theta + as.numeric(crossprod(X, w))
+      }
+      rownames(beta_draws) <- colnames(X)
+      beta_draws
+    }
+  })
 }
 
 # Gibbs sampler over (beta, sigma_e2, sigma_beta2). Vague inverse-gamma
@@ -111,8 +116,8 @@ ng_sample_ridge_posterior_mcmc <- function(X, yc, n_draws,
   X <- as.matrix(X)
   storage.mode(X) <- "double"
   n <- nrow(X); p <- ncol(X)
-  set.seed(seed)
   yc <- as.numeric(yc)
+  ng_with_rng_seed(seed, {
   total_iter <- as.integer(burnin) + as.integer(n_draws) * as.integer(max(1L, thin))
   if (is.null(sigma_e2_init) || !is.finite(sigma_e2_init) || sigma_e2_init <= 0) {
     sigma_e2_init <- max(stats::var(yc, na.rm = TRUE), 1e-4)
@@ -178,6 +183,7 @@ ng_sample_ridge_posterior_mcmc <- function(X, yc, n_draws,
     burnin = burnin,
     thin = thin
   )
+  })
 }
 
 # User-facing wrapper. method = "closed_form" uses BCM at the cross-validated
@@ -531,17 +537,19 @@ ng_posterior_cross_predict <- function(geno,
 # ---- Posterior-aware OCS (D1c) --------------------------------------------
 
 # Optimize the mating plan against a robustness quantile of the posterior
-# usefulness instead of the point estimate. Setting robustness_quantile to
-# 0.5 reproduces (close to) point-estimate behavior; lower values (0.1, 0.25)
-# tilt the selection toward crosses that perform well even at the pessimistic
-# end of the posterior. Setting `objective = "posterior_topn_prob"` instead
-# maximizes the sum of per-cross top-N inclusion probabilities, which yields
-# the most posterior-stable plan.
+# usefulness instead of the point estimate. The NULL default uses the exact
+# empirical lower credible bound already cached by ng_posterior_cross_predict().
+# A different quantile requires a matching CI level in that prediction call;
+# reconstructing it under a normal approximation is available only by explicit
+# opt-in. Setting `objective = "posterior_topn_prob"` instead maximizes the sum
+# of marginal per-cross top-N inclusion probabilities: the expected overlap
+# with the posterior top-N set, not a joint probability for the whole plan.
 ng_optimize_robust_mating_plan <- function(posterior_scores,
                                            n_crosses,
                                            parent_kinship = NULL,
                                            gain_col = "usefulness_pmv_gebv",
-                                           robustness_quantile = 0.25,
+                                           robustness_quantile = NULL,
+                                           allow_normal_approximation = FALSE,
                                            objective = c("posterior_quantile", "posterior_topn_prob"),
                                            top_n_target = NULL,
                                            max_crosses_per_parent = 4,
@@ -556,37 +564,69 @@ ng_optimize_robust_mating_plan <- function(posterior_scores,
                                            local_iter = 2000,
                                            ocs_iter = 5L) {
   objective <- match.arg(objective)
+  if (!is.logical(allow_normal_approximation) ||
+      length(allow_normal_approximation) != 1L || is.na(allow_normal_approximation)) {
+    ng_stop("allow_normal_approximation must be TRUE or FALSE")
+  }
   posterior_scores <- as.data.frame(posterior_scores, stringsAsFactors = FALSE)
   posterior_meta <- attr(posterior_scores, "posterior", exact = TRUE)
   posterior_ci <- suppressWarnings(as.numeric(posterior_meta$ci_level))
-  if (is.null(posterior_meta) || length(posterior_ci) != 1L || !is.finite(posterior_ci)) {
+  if (is.null(posterior_meta) || length(posterior_ci) != 1L || !is.finite(posterior_ci) ||
+      posterior_ci <= 0 || posterior_ci >= 1) {
     ng_stop("posterior_scores must retain posterior metadata from ng_posterior_cross_predict()")
   }
   posterior_meta$ci_level <- posterior_ci
   robust_col <- ".robust_gain"
   quantile_approximation <- FALSE
   if (identical(objective, "posterior_quantile")) {
+    if (is.null(robustness_quantile)) {
+      # Exact-by-default: use the lower tail already computed from the actual
+      # posterior draws at ng_posterior_cross_predict()'s CI level.
+      robustness_quantile <- (1 - posterior_meta$ci_level) / 2
+    }
     robustness_quantile <- suppressWarnings(as.numeric(robustness_quantile))
     if (length(robustness_quantile) != 1L || !is.finite(robustness_quantile) ||
         robustness_quantile <= 0 || robustness_quantile >= 1) {
       ng_stop("robustness_quantile must be one finite probability in (0, 1)")
     }
     lower_col <- paste0(gain_col, "_post_lower")
-    if (abs(robustness_quantile - (1 - posterior_meta$ci_level) / 2) <= 1e-12 &&
+    upper_col <- paste0(gain_col, "_post_upper")
+    tail_prob <- (1 - posterior_meta$ci_level) / 2
+    if (abs(robustness_quantile - tail_prob) <= 1e-12 &&
         lower_col %in% names(posterior_scores)) {
       # Reuse the cached lower CI when the user requested the same quantile.
       posterior_scores[[robust_col]] <- posterior_scores[[lower_col]]
+    } else if (abs(robustness_quantile - (1 - tail_prob)) <= 1e-12 &&
+               upper_col %in% names(posterior_scores)) {
+      # The corresponding upper empirical quantile is cached as well.
+      posterior_scores[[robust_col]] <- posterior_scores[[upper_col]]
     } else {
       # User asked for a different quantile; we need raw draws to recompute.
-      # If not available on the table, fall back to (mean - z * (upper - mean))
-      # using the cached CI as an approximation.
+      # If not available on the table, fit a symmetric normal scale to the
+      # cached central interval ONLY after explicit opt-in.
       mean_col <- paste0(gain_col, "_post_mean")
-      upper_col <- paste0(gain_col, "_post_upper")
-      if (mean_col %in% names(posterior_scores) && upper_col %in% names(posterior_scores)) {
+      if (all(c(mean_col, lower_col, upper_col) %in% names(posterior_scores))) {
+        if (!isTRUE(allow_normal_approximation)) {
+          matching_ci <- abs(1 - 2 * robustness_quantile)
+          ng_stop(
+            "Requested robustness_quantile is not an empirical tail quantile cached in ",
+            "posterior_scores. Re-run ng_posterior_cross_predict() with ci_level = ",
+            if (matching_ci > 0) format(matching_ci, digits = 8) else
+              "a value whose empirical tail is the desired probability",
+            " so that quantile is computed from draws, or explicitly set ",
+            "allow_normal_approximation = TRUE."
+          )
+        }
+        warning(
+          "Robustness quantile is being reconstructed by a normal approximation; ",
+          "posterior merit can be skewed. The plan summary records this approximation.",
+          call. = FALSE
+        )
         quantile_approximation <- TRUE
         z_target <- stats::qnorm(robustness_quantile)
-        z_upper  <- stats::qnorm(1 - (1 - posterior_meta$ci_level) / 2)
-        spread   <- (posterior_scores[[upper_col]] - posterior_scores[[mean_col]]) / z_upper
+        z_upper  <- stats::qnorm(1 - tail_prob)
+        spread   <- (posterior_scores[[upper_col]] - posterior_scores[[lower_col]]) /
+          (2 * z_upper)
         posterior_scores[[robust_col]] <- posterior_scores[[mean_col]] + z_target * spread
       } else {
         ng_stop("posterior_quantile objective requires *_post_* columns from ng_posterior_cross_predict()")
@@ -606,7 +646,11 @@ ng_optimize_robust_mating_plan <- function(posterior_scores,
               ". Re-run ng_posterior_cross_predict() with top_n_targets including ",
               top_n_target)
     }
-    posterior_scores[[robust_col]] <- posterior_scores[[target_col]]
+    topn_prob <- suppressWarnings(as.numeric(posterior_scores[[target_col]]))
+    if (any(!is.finite(topn_prob)) || any(topn_prob < 0 | topn_prob > 1)) {
+      ng_stop(target_col, " must contain finite probabilities in [0, 1]")
+    }
+    posterior_scores[[robust_col]] <- topn_prob
   }
   plan <- ng_optimize_mating_plan(
     scores = posterior_scores, n_crosses = n_crosses,

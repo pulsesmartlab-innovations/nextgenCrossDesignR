@@ -9,10 +9,15 @@ prediction** and **mate allocation** as two separate problems, so each can be
 solved with the right method and audited independently.
 
 <!-- badges -->
-![version](https://img.shields.io/badge/version-0.21.0-blue)
+![version](https://img.shields.io/badge/version-0.22.0-blue)
 ![R](https://img.shields.io/badge/R-%E2%89%A5%204.1-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![status](https://img.shields.io/badge/core%20path-validated%20(DH%2FRIL)-brightgreen)
+
+> **0.22.0 release-candidate status:** research/validation use. The installed code and
+> controlled AlphaSimR gates pass, but unrestricted production release remains on hold until
+> crop/population-specific historical field validation and independent quantitative-genetics
+> review. See the [0.22.0 release note](docs/V0_22_0_RELEASE_CANDIDATE.md).
 
 > A guided Shiny front-end, **[nextgenCrossWorkbench](https://github.com/pulsesmartlab-innovations/NextGenCrossDesign)**,
 > wraps this engine for point-and-click use. This repository is the backend engine
@@ -80,7 +85,7 @@ matrix. The PMV extension propagates effect uncertainty with
 ```r
 # from the source tarball attached to a release
 # (github.com/pulsesmartlab-innovations/nextgenCrossDesignR/releases -> Assets):
-install.packages("nextgenCrossDesign_0.21.0.tar.gz", repos = NULL, type = "source")
+install.packages("nextgenCrossDesign_0.22.0.tar.gz", repos = NULL, type = "source")
 
 # or directly from GitHub:
 # install.packages("remotes")
@@ -187,7 +192,8 @@ result <- ng_run_cross_prediction(
   interpreting the axes: for the rank-based index methods (`auto` / `weighted` /
   `threshold`) it is `linearized_rank_index`, meaning the quadrant is indicative
   rather than a decomposition of `multi_trait_score`. `cross_confidence` and
-  `risk_bin` are within-run quantities and are not comparable across runs.
+  `risk_bin` are within-run quantities, resolved on the full post-filter candidate
+  pool and copied unchanged to the selected plan; they are not comparable across runs.
 
 Every run also returns a `constraint_diagnostics` block (crosses requested vs
 delivered, which caps bound the plan, lethal/marker/budget activity) so a plan
@@ -251,7 +257,8 @@ Two distinct, biologically-correct paths — pick by inheritance, not crop:
   [`docs/STATISTICAL_RELEASE_GATE.md`](docs/STATISTICAL_RELEASE_GATE.md): a
   reproducible installed-package audit of quantitative-genetic identities,
   compiled-kernel parity, LD graph pruning, relationship scales, formal
-  multi-trait indices, probability metrics, and allocation constraints. This
+  multi-trait indices, probability metrics, allocation constraints, and the
+  portfolio-risk/robust-allocation invariants. This
   code gate is separate from the required historical forward-validation gate.
 - **Capability registry** — `ng_backend_capability_registry()` enumerates the
   methods, breeding systems, and UI controls a front-end can discover.
@@ -305,6 +312,12 @@ but not yet tagged, so install from a built tarball or from `main` for those. Se
 [GitHub Releases](https://github.com/pulsesmartlab-innovations/nextgenCrossDesignR/releases)
 for full notes. Recent highlights:
 
+- **0.22.0 release candidate** — installed-package quantitative-genetics hardening and
+  portfolio-risk correction: marker-order and native-boundary guards; one candidate-pool
+  reference frame for confidence/risk/profile labels; exact-by-default robust posterior
+  allocation; RNG-isolated posterior sampling; and direct statistical (44/44) plus AlphaSimR
+  forward (8/8) release gates. See
+  [`docs/V0_22_0_RELEASE_CANDIDATE.md`](docs/V0_22_0_RELEASE_CANDIDATE.md) before upgrading.
 - **0.21.0** — exact phased autopolyploid within-family variance (`phased_haplotypes` +
   `marker_map`, `variance_model = "phased_exact"`; validated against simulated meiosis and
   collapsing exactly to the dosage result when unlinked) and posterior-ON cross confidence

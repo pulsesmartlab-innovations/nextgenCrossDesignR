@@ -88,6 +88,21 @@ ng_posterior_multitrait_cross_predict <- function(geno,
   geno <- ng_as_numeric_matrix(geno, "geno")
   ids <- as.character(ids)
   geno <- ng_check_same_ids(geno, ids, "geno")
+  # Canonicalize marker order BEFORE fitting/sampling. This is required not
+  # only by the linkage recursion later: posterior draws consume random
+  # normals in column order, so leaving an arbitrary input order would give
+  # different finite-draw summaries for the same named marker data. Sorting
+  # genotype and map together makes the public result invariant to file-column
+  # order under a fixed seed.
+  if (!is.null(marker_map)) {
+    prepared_map <- ng_prepare_marker_map(marker_map, colnames(geno), model = recomb_model)
+    canonical <- ng_sort_by_map(
+      geno, stats::setNames(rep(0, ncol(geno)), colnames(geno)),
+      rep(0, ncol(geno)), marker_map = prepared_map
+    )
+    geno <- canonical$geno
+    marker_map <- canonical$marker_map
+  }
   Y <- as.matrix(Y)
   if (is.null(colnames(Y))) ng_stop("Y must have column names (one per trait)")
   if (nrow(Y) != nrow(geno)) ng_stop("Y must have one row per individual in geno")
@@ -231,9 +246,16 @@ ng_posterior_multitrait_cross_predict <- function(geno,
       trait_cross_mean[, j] <- mp_js
       if (use_pmv || do_threshold) {
         # Per-pair PMV under draw s: VPM via the existing recursion.
+        # Prepare AND sort together. ng_prepare_marker_map() aligns map rows to
+        # the caller's marker columns but deliberately preserves that order;
+        # the chromosome recursion requires chromosome/position order.
+        map_js <- ng_prepare_marker_map(marker_map, colnames(geno), model = recomb_model)
+        sorted_js <- ng_sort_by_map(
+          geno, beta_js, rep(0, ncol(geno)), marker_map = map_js
+        )
         scored_pair <- ng_dh_recomb_variance_pairs(
-          geno = geno, beta = beta_js, beta_var = rep(0, ncol(geno)),
-          marker_map = ng_prepare_marker_map(marker_map, colnames(geno), model = recomb_model),
+          geno = sorted_js$geno, beta = sorted_js$effects,
+          beta_var = sorted_js$beta_var, marker_map = sorted_js$marker_map,
           ids = ids, pairs = pairs, window_cm = window_cm,
           use_cpp = use_cpp, recomb_model = recomb_model, target = target
         )

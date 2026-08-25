@@ -392,6 +392,57 @@ ng_dh_recomb_variance_pairs <- function(geno,
                                         recomb_model = NULL,
                                         target = c("DH", "RIL")) {
   target <- match.arg(target)
+  # This is an internal, performance-oriented kernel, but malformed dimensions
+  # must still fail in R rather than reaching native code. In particular, an
+  # absent chr_index previously became integer(0) at the .Call boundary and the
+  # C++ loop indexed beyond it. Public scoring prepares/sorts the map before this
+  # call; direct validation/research callers must do the same.
+  geno <- ng_as_numeric_matrix(geno, "geno")
+  marker_map <- as.data.frame(marker_map, stringsAsFactors = FALSE)
+  m <- ncol(geno)
+  if (length(beta) != m || length(beta_var) != m) {
+    ng_stop("beta and beta_var must each have one value per genotype marker")
+  }
+  if (any(!is.finite(as.numeric(beta))) ||
+      any(!is.finite(as.numeric(beta_var))) || any(as.numeric(beta_var) < 0)) {
+    ng_stop("beta must be finite and beta_var must be finite and non-negative")
+  }
+  required_map <- c("marker", "chr", "chr_index", "pos_cm")
+  missing_map <- setdiff(required_map, names(marker_map))
+  if (length(missing_map)) {
+    ng_stop("marker_map must be prepared with ng_prepare_marker_map and contain: ",
+            paste(required_map, collapse = ", "), "; missing: ",
+            paste(missing_map, collapse = ", "))
+  }
+  if (nrow(marker_map) != m ||
+      length(marker_map$chr_index) != m || length(marker_map$pos_cm) != m) {
+    ng_stop("marker_map must have exactly one prepared row per genotype marker")
+  }
+  if (is.null(colnames(geno)) ||
+      !identical(as.character(marker_map$marker), as.character(colnames(geno)))) {
+    ng_stop("prepared marker_map rows must match genotype markers in the same order")
+  }
+  if (anyNA(marker_map$chr_index) || any(!is.finite(as.numeric(marker_map$pos_cm)))) {
+    ng_stop("prepared marker_map chr_index and pos_cm must be complete and finite")
+  }
+  map_order <- order(marker_map$chr_index, marker_map$pos_cm, marker_map$marker)
+  if (!identical(as.integer(map_order), seq_len(m))) {
+    ng_stop("marker_map and genotype columns must be sorted by chromosome and genetic position")
+  }
+  ids <- as.character(ids)
+  if (length(ids) != nrow(geno) || anyNA(ids) || any(!nzchar(ids)) || anyDuplicated(ids)) {
+    ng_stop("ids must be unique, non-missing, and have one value per genotype row")
+  }
+  pairs <- as.data.frame(pairs, stringsAsFactors = FALSE)
+  if (!all(c("parent1", "parent2") %in% names(pairs))) {
+    ng_stop("pairs must contain parent1 and parent2")
+  }
+  pairs$parent1 <- as.character(pairs$parent1)
+  pairs$parent2 <- as.character(pairs$parent2)
+  if (anyNA(pairs$parent1) || anyNA(pairs$parent2) ||
+      length(setdiff(unique(c(pairs$parent1, pairs$parent2)), ids))) {
+    ng_stop("pairs must reference non-missing parent IDs present in ids")
+  }
   if (is.null(recomb_model)) {
     recomb_model <- if ("recomb_model" %in% names(marker_map)) {
       unique(as.character(marker_map$recomb_model))[[1L]]

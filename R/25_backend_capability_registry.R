@@ -380,8 +380,11 @@ ng_backend_capability_registry <- function(generated_at = Sys.time()) {
       "than a decomposition of multi_trait_score -- the frontend MUST badge this case). Multi-trait ",
       "runs also attribute the risk: risk_driver_trait/risk_driver_share per cross, plus per-trait ",
       "index_traits and risk_disproportionate_traits in priority_risk_diagnostics. Confidence is a ",
-      "within-run normalization and risk_bin is within-run tertiles -- neither is comparable across ",
-      "runs. Posterior-ON confidence and prob_top_tier are not implemented."
+      "within-run normalization and risk_bin is within-run tertiles, both resolved once on the full ",
+      "post-filter candidate pool and copied unchanged to the selected subset -- neither is ",
+      "comparable across runs. Single-trait posterior-ON runs use the posterior SD of the selected ",
+      "metric (confidence_method='posterior_ci') and report prob_top_tier separately; multi-trait ",
+      "posterior risk is not implemented because the production score is generally rank-nonlinear."
     ),
     stringsAsFactors = FALSE
   ))

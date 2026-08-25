@@ -96,8 +96,9 @@ JSON.)
   **You must badge `portfolio_basis == "linearized_rank_index"`** — for the rank-based index
   methods (`auto`/`weighted`/`threshold`, and `auto` promotes to `weighted` whenever trait
   weights are present) the axes are indicative, not a decomposition of `multi_trait_score`.
-  `cross_confidence`/`risk_bin` are **within-run only** (min–max and tertiles of the crosses on
-  screen), so a plan always holds roughly a third "high" regardless of how well it is estimated.
+  `cross_confidence`/`risk_bin` are **within-run only** (min–max and tertiles of the full
+  post-filter candidate pool, copied unchanged to selected rows). They are not an absolute
+  measure of how well a run is estimated; tied uncertainty values can make bins unequal.
 
   Note on the shipped example: it is a deliberately small 10-parent / 12-marker dataset, so its
   `disease` trait has almost no GEBV spread. That makes it a **useful** reference — it populates
