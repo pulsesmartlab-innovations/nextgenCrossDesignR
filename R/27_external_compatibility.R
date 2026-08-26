@@ -297,11 +297,14 @@ ng_simplemating_build_crosses <- function(moms,
     if (is.null(rownames(K)) || is.null(colnames(K))) ng_stop("parent_kinship must have row and column names")
     missing <- setdiff(unique(c(grid$parent1, grid$parent2)), rownames(K))
     if (length(missing)) ng_stop("parent_kinship missing parent IDs: ", paste(missing, collapse = ", "))
-    grid$pair_kinship <- as.numeric(K[cbind(grid$parent1, grid$parent2)])
+    grid$pair_relationship <- as.numeric(K[cbind(grid$parent1, grid$parent2)])
+    grid$pair_kinship <- grid$pair_relationship / 2
   } else {
+    grid$pair_relationship <- 0
     grid$pair_kinship <- 0
   }
-  grid$K <- grid$pair_kinship
+  # SimpleMating-compatible K remains on relationship scale.
+  grid$K <- grid$pair_relationship
   if (is.finite(max_pair_kinship)) {
     grid <- grid[is.finite(grid$pair_kinship) & grid$pair_kinship <= max_pair_kinship, , drop = FALSE]
     rownames(grid) <- NULL
@@ -325,12 +328,16 @@ ng_simplemating_style_select <- function(scores,
   if (is.null(score_col) || !(score_col %in% names(scores))) ng_stop("No usable score_col found")
   if (!("pair_kinship" %in% names(scores))) {
     if ("K" %in% names(scores)) {
-      scores$pair_kinship <- suppressWarnings(as.numeric(scores$K))
+      scores$pair_relationship <- suppressWarnings(as.numeric(scores$K))
+      scores$pair_kinship <- scores$pair_relationship / 2
     } else {
+      scores$pair_relationship <- 0
       scores$pair_kinship <- 0
     }
   }
-  max_pair_kinship <- if (is.null(culling_pairwise_k)) Inf else as.numeric(culling_pairwise_k)
+  # SimpleMating's K threshold is relationship-scale; the native optimizer's
+  # max_pair_kinship is coancestry-scale.
+  max_pair_kinship <- if (is.null(culling_pairwise_k)) Inf else as.numeric(culling_pairwise_k) / 2
   plan <- ng_optimize_mating_plan(
     scores = scores,
     n_crosses = n_crosses,
@@ -347,7 +354,7 @@ ng_simplemating_style_select <- function(scores,
   s <- attr(plan, "summary")
   s$simplemating_style <- "native_proxy"
   s$simplemating_score_col <- score_col
-  s$simplemating_culling_pairwise_k <- max_pair_kinship
+  s$simplemating_culling_pairwise_k <- if (is.null(culling_pairwise_k)) Inf else as.numeric(culling_pairwise_k)
   s$style_proxy <- TRUE
   s$style_proxy_note <- "Lambda-penalized OCS approximation of SimpleMating selectCrosses; not the exact SimpleMating algorithm."
   attr(plan, "summary") <- s
@@ -405,6 +412,7 @@ ng_alphamate_style_frontier <- function(scores,
       lambda_group = lambda,
       plan_key = key,
       mean_gain = s$mean_gain,
+      group_relationship = s$group_relationship,
       group_coancestry = s$group_coancestry,
       mean_pair_kinship = s$mean_pair_kinship,
       unique_parents = s$unique_parents,

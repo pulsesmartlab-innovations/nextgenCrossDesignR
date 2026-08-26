@@ -90,7 +90,7 @@ result <- ng_run_cross_prediction(
   max_crosses_per_parent = 3,
   optimizer = "auto",
   use_ocs = TRUE,
-  assume_inbred = TRUE,
+  parent_type = "inbred",
   seed = 13
 )
 
@@ -126,6 +126,8 @@ missing_marker_error <- tryCatch(
     map_chr_col = "Chr",
     map_pos_bp_col = "Position_BP",
     map_position_unit = "bp",
+    bp_per_cm = 1e6,
+    parent_type = "inbred",
     duplicate_action = "none",
     n_crosses = 2
   ),
@@ -153,6 +155,8 @@ missing_trait_error <- tryCatch(
     map_chr_col = "Chr",
     map_pos_bp_col = "Position_BP",
     map_position_unit = "bp",
+    bp_per_cm = 1e6,
+    parent_type = "inbred",
     duplicate_action = "none",
     n_crosses = 2
   ),

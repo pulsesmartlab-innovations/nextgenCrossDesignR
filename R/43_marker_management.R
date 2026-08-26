@@ -84,14 +84,20 @@ ng_marker_target_scores <- function(geno, pairs, spec, ploidy = 2) {
 # Specification of lethal / strongly-deleterious recessive loci to manage. `risk_allele`
 # names which allele is the deleterious one: "alt" (dosage counts risk copies directly)
 # or "ref" (risk copies = ploidy - dosage).
-ng_lethal_recessive_spec <- function(marker, risk_allele = "alt") {
+ng_lethal_recessive_spec <- function(marker, risk_allele = "alt", affected_dosage = NULL) {
   marker <- as.character(marker)
   n <- length(marker)
   if (!n) ng_stop("lethal_recessive_spec needs at least one marker")
   risk_allele <- tolower(as.character(rep_len(risk_allele, n)))
   bad <- !(risk_allele %in% c("alt", "ref"))
   if (any(bad)) ng_stop("risk_allele must be 'alt' or 'ref'")
-  data.frame(marker = marker, risk_allele = risk_allele, stringsAsFactors = FALSE)
+  if (is.null(affected_dosage)) affected_dosage <- rep(NA_integer_, n)
+  affected_dosage <- suppressWarnings(as.numeric(rep_len(affected_dosage, n)))
+  bad_dosage <- is.finite(affected_dosage) &
+    (affected_dosage < 1 | abs(affected_dosage - round(affected_dosage)) > 1e-8)
+  if (any(bad_dosage)) ng_stop("affected_dosage must contain positive integers or NA")
+  data.frame(marker = marker, risk_allele = risk_allele,
+             affected_dosage = affected_dosage, stringsAsFactors = FALSE)
 }
 
 # Copies of the risk allele carried by each parent at each lethal locus (parents x loci).
@@ -111,18 +117,38 @@ ng_lethal_risk_dosage <- function(geno, spec, ploidy = 2) {
 # risk allele at the same lethal locus (covers carrier x carrier, carrier x affected and
 # affected x affected). Returns lethal_carrier_cross (logical) and lethal_risk_loci
 # (count of shared at-risk loci) per cross.
-ng_lethal_recessive_cross_risk <- function(geno, pairs, spec, ploidy = 2) {
+ng_lethal_recessive_cross_risk <- function(geno, pairs, spec, ploidy = 2,
+                                           double_reduction = 0) {
+  valid <- ng_poly_validate_sexual_model(ploidy, double_reduction)
+  P <- valid$ploidy
   rd <- ng_lethal_risk_dosage(geno, spec, ploidy = ploidy)
   p1 <- match(as.character(pairs$parent1), rownames(rd))
   p2 <- match(as.character(pairs$parent2), rownames(rd))
   if (anyNA(p1) || anyNA(p2)) ng_stop("some cross parents are not rows of geno")
-  carrier1 <- rd[p1, , drop = FALSE] >= 1
-  carrier2 <- rd[p2, , drop = FALSE] >= 1
-  both <- carrier1 & carrier2
-  loci <- rowSums(both, na.rm = TRUE)
+  threshold <- if ("affected_dosage" %in% names(spec)) as.numeric(spec$affected_dosage) else rep(NA_real_, ncol(rd))
+  threshold[!is.finite(threshold)] <- P
+  if (any(threshold > P)) ng_stop("affected_dosage cannot exceed ploidy")
+  locus_prob <- matrix(0, nrow = nrow(pairs), ncol = ncol(rd))
+  for (i in seq_len(nrow(pairs))) for (j in seq_len(ncol(rd))) {
+    g1 <- ng_poly_gamete_pmf(rd[p1[i], j], P, valid$double_reduction)
+    g2 <- ng_poly_gamete_pmf(rd[p2[i], j], P, valid$double_reduction)
+    prog <- as.numeric(stats::convolve(g1, rev(g2), type = "open"))
+    prog[prog < 0] <- 0
+    prog <- prog / sum(prog)
+    # FFT/convolution round-off can leave probabilities of order 1e-17 in
+    # Mendelian classes that are exactly impossible (for example safe x safe
+    # at a recessive lethal). Do not turn that numerical dust into a carrier
+    # cross flag. The tolerance is far below any biologically representable
+    # probability in the supported finite-ploidy models.
+    prog[prog < 100 * .Machine$double.eps] <- 0
+    prog <- prog / sum(prog)
+    locus_prob[i, j] <- sum(prog[(0:P) >= threshold[j]])
+  }
+  loci <- rowSums(locus_prob > 0)
   data.frame(
     lethal_carrier_cross = loci > 0,
     lethal_risk_loci = as.integer(loci),
+    lethal_max_locus_probability = apply(locus_prob, 1L, max),
     stringsAsFactors = FALSE
   )
 }
@@ -161,6 +187,7 @@ ng_apply_marker_management <- function(scores,
     lr <- ng_lethal_recessive_cross_risk(geno, scores, lethal_spec, ploidy = ploidy)
     scores$lethal_carrier_cross <- lr$lethal_carrier_cross
     scores$lethal_risk_loci <- lr$lethal_risk_loci
+    scores$lethal_max_locus_probability <- lr$lethal_max_locus_probability
     if (isTRUE(drop_lethal_carrier_crosses)) {
       scores <- scores[!scores$lethal_carrier_cross, , drop = FALSE]
     }

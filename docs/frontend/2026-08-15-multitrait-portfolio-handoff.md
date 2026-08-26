@@ -25,7 +25,7 @@ Identical column set on `selected_crosses` and `candidate_crosses`.
 | `cross_level` | numeric | X axis. Index of mid-parent GEBVs. Unitless. |
 | `cross_upside` | numeric | Y axis. `sqrt(w'Sw)`, index SD within the family. ≥ 0. |
 | `cross_confidence` | numeric | 0–1, higher = better estimated. Within-run only. |
-| `risk_bin` | ordered factor | `low` < `med` < `high`. Tertiles of the plan. |
+| `risk_bin` | ordered factor | `low` < `med` < `high`. Tertiles of the full post-filter candidate pool; selected rows retain the same label. |
 | `confidence_method` | character | `midparent_pev_index[_partial]` \| `reliability`. |
 | `portfolio_profile` | factor | `breakthrough` / `workhorse` / `long_shot` / `deprioritize`. |
 | `portfolio_basis` | character | **New.** `single_trait` \| `linear_index` \| `linearized_rank_index`. |
@@ -92,9 +92,9 @@ inputs were not comparable. When one trait carries >90% of the index PEV the run
 ## UI rule to enforce
 
 `cross_confidence` and `risk_bin` are **within-run** quantities — a min–max normalization and
-tertiles of the crosses on screen. A plan always contains roughly one third "high risk"
-regardless of whether it is well or badly estimated. Never compare across runs; never phrase a
-high-risk count as an absolute quality statement.
+tertiles of the full post-filter candidate pool, copied unchanged to selected rows. They do not
+measure absolute run quality; ties remain together and can make bins unequal. Never compare
+across runs or phrase a high-risk count as an absolute quality statement.
 
 ## Verification matrix
 

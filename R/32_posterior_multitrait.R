@@ -40,9 +40,11 @@ ng_posterior_multitrait_cross_predict <- function(geno,
                                                   posterior_method = c("closed_form", "mcmc"),
                                                   genetic_covariance_method = c("beta_posterior", "parametric_bootstrap"),
                                                   phenotypic_covariance = NULL,
+                                                  genetic_covariance = NULL,
+                                                  genetic_covariance_draws = NULL,
                                                   ridge_lambda = NULL,
                                                   kfold = 5L,
-                                                  index_method = c("economic_index", "desired_gain", "auto", "weighted", "threshold"),
+                                                  index_method = c("auto", "economic_index", "desired_gain", "weighted", "threshold"),
                                                   value_mode = c("mean", "usefulness"),
                                                   selection_prop = 0.10,
                                                   target = c("DH", "RIL"),
@@ -86,6 +88,21 @@ ng_posterior_multitrait_cross_predict <- function(geno,
   geno <- ng_as_numeric_matrix(geno, "geno")
   ids <- as.character(ids)
   geno <- ng_check_same_ids(geno, ids, "geno")
+  # Canonicalize marker order BEFORE fitting/sampling. This is required not
+  # only by the linkage recursion later: posterior draws consume random
+  # normals in column order, so leaving an arbitrary input order would give
+  # different finite-draw summaries for the same named marker data. Sorting
+  # genotype and map together makes the public result invariant to file-column
+  # order under a fixed seed.
+  if (!is.null(marker_map)) {
+    prepared_map <- ng_prepare_marker_map(marker_map, colnames(geno), model = recomb_model)
+    canonical <- ng_sort_by_map(
+      geno, stats::setNames(rep(0, ncol(geno)), colnames(geno)),
+      rep(0, ncol(geno)), marker_map = prepared_map
+    )
+    geno <- canonical$geno
+    marker_map <- canonical$marker_map
+  }
   Y <- as.matrix(Y)
   if (is.null(colnames(Y))) ng_stop("Y must have column names (one per trait)")
   if (nrow(Y) != nrow(geno)) ng_stop("Y must have one row per individual in geno")
@@ -135,16 +152,35 @@ ng_posterior_multitrait_cross_predict <- function(geno,
   names(posteriors) <- trait_names
   names(fits) <- trait_names
 
-  # ---- Posterior G (S draws matched to the beta draws when possible) -------
-  G_draws <- ng_posterior_genetic_covariance(
-    geno = geno, Y = Y, n_draws = n_draws,
-    method = genetic_covariance_method,
-    ridge_lambda = ridge_lambda, kfold = kfold,
-    seed = seed
-  )
-  # When genetic_covariance_method = "beta_posterior", G_draws shares the BCM
-  # seed structure but uses seed + j internally per trait. Slices are still
-  # valid independent draws even if not 1:1 matched to the trait posteriors.
+  # A formal economic/desired-gain index needs a defensible G. Independently
+  # refitting univariate ridge models and correlating their marker effects is
+  # not a multivariate variance-component posterior, so this routine no longer
+  # manufactures G draws internally. Supply a REML/Bayesian G or matched draws.
+  has_desired <- any(is.finite(suppressWarnings(as.numeric(traits$desired_change))) &
+                       suppressWarnings(as.numeric(traits$desired_change)) > 0)
+  has_economic <- any(is.finite(suppressWarnings(as.numeric(traits$economic_weight))) &
+                        suppressWarnings(as.numeric(traits$economic_weight)) > 0)
+  has_weight <- any(is.finite(suppressWarnings(as.numeric(traits$weight))) &
+                      suppressWarnings(as.numeric(traits$weight)) > 0)
+  resolved_index_method <- index_method
+  if (identical(index_method, "auto")) {
+    resolved_index_method <- if (has_desired) "desired_gain" else if (has_economic) {
+      "economic_index"
+    } else if (has_weight) "weighted" else "auto"
+  }
+  formal_index <- resolved_index_method %in% c("economic_index", "desired_gain")
+  if (formal_index && is.null(genetic_covariance) && is.null(genetic_covariance_draws)) {
+    ng_stop("posterior economic/desired-gain prediction requires genetic_covariance or ",
+            "matched genetic_covariance_draws from a multivariate model")
+  }
+  if (!is.null(genetic_covariance_draws)) {
+    genetic_covariance_draws <- as.array(genetic_covariance_draws)
+    if (length(dim(genetic_covariance_draws)) != 3L ||
+        !all(dim(genetic_covariance_draws)[1:2] == n_traits) ||
+        dim(genetic_covariance_draws)[3] != n_draws) {
+      ng_stop("genetic_covariance_draws must be n_traits x n_traits x n_draws")
+    }
+  }
 
   # ---- Phenotypic covariance (Smith-Hazel companion) -----------------------
   if (is.null(phenotypic_covariance)) {
@@ -190,23 +226,36 @@ ng_posterior_multitrait_cross_predict <- function(geno,
   for (s in seq_len(n_draws)) {
     # Per-trait posterior cross prediction.
     trait_cross_value <- matrix(NA_real_, nrow = n_pairs, ncol = n_traits)
+    trait_cross_mean <- matrix(NA_real_, nrow = n_pairs, ncol = n_traits)
     colnames(trait_cross_value) <- trait_cols
+    colnames(trait_cross_mean) <- trait_cols
+    beta_s <- matrix(NA_real_, nrow = ncol(geno), ncol = n_traits,
+                     dimnames = list(colnames(geno), trait_names))
     # Per-trait per-pair PMV storage (needed by threshold path even in mean mode).
     if (do_threshold) {
       trait_cross_var <- matrix(NA_real_, nrow = n_pairs, ncol = n_traits)
     }
     for (j in seq_len(n_traits)) {
       beta_js <- posteriors[[j]]$beta_draws[, s]
+      beta_s[, j] <- beta_js
       # GEBV per parent under draw s: intercept_j shifted to match the centered
       # marker-mean used during fitting (see ng_score_crosses commentary).
       gebv_js <- intercepts[[j]] + sum(fits[[j]]$marker_mean * fits[[j]]$beta) -
         sum(fits[[j]]$marker_mean * beta_js) + as.numeric(geno %*% beta_js)
       mp_js <- 0.5 * (gebv_js[p1] + gebv_js[p2])
+      trait_cross_mean[, j] <- mp_js
       if (use_pmv || do_threshold) {
         # Per-pair PMV under draw s: VPM via the existing recursion.
+        # Prepare AND sort together. ng_prepare_marker_map() aligns map rows to
+        # the caller's marker columns but deliberately preserves that order;
+        # the chromosome recursion requires chromosome/position order.
+        map_js <- ng_prepare_marker_map(marker_map, colnames(geno), model = recomb_model)
+        sorted_js <- ng_sort_by_map(
+          geno, beta_js, rep(0, ncol(geno)), marker_map = map_js
+        )
         scored_pair <- ng_dh_recomb_variance_pairs(
-          geno = geno, beta = beta_js, beta_var = rep(0, ncol(geno)),
-          marker_map = ng_prepare_marker_map(marker_map, colnames(geno), model = recomb_model),
+          geno = sorted_js$geno, beta = sorted_js$effects,
+          beta_var = sorted_js$beta_var, marker_map = sorted_js$marker_map,
           ids = ids, pairs = pairs, window_cm = window_cm,
           use_cpp = use_cpp, recomb_model = recomb_model, target = target
         )
@@ -230,9 +279,13 @@ ng_posterior_multitrait_cross_predict <- function(geno,
     for (j in seq_len(n_traits)) {
       scores_s[[trait_cols[[j]]]] <- trait_cross_value[, j]
     }
-    G_s <- G_draws[, , s]
+    G_s <- if (!is.null(genetic_covariance_draws)) {
+      genetic_covariance_draws[, , s]
+    } else {
+      genetic_covariance
+    }
     scored_s <- ng_add_multitrait_score(
-      scores = scores_s, traits = traits, method = index_method,
+      scores = scores_s, traits = traits, method = resolved_index_method,
       phenotypic_covariance = P_hat, genetic_covariance = G_s,
       threshold_penalty_autoscale = TRUE
     )
@@ -240,12 +293,22 @@ ng_posterior_multitrait_cross_predict <- function(geno,
 
     # Per-draw multivariate threshold probability (one value per cross).
     if (do_threshold) {
-      for (i in seq_len(n_pairs)) {
-        mu_is <- trait_cross_value[i, ]
-        var_is <- trait_cross_var[i, ]
-        Sigma_i <- ng_build_cross_trait_covariance(
-          per_trait_var = var_is, G_hat = threshold_G_hat
+      exact_sigma <- NULL
+      if (is.null(threshold_G_hat)) {
+        wf <- ng_cross_trait_within_family_cov(
+          geno = geno, betas = beta_s, marker_map = marker_map,
+          ids = ids, pairs = pairs, target = target,
+          recomb_model = recomb_model, window_cm = window_cm
         )
+        exact_sigma <- ng_multitrait_exact_sigma_list(
+          scores = pairs, trait_order = trait_names, cross_trait_cov = wf
+        )
+      }
+      for (i in seq_len(n_pairs)) {
+        mu_is <- trait_cross_mean[i, ]
+        var_is <- trait_cross_var[i, ]
+        Sigma_i <- if (!is.null(exact_sigma)) exact_sigma[[i]] else
+          ng_build_cross_trait_covariance(per_trait_var = var_is, G_hat = threshold_G_hat)
         p_mt_mat[i, s] <- ng_p_superior_progeny_multitrait(
           mu = mu_is, Sigma_c = Sigma_i,
           tau_lower = tau_lower_vec, tau_upper = tau_upper_vec,
@@ -290,12 +353,14 @@ ng_posterior_multitrait_cross_predict <- function(geno,
   attr(out, "posterior_multitrait") <- list(
     n_draws = n_draws,
     posterior_method = posterior_method,
-    genetic_covariance_method = genetic_covariance_method,
-    index_method = index_method,
+    genetic_covariance_method = if (!is.null(genetic_covariance_draws)) "user_matched_draws" else
+      if (!is.null(genetic_covariance)) "user_fixed" else NA_character_,
+    index_method = resolved_index_method,
+    index_method_requested = index_method,
     value_mode = value_mode,
     ci_level = ci_level,
     top_n_targets = as.integer(top_n_targets),
-    G_mean = attr(G_draws, "G_mean"),
+    G_mean = if (!is.null(genetic_covariance_draws)) apply(genetic_covariance_draws, c(1, 2), mean) else genetic_covariance,
     P_hat = P_hat,
     tau_lower_vec = tau_lower_vec,
     tau_upper_vec = tau_upper_vec,

@@ -13,6 +13,10 @@ scores <- data.frame(
   pair_kinship = c(0.20, 0.05, 0.08, 0.06, 0.21, 0.07),
   stringsAsFactors = FALSE
 )
+formal_names <- c("yield", "disease", "quality")
+P_formal <- diag(c(100, 225, 25))
+G_formal <- diag(c(50, 100, 12))
+dimnames(P_formal) <- dimnames(G_formal) <- list(formal_names, formal_names)
 
 stopifnot(is.function(get("ng_breeder_selection_objective", mode = "function")))
 stopifnot(is.function(get("ng_score_breeder_objective", mode = "function")))
@@ -101,7 +105,11 @@ obj_econ <- ng_breeder_selection_objective(
 )
 stopifnot(identical(obj_econ$method, "economic_index"))
 stopifnot(identical(obj_econ$method_requested, "auto"))
-econ_scored <- ng_score_breeder_objective(scores, obj_econ)
+econ_scored <- ng_score_breeder_objective(
+  scores, obj_econ,
+  phenotypic_covariance = P_formal,
+  genetic_covariance = G_formal
+)
 econ_meta <- attr(econ_scored, "multi_trait")
 stopifnot(all(c("economic_index_coefficients", "economic_index_target") %in% names(econ_meta)))
 stopifnot(all(names(econ_meta$economic_index_coefficients) == obj_econ$traits$trait))
@@ -114,7 +122,11 @@ obj_desired <- ng_breeder_selection_objective(
   method = "auto"
 )
 stopifnot(identical(obj_desired$method, "desired_gain"))
-desired_scored <- ng_score_breeder_objective(scores, obj_desired)
+desired_scored <- ng_score_breeder_objective(
+  scores, obj_desired,
+  phenotypic_covariance = P_formal,
+  genetic_covariance = G_formal
+)
 desired_meta <- attr(desired_scored, "multi_trait")
 stopifnot(all(c("desired_gain_coefficients", "desired_gain_target") %in% names(desired_meta)))
 stopifnot(all(names(desired_meta$desired_gain_coefficients) == obj_desired$traits$trait))
@@ -122,8 +134,10 @@ stopifnot(all(names(desired_meta$desired_gain_coefficients) == obj_desired$trait
 parents <- sort(unique(c(scores$parent1, scores$parent2)))
 parent_kinship <- diag(length(parents))
 rownames(parent_kinship) <- colnames(parent_kinship) <- parents
+scores_plan <- scores
+scores_plan$pair_kinship <- 0
 plan <- ng_optimize_breeder_selection_plan(
-  scores = scores,
+  scores = scores_plan,
   objective = obj_threshold,
   n_crosses = 2L,
   parent_kinship = parent_kinship,

@@ -99,10 +99,16 @@ desired_traits <- ng_multitrait_spec(
   desired_change = c(5, 35, 3),
   economic_weight = c(1, 4, 2)
 )
+desired_cov_names <- desired_traits$trait
+P_desired <- diag(c(100, 400, 16))
+G_desired <- diag(c(50, 200, 8))
+dimnames(P_desired) <- dimnames(G_desired) <- list(desired_cov_names, desired_cov_names)
 desired_scored <- ng_add_multitrait_score(
   scores = desired_scores,
   traits = desired_traits,
-  method = "desired_gain"
+  method = "desired_gain",
+  phenotypic_covariance = P_desired,
+  genetic_covariance = G_desired
 )
 desired_meta <- attr(desired_scored, "multi_trait")
 stopifnot(identical(desired_meta$method, "desired_gain"))
@@ -121,22 +127,27 @@ desired_top <- ng_multitrait_select_topn(
   scores = desired_scores,
   traits = desired_traits,
   n_crosses = 1L,
-  method = "desired_gain"
+  method = "desired_gain",
+  phenotypic_covariance = P_desired,
+  genetic_covariance = G_desired
 )
+weighted_compare_traits <- desired_traits
+weighted_compare_traits$weight <- c(1, 4, 2)
 weighted_like_top <- ng_multitrait_select_topn(
   scores = desired_scores,
-  traits = desired_traits,
+  traits = weighted_compare_traits,
   n_crosses = 1L,
   method = "weighted"
 )
-stopifnot(desired_top$yield[[1]] > weighted_like_top$yield[[1]])
 stopifnot(desired_top$disease[[1]] < 50)
 stopifnot(desired_top$dry_matter[[1]] >= 45)
 
 economic_scored <- ng_add_multitrait_score(
   scores = desired_scores,
   traits = desired_traits,
-  method = "economic_index"
+  method = "economic_index",
+  phenotypic_covariance = P_desired,
+  genetic_covariance = G_desired
 )
 economic_meta <- attr(economic_scored, "multi_trait")
 stopifnot(identical(economic_meta$method, "economic_index"))
@@ -144,11 +155,17 @@ stopifnot(all(c("economic_index_coefficients", "economic_index_target",
                 "economic_index_predicted_response", "economic_weights") %in% names(economic_meta)))
 stopifnot(all(is.finite(economic_meta$economic_index_coefficients)))
 stopifnot(all(names(economic_meta$economic_index_coefficients) == desired_traits$trait))
-stopifnot(max(abs(economic_meta$economic_index_target - economic_meta$economic_weights)) < 1e-12)
+economic_scales <- vapply(
+  desired_traits$column,
+  function(nm) ng_multitrait_value_scale(desired_scores[[nm]]), numeric(1)
+)
+expected_economic_target <- economic_meta$economic_weights * economic_scales
+expected_economic_target <- expected_economic_target / sum(abs(expected_economic_target))
+stopifnot(max(abs(economic_meta$economic_index_target - expected_economic_target)) < 1e-12)
 stopifnot(sum(abs(economic_meta$economic_index_coefficients - economic_meta$weights)) > 0.05)
 economic_weighted_scored <- ng_add_multitrait_score(
   scores = desired_scores,
-  traits = desired_traits,
+  traits = weighted_compare_traits,
   method = "weighted"
 )
 stopifnot(max(abs(economic_scored$multi_trait_score - economic_weighted_scored$multi_trait_score)) > 0.01)
@@ -157,14 +174,18 @@ stopifnot(sum(economic_meta$economic_index_target * economic_meta$economic_index
 desired_parents <- sort(unique(c(desired_scores$parent1, desired_scores$parent2)))
 desired_parent_K <- diag(length(desired_parents))
 rownames(desired_parent_K) <- colnames(desired_parent_K) <- desired_parents
+desired_scores_plan <- desired_scores
+desired_scores_plan$pair_kinship <- 0
 desired_plan <- ng_optimize_multitrait_mating_plan(
-  scores = desired_scores,
+  scores = desired_scores_plan,
   traits = desired_traits,
   n_crosses = 2L,
   parent_kinship = desired_parent_K,
   multitrait_method = "desired_gain",
   optimizer_method = "greedy_local",
-  max_crosses_per_parent = 2L
+  max_crosses_per_parent = 2L,
+  phenotypic_covariance = P_desired,
+  genetic_covariance = G_desired
 )
 desired_summary <- attr(desired_plan, "summary")
 stopifnot(identical(desired_summary$multitrait_method, "desired_gain"))
@@ -176,13 +197,15 @@ stopifnot(all(names(desired_summary$multitrait_desired_gain_coefficients) == des
 stopifnot(sum(desired_summary$multitrait_desired_gain_target * desired_summary$multitrait_desired_gain_predicted_response) > 0)
 
 economic_plan <- ng_optimize_multitrait_mating_plan(
-  scores = desired_scores,
+  scores = desired_scores_plan,
   traits = desired_traits,
   n_crosses = 2L,
   parent_kinship = desired_parent_K,
   multitrait_method = "economic_index",
   optimizer_method = "greedy_local",
-  max_crosses_per_parent = 2L
+  max_crosses_per_parent = 2L,
+  phenotypic_covariance = P_desired,
+  genetic_covariance = G_desired
 )
 economic_summary <- attr(economic_plan, "summary")
 stopifnot(identical(economic_summary$multitrait_method, "economic_index"))
@@ -204,8 +227,10 @@ stopifnot(identical(economic_policy$family, "economic_index"))
 parents <- sort(unique(c(scores$parent1, scores$parent2)))
 parent_kinship <- diag(length(parents))
 rownames(parent_kinship) <- colnames(parent_kinship) <- parents
+scores_plan <- scores
+scores_plan$pair_kinship <- 0
 plan <- ng_optimize_multitrait_mating_plan(
-  scores = scores,
+  scores = scores_plan,
   traits = weighted_traits,
   n_crosses = 2L,
   parent_kinship = parent_kinship,

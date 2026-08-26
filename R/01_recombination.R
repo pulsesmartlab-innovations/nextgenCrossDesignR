@@ -39,13 +39,12 @@ ng_progeny_decay <- function(dist_cm, model = c("haldane", "kosambi"),
 ng_prepare_marker_map <- function(marker_map, marker_ids, model = c("haldane", "kosambi")) {
   model <- match.arg(model)
   marker_ids <- as.character(marker_ids)
+  if (!length(marker_ids) || anyNA(marker_ids) || any(!nzchar(marker_ids)) || anyDuplicated(marker_ids)) {
+    ng_stop("marker_ids must be non-empty, non-missing, and unique")
+  }
   if (is.null(marker_map)) {
-    marker_map <- data.frame(
-      marker = marker_ids,
-      chr = 1L,
-      pos_cm = seq_along(marker_ids) - 1,
-      stringsAsFactors = FALSE
-    )
+    ng_stop("marker_map is required for recombination-aware cross variance; ",
+            "the package no longer fabricates a one-chromosome 1-cM map")
   } else if (is.vector(marker_map) && !is.data.frame(marker_map)) {
     if (is.null(names(marker_map))) names(marker_map) <- marker_ids
     marker_map <- data.frame(
@@ -69,8 +68,17 @@ ng_prepare_marker_map <- function(marker_map, marker_ids, model = c("haldane", "
   marker_map$marker <- as.character(marker_map$marker)
   marker_map$chr <- as.character(marker_map$chr)
   marker_map$pos_cm <- as.numeric(marker_map$pos_cm)
+  if (anyNA(marker_map$marker) || any(!nzchar(marker_map$marker)) || anyDuplicated(marker_map$marker)) {
+    ng_stop("marker_map marker identifiers must be non-missing and unique")
+  }
   marker_map <- marker_map[match(marker_ids, marker_map$marker), , drop = FALSE]
   if (anyNA(marker_map$marker)) ng_stop("marker_map is missing markers used in genotype/effect matrix")
+  if (anyNA(marker_map$chr) || any(!nzchar(trimws(marker_map$chr)))) {
+    ng_stop("marker_map chromosome values must be non-missing")
+  }
+  if (any(!is.finite(marker_map$pos_cm))) {
+    ng_stop("marker_map pos_cm values must be finite for all markers used")
+  }
   marker_map$chr_index <- as.integer(factor(marker_map$chr, levels = unique(marker_map$chr)))
   marker_map$recomb_model <- model
   marker_map

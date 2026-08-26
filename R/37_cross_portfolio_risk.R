@@ -7,15 +7,76 @@
 ng_midparent_pev <- function(geno, pairs, beta_cov, marker_mean = NULL) {
   geno <- as.matrix(geno)
   pairs <- as.data.frame(pairs, stringsAsFactors = FALSE)
+  if (!is.numeric(geno)) ng_stop("ng_midparent_pev: geno must be numeric")
+  if (any(is.infinite(geno))) ng_stop("ng_midparent_pev: geno must not contain infinite values")
+  if (is.null(rownames(geno)) || anyDuplicated(rownames(geno)) ||
+      anyNA(rownames(geno)) || any(!nzchar(rownames(geno)))) {
+    ng_stop("ng_midparent_pev: geno must have unique, non-missing parent row names")
+  }
+  markers <- colnames(geno)
+  if (is.null(markers) || anyDuplicated(markers) || anyNA(markers) || any(!nzchar(markers))) {
+    ng_stop("ng_midparent_pev: geno must have unique, non-missing marker column names")
+  }
+  if (!all(c("parent1", "parent2") %in% names(pairs))) {
+    ng_stop("ng_midparent_pev: pairs must contain parent1 and parent2")
+  }
   if (is.null(beta_cov)) return(rep(NA_real_, nrow(pairs)))
-  if (is.null(marker_mean)) marker_mean <- colMeans(geno, na.rm = TRUE)
+  beta_cov <- as.matrix(beta_cov)
+  if (!is.numeric(beta_cov) || nrow(beta_cov) != ncol(beta_cov) ||
+      nrow(beta_cov) != ncol(geno)) {
+    ng_stop("ng_midparent_pev: beta_cov must be a numeric m x m marker covariance matrix")
+  }
+  rn <- rownames(beta_cov); cn <- colnames(beta_cov)
+  if (xor(is.null(rn), is.null(cn))) {
+    ng_stop("ng_midparent_pev: beta_cov must have both row and column marker names, or neither")
+  }
+  if (!is.null(rn)) {
+    if (anyDuplicated(rn) || anyDuplicated(cn) ||
+        !setequal(rn, markers) || !setequal(cn, markers)) {
+      ng_stop("ng_midparent_pev: beta_cov marker names must match geno columns exactly")
+    }
+    beta_cov <- beta_cov[markers, markers, drop = FALSE]
+  }
+  if (any(!is.finite(beta_cov))) ng_stop("ng_midparent_pev: beta_cov must be finite")
+  cov_scale <- max(1, max(abs(beta_cov)))
+  if (!isTRUE(isSymmetric(beta_cov, tol = 1e-8 * cov_scale))) {
+    ng_stop("ng_midparent_pev: beta_cov must be symmetric")
+  }
+  if (is.null(marker_mean)) {
+    marker_mean <- colMeans(geno, na.rm = TRUE)
+    marker_mean[!is.finite(marker_mean)] <- 0
+  } else {
+    marker_names <- names(marker_mean)
+    marker_mean <- suppressWarnings(as.numeric(marker_mean))
+    if (!is.null(marker_names)) {
+      if (anyDuplicated(marker_names) || !setequal(marker_names, markers)) {
+        ng_stop("ng_midparent_pev: named marker_mean must match geno columns exactly")
+      }
+      marker_mean <- marker_mean[match(markers, marker_names)]
+    }
+    if (length(marker_mean) != ncol(geno) || any(!is.finite(marker_mean))) {
+      ng_stop("ng_midparent_pev: marker_mean must contain one finite value per marker")
+    }
+  }
   Xc <- sweep(geno, 2L, marker_mean, "-")
+  # Ridge fitting mean-imputes a missing dosage, which is zero after centering.
+  # Apply the identical convention here so PEV describes the fitted predictor.
+  Xc[!is.finite(Xc)] <- 0
   i1 <- match(as.character(pairs$parent1), rownames(geno))
   i2 <- match(as.character(pairs$parent2), rownames(geno))
   if (anyNA(i1) || anyNA(i2))
     ng_stop("ng_midparent_pev: pair parents not found in geno rownames")
   s <- Xc[i1, , drop = FALSE] + Xc[i2, , drop = FALSE]
-  unname(0.25 * rowSums((s %*% beta_cov) * s))
+  out <- unname(0.25 * rowSums((s %*% beta_cov) * s))
+  # A covariance quadratic form cannot be negative. Clamp only roundoff-sized
+  # negatives; a material negative value means the supplied matrix is not a
+  # valid covariance on the evaluated parental contrasts and must fail closed.
+  q_tol <- 100 * .Machine$double.eps * ncol(geno) * cov_scale *
+    pmax(1, rowSums(abs(s))^2)
+  if (any(out < -q_tol)) {
+    ng_stop("ng_midparent_pev: beta_cov produced a negative prediction-error variance")
+  }
+  pmax(out, 0)
 }
 
 # Resolve the posterior-OFF confidence from the mid-parent PEV.
@@ -33,16 +94,20 @@ ng_cross_confidence <- function(pev, effect_based_x = TRUE,
   na_bin <- factor(rep(NA_character_, n), levels = c("low", "med", "high"), ordered = TRUE)
   if (is.null(pev) || !any(is.finite(pev)) ||
       length(unique(pev[is.finite(pev)])) < 2L) {
-    return(list(cross_confidence = rep(NA_real_, n), risk_bin = na_bin,
-                confidence_method = "reliability"))
+    return(list(cross_confidence = rep(NA_real_, n), relative_precision = rep(NA_real_, n),
+                risk_bin = na_bin, precision_bin = na_bin,
+                confidence_method = "relative_precision_unavailable",
+                is_calibrated = FALSE))
   }
   spread <- sqrt(pmax(as.numeric(pev), 0))
   fin <- is.finite(spread)
   rng <- range(spread[fin])
-  # Degenerate spread (all clamped to same value): fallback to reliability
+  # Degenerate spread contains no relative-precision information.
   if (diff(rng) <= 0) {
-    return(list(cross_confidence = rep(NA_real_, n), risk_bin = na_bin,
-                confidence_method = "reliability"))
+    return(list(cross_confidence = rep(NA_real_, n), relative_precision = rep(NA_real_, n),
+                risk_bin = na_bin, precision_bin = na_bin,
+                confidence_method = "relative_precision_unavailable",
+                is_calibrated = FALSE))
   }
   norm <- rep(NA_real_, n)
   norm[fin] <- (spread[fin] - rng[1L]) / (rng[2L] - rng[1L])
@@ -51,14 +116,23 @@ ng_cross_confidence <- function(pev, effect_based_x = TRUE,
   brk <- unique(c(-Inf, qs, Inf))
   bin <- if (length(brk) == 4L) {
     cut(spread, breaks = brk, labels = c("low", "med", "high"))
-  } else {                                   # tied tertiles: rank-thirds fallback
-    r <- rank(spread, ties.method = "first", na.last = "keep")
-    cut(r, breaks = 3L, labels = c("low", "med", "high"))
+  } else {
+    # Collapsed quantile boundaries arise when many crosses have identical
+    # uncertainty. Average ranks keep tied crosses in the same risk class;
+    # `ties.method = "first"` would make the label depend on input row order.
+    r <- rank(spread, ties.method = "average", na.last = "keep")
+    pct <- (r - 1) / max(1, sum(fin) - 1)
+    cut(pct, breaks = c(-Inf, 1/3, 2/3, Inf),
+        labels = c("low", "med", "high"))
   }
   method <- if (isTRUE(effect_based_x)) paste0(method_prefix, "_partial") else method_prefix
+  bin <- factor(bin, levels = c("low", "med", "high"), ordered = TRUE)
   list(cross_confidence = conf,
-       risk_bin = factor(bin, levels = c("low", "med", "high"), ordered = TRUE),
-       confidence_method = method)
+       relative_precision = conf,
+       risk_bin = bin,
+       precision_bin = bin,
+       confidence_method = method,
+       is_calibrated = FALSE)
 }
 
 # Classify crosses into a 2x2 quadrant (level x upside) based on median cuts.
@@ -96,8 +170,11 @@ ng_annotate_cross_priority <- function(crosses, level, vpm, pev = NULL,
     ng_cross_confidence(pev, effect_based_x = effect_based_x)
   }
   crosses$cross_confidence  <- cf$cross_confidence
+  crosses$relative_precision <- cf$relative_precision
   crosses$risk_bin          <- cf$risk_bin
+  crosses$precision_bin     <- cf$precision_bin
   crosses$confidence_method <- cf$confidence_method
+  crosses$cross_confidence_is_calibrated <- cf$is_calibrated
   crosses$portfolio_profile <- ng_cross_portfolio_profile(crosses$cross_level,
                                                           crosses$cross_upside)
   crosses$portfolio_basis <- "single_trait"
@@ -381,8 +458,11 @@ ng_annotate_cross_priority_multitrait <- function(crosses, trait_order, mean_geb
   cf <- ng_cross_confidence(pev, effect_based_x = effect_based_x,
                             method_prefix = "midparent_pev_index")
   crosses$cross_confidence  <- cf$cross_confidence
+  crosses$relative_precision <- cf$relative_precision
   crosses$risk_bin          <- cf$risk_bin
+  crosses$precision_bin     <- cf$precision_bin
   crosses$confidence_method <- cf$confidence_method
+  crosses$cross_confidence_is_calibrated <- cf$is_calibrated
   # "This cross is high risk -- because of protein (62% of the index PEV)."
   crosses$risk_driver_trait <- risk_driver$trait
   crosses$risk_driver_share <- risk_driver$share
@@ -400,6 +480,43 @@ ng_annotate_cross_priority_multitrait <- function(crosses, trait_order, mean_geb
   )
   attr(crosses, "index_basis") <- basis
   crosses
+}
+
+# Copy candidate-pool risk/portfolio annotations onto the selected subset.
+#
+# Relative confidence, tertiles, and median quadrants must be resolved ONCE on
+# the candidate pool. Recomputing them on the selected plan can give the same
+# cross two different labels in the two tables returned by one run. Allocation
+# may add/reorder columns, so join by the unordered parent pair rather than row.
+ng_copy_cross_priority_annotations <- function(selected, candidates) {
+  selected <- as.data.frame(selected, stringsAsFactors = FALSE)
+  candidates <- as.data.frame(candidates, stringsAsFactors = FALSE)
+  if (!nrow(selected) || !nrow(candidates)) return(selected)
+  need <- c("parent1", "parent2")
+  if (!all(need %in% names(selected)) || !all(need %in% names(candidates))) {
+    ng_stop("ng_copy_cross_priority_annotations: both tables need parent1 and parent2")
+  }
+  key <- function(x) paste(pmin(as.character(x$parent1), as.character(x$parent2)),
+                           pmax(as.character(x$parent1), as.character(x$parent2)), sep = "||")
+  candidate_key <- key(candidates)
+  if (anyDuplicated(candidate_key)) {
+    ng_stop("ng_copy_cross_priority_annotations: candidate table has duplicate unordered pairs")
+  }
+  idx <- match(key(selected), candidate_key)
+  if (anyNA(idx)) {
+    ng_stop("ng_copy_cross_priority_annotations: selected cross is absent from candidate table")
+  }
+  annotation_cols <- c(
+    "cross_level", "cross_upside", "cross_confidence", "relative_precision",
+    "risk_bin", "precision_bin", "confidence_method",
+    "cross_confidence_is_calibrated", "portfolio_profile", "portfolio_basis",
+    "prob_top_tier", "risk_driver_trait", "risk_driver_share", "cross_level_rule"
+  )
+  for (nm in intersect(annotation_cols, names(candidates))) {
+    selected[[nm]] <- candidates[[nm]][idx]
+  }
+  attr(selected, "index_basis") <- attr(candidates, "index_basis", exact = TRUE)
+  selected
 }
 
 # Tier x profile cross-tab summary: aggregate counts and mean metrics.

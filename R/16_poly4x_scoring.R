@@ -51,6 +51,7 @@ ng_poly4x_score_crosses <- function(parent_pop,
   # with the correct matrix is only ~0.56, so the pair ordering that OCS penalises on was wrong.
   parent_kinship <- ng_polyploid_grm(dosage, ploidy = 4L, method = "vanraden")
   pair_coancestry <- ng_poly4x_pair_coancestry(parent_kinship, candidate_pairs)
+  pair_relationship <- 2 * pair_coancestry
   digenic <- rowMeans(ng_poly4x_digenic_scaled(dosage))
   scoring_parent_pop <- unserialize(serialize(parent_pop, NULL))
   scoring_sim_param <- if (is.function(sim_param$clone)) sim_param$clone(deep = TRUE) else sim_param
@@ -82,6 +83,7 @@ ng_poly4x_score_crosses <- function(parent_pop,
     poly4x_max = stats$max_gv,
     poly4x_usefulness = stats$mean_gv + intensity * sqrt(pmax(stats$var_gv, 0)),
     poly4x_pair_coancestry = pair_coancestry,
+    pair_relationship = pair_relationship,
     pair_kinship = pair_coancestry,
     poly4x_digenic_midparent = (digenic[candidate_pairs$parent1] + digenic[candidate_pairs$parent2]) / 2,
     poly4x_score_n = n_score_progeny,

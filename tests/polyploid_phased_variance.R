@@ -83,7 +83,7 @@ s_link <- ng_polyploid_score_crosses(D, b, ploidy = P,
                                      phased_haplotypes = H, marker_map = mm_link)
 s_far  <- ng_polyploid_score_crosses(D, b, ploidy = P,
                                      phased_haplotypes = H, marker_map = mm_far)
-stopifnot(identical(unique(s_dose$variance_model), "unlinked_phase_marginalized"))
+stopifnot(identical(unique(s_dose$variance_model), "uniform_phase_prior_expectation"))
 stopifnot(identical(unique(s_link$variance_model), "phased_exact"))
 stopifnot(max(abs(s_far$poly_var - s_dose$poly_var)) < 1e-8)      # consistency through the scorer
 stopifnot(max(abs(s_link$poly_var - s_dose$poly_var)) > 1e-6)     # linkage is not a no-op

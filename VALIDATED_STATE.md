@@ -1,7 +1,52 @@
 # Validated Software State
 
-Last reviewed: 2026-08-18 for the exact phased autopolyploid variance and posterior-ON
-cross confidence.
+Last reviewed: 2026-08-25 for the installed-package statistical and AlphaSimR
+forward-validation gates.
+
+Release candidate: **0.22.0**. Migration and evidence boundaries are recorded in
+[`docs/V0_22_0_RELEASE_CANDIDATE.md`](docs/V0_22_0_RELEASE_CANDIDATE.md). This is a
+research/validation candidate; unrestricted production status remains **HOLD** pending the
+historical field and independent-review gates below.
+
+## Statistical Release Gate (2026-08-25)
+
+The production package was installed with its compiled kernels and evaluated
+directly, without sourcing package test files. The reproducible audit and its
+machine-readable results are in
+[`docs/STATISTICAL_RELEASE_GATE.md`](docs/STATISTICAL_RELEASE_GATE.md) and
+[`docs/STATISTICAL_RELEASE_GATE_RESULTS.csv`](docs/STATISTICAL_RELEASE_GATE_RESULTS.csv).
+
+- **Mathematical/software quantitative-genetics gate: PASS (44/44).** This
+  includes exact DH enumeration, the RIL-infinity identity, fast-versus-dense
+  PMV, diagonal full-posterior reduction, a compiled-kernel malformed-input
+  guard, posterior multi-trait and disomic-subgenome marker-order invariance,
+  60 randomized graph-LD oracle cases,
+  relationship/coancestry scales, optimizer hard constraints, Smith-Hazel and
+  Pesek-Baker identities, polyploid model-domain checks, probability identities,
+  portfolio-risk PEV and multi-trait covariance oracles, tied-risk invariance,
+  exact/guarded robust-allocation reductions, posterior RNG isolation, and
+  installed single- and multi-trait one-call workflows. Graph LD pruning and
+  fast PMV remain enabled and were explicitly validated.
+- **R package gate: PASS.** The staged `R CMD build` and `R CMD check
+  --no-manual --no-build-vignettes` completed with `Status: OK`.
+- **Controlled AlphaSimR forward-validation gate: PASS.** The installed
+  one-call DH and RIL-infinity workflows predicted before any validation
+  progeny were generated, used 300 disjoint training-only lines, graph LD
+  pruning, and fast PMV, and were graded against common AlphaSimR families.
+  Four independent runMacs founder panels passed all 32 panel-level checks. DH
+  causal-variance ratios were 0.9955-1.0070 (family Pearson 0.9860-0.9927),
+  F10/RIL-infinity ratios were 0.9699-1.0200 (Pearson 0.9873-0.9920), public DH
+  mean Spearman was 0.7238-0.8658, and public DH top-tail usefulness Spearman
+  was 0.6652-0.8409. Full design, leakage audit, thresholds, repeat summary, and
+  family-level evidence are in
+  [`docs/ALPHASIMR_FORWARD_VALIDATION.md`](docs/ALPHASIMR_FORWARD_VALIDATION.md).
+- **Historical field forward-validation gate: NOT RUN.** AlphaSimR validation
+  establishes controlled simulation evidence, not crop-specific prediction
+  accuracy or realized field gain.
+- **Unrestricted worldwide production release: HOLD** until leakage-free
+  crop/population-specific cross-by-progeny field validation and an independent
+  quantitative-genetics review pass. This hold is an evidence boundary, not a
+  defect in graph LD pruning or fast PMV.
 
 ## Phased Autopolyploid Variance & Posterior Confidence Note (v0.21.0, 2026-08-18)
 
@@ -39,6 +84,11 @@ Allowed claims:
   optimizes `multi_trait_score` (or `marker_adjusted_gain`), and posterior output never reaches
   it in `ng_run_cross_prediction` -- `ng_optimize_robust_mating_plan` exists but is called only
   from tests and the vignette.
+- **Robust allocation is exact by default and explicitly opt-in.** Its NULL quantile default uses
+  the empirical lower credible bound already cached from the posterior draws (2.5% for the
+  default 95% interval). An uncached quantile now fails closed unless the caller explicitly sets
+  `allow_normal_approximation = TRUE`; that approximation is warned and recorded in the plan
+  summary. The P(top-N) objective uses the reported probability column directly.
 - **Cost is O(parents), not O(crosses).** The per-parent term does not depend on the mate, so it
   is computed once per parent (P + 1 quadratic forms) and each cross is a sum of two precomputed
   numbers.
@@ -50,6 +100,14 @@ Allowed claims:
   `confidence_method = "posterior_ci"` -- with **no `_partial` suffix**, because unlike the
   mid-parent PEV fallback it covers the merit's variance term as well as its mean.
   `prob_top_tier` is populated from P(cross in top-N) at N = the plan size.
+- **Portfolio-risk annotations use one candidate-pool reference frame.** Confidence min/max,
+  risk tertiles, and level/upside medians are resolved once on the full post-filter candidate
+  pool and copied unchanged onto the selected subset. The same cross therefore has exactly the
+  same confidence, risk bin, and portfolio profile in `candidate_crosses` and
+  `selected_crosses`. Tied uncertainty values retain the same bin independent of row order.
+- **Posterior reporting is RNG-isolated.** Both exported ridge-posterior samplers restore the
+  caller's random-number state. Enabling posterior confidence therefore cannot indirectly alter
+  a later stochastic mating allocator merely by consuming or resetting its random stream.
 - **The F2 fix is measurable, not cosmetic.** Confidence computed under `trait_value_metric =
   "usefulness"` versus `"mean"` correlates at **Spearman -0.21** on the same data -- nearly
   opposite orderings. Under the previous behaviour both runs would have received the identical
@@ -152,9 +210,9 @@ Disallowed claims:
   the measured basis for it (`pearson(cross_level, multi_trait_score)` = 0.871 weighted vs 0.873
   economic_index) is recorded as Rev 7 of that design doc.
 - **`cross_confidence` and `risk_bin` are within-run only** -- a min-max normalization and
-  tertiles of the crosses on screen. A plan always contains roughly one third "high risk"
-  regardless of how well it is estimated. Not comparable across runs; not an absolute statement
-  about plan quality.
+  tertiles of the full post-filter candidate pool. They are not comparable across runs and are
+  not an absolute statement about plan quality; tied values may also make bins deliberately
+  unequal in size because identical uncertainty is never split arbitrarily across labels.
 - **The index PEV is a block-diagonal approximation.** Traits are fitted by INDEPENDENT univariate
   ridges, so no cross-trait estimation-error covariance exists; `sum_k w_k^2 PEV_k` is a ranking
   input, not a calibrated interval. Per-trait PEVs are moreover only comparable across traits when

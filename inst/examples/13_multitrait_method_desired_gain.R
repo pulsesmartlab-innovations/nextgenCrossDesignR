@@ -45,9 +45,12 @@ trait_direction <- data.frame(
   PhenotypeColumn = c("yield", "protein", "disease"),
   Selection_direction = c("increase", "increase", "decrease"),
   desired_change = c(5.0, 0.4, 1.0),
-  economic_weight = c(1.00, 0.45, 1.20),
   stringsAsFactors = FALSE
 )
+# Raw-unit P and G are both required: Pesek-Baker solves b proportional to
+# G^-1 d, while P determines index variance and hence response per unit intensity.
+phenotypic_covariance <- stats::cov(phenotype[, c("yield", "protein", "disease")])
+genetic_covariance <- diag(c(yield = 9.0, protein = 0.16, disease = 0.64))
 
 phenotype_file <- file.path(out_dir, "phenotype.csv")
 genotype_file <- file.path(out_dir, "genotype.csv")
@@ -64,16 +67,14 @@ trait_weights <- NULL
 threshold_policy <- "soft"
 
 parameter_notes <- data.frame(
-  parameter = c("multi_trait_method", "desired_change", "economic_weight", "trait_weights", "threshold_policy"),
+  parameter = c("multi_trait_method", "desired_change", "trait_weights", "threshold_policy"),
   value = c(multi_trait_method,
             paste(trait_direction$Trait, trait_direction$desired_change, sep = "=", collapse = ", "),
-            paste(trait_direction$Trait, trait_direction$economic_weight, sep = "=", collapse = ", "),
             "NULL", threshold_policy),
   when_to_change = c(
     "Use desired_gain when explicit response targets are available.",
     "Set in the direction file in the beneficial direction for each trait.",
-    "Used with desired gains to choose index coefficients.",
-    "Keep NULL when desired_change and economic_weight are supplied.",
+    "Keep NULL because desired changes, not economic weights, define the target.",
     "Soft keeps near-miss crosses available but penalized."
   ),
   stringsAsFactors = FALSE
@@ -97,6 +98,8 @@ result <- ng_run_cross_prediction(
   prediction_mode = "trait_by_trait",
   multi_trait_method = multi_trait_method,
   trait_weights = trait_weights,
+  phenotypic_covariance = phenotypic_covariance,
+  genetic_covariance = genetic_covariance,
   threshold_policy = threshold_policy,
   trait_value_metric = "var_complex",
   uc_variance_source = "pmv",

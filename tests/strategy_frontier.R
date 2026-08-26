@@ -22,7 +22,7 @@ K <- crossprod(L) / n_parents
 diag(K) <- diag(K) + 1
 K <- K / mean(diag(K))
 dimnames(K) <- list(parents, parents)
-scores$pair_kinship <- K[cbind(match(scores$parent1, parents), match(scores$parent2, parents))]
+scores$pair_kinship <- K[cbind(match(scores$parent1, parents), match(scores$parent2, parents))] / 2
 
 n_crosses <- 20L
 

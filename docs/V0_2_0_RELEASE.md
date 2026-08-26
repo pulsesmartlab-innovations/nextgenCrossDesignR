@@ -122,11 +122,17 @@ naïve `Φ(z)^k` once k > ~50 and z is moderate.
 existing MIP optimiser but with a robustness-aware gain column:
 
 - `objective = "posterior_quantile"` (default) maximises the
-  `robustness_quantile` quantile of posterior usefulness (default the 2.5th
-  percentile, i.e. lower 95 % credible bound). This selects crosses that
-  perform well even at the pessimistic end of the posterior.
+  `robustness_quantile` quantile of posterior usefulness. The `NULL` default
+  uses the exact empirical lower credible bound already cached from posterior
+  draws (2.5th percentile for the default 95% interval). A different quantile
+  must be cached by choosing the matching `ci_level` during posterior prediction;
+  normal reconstruction is available only via explicit
+  `allow_normal_approximation = TRUE` and is flagged in the plan summary.
+  This selects crosses that perform well even at the pessimistic end of the posterior.
 - `objective = "posterior_topn_prob"` maximises Σ `posterior_topn_prob_N`
-  over selected crosses, giving the most rank-stable mating plan.
+  over selected crosses. This maximises the expected number of selected crosses
+  in the posterior top-N set; it is not a joint probability that the entire plan
+  is top-N stable.
 
 Both reuse the gain-vs-diversity penalty machinery from
 `ng_optimize_mating_plan()`, so coancestry, parent-use, kinship, and family-
@@ -134,10 +140,10 @@ size constraints all still apply.
 
 ## Defaults that changed
 
-None. Every existing column and function default is preserved. All new
-output columns are added alongside the existing ones; opting in requires
-calling `ng_fit_ridge_effects_posterior()` / `ng_posterior_cross_predict()`
-or supplying `posterior_cov_full` / `tau_superior`.
+None in the original 0.2.0 release. Version 0.22.0 later corrected the robust
+allocator default to the exact cached empirical lower credible bound and made
+normal approximation explicitly opt-in. See `V0_22_0_RELEASE_CANDIDATE.md` for
+the current interface and migration guidance.
 
 ## New exports
 

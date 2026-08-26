@@ -51,21 +51,24 @@ if (max(abs(fit3$beta_var - asymptotic)) / asymptotic > 1e-3) {
   stop("under heavy regularization, beta_var should approach sigma_e2 / lambda")
 }
 
-# ---- Test 4: df_eff must equal trace((X'X+lambda I)^{-1} X'X), in (0, m] -----------------
-# Sanity-check the identity sigma_e2 * (n - df_eff) = sum(resid^2) using the public
-# predict path so we exercise the same intercept handling as the fitter.
+# ---- Test 4: residual df follows the ridge-smoother quadratic-form identity --------------
+# For an unpenalized intercept plus centered ridge smoother H, E(RSS)/sigma^2 is
+# n - 1 - 2 tr(H) + tr(H'H), not n - tr(H). The latter is an OLS shortcut and
+# overstates the residual variance under penalization.
 fitted_pkg <- ng_predict_gebv(geno, fit)
 resid_pkg <- y - fitted_pkg
 rss <- sum(resid_pkg * resid_pkg)
-inferred_df <- length(y) - rss / fit$sigma_e2
-df_eff_primal <- sum(diag(solve(crossprod(Xc) + diag(lambda, m), crossprod(Xc))))
-stopifnot(inferred_df > 0)
-stopifnot(inferred_df <= m + 1e-6)
-if (abs(inferred_df - df_eff_primal) > 1e-6) {
-  stop(sprintf("df_eff mismatch: inferred=%.6f primal=%.6f", inferred_df, df_eff_primal))
+H <- Xc %*% solve(crossprod(Xc) + diag(lambda, m), t(Xc))
+df_eff_primal <- sum(diag(H))
+residual_df_expected <- n - 1 - 2 * df_eff_primal + sum(H * H)
+if (abs(fit$residual_df - residual_df_expected) > 1e-6) {
+  stop(sprintf("residual df mismatch: package=%.6f expected=%.6f",
+               fit$residual_df, residual_df_expected))
 }
+stopifnot(isTRUE(all.equal(fit$sigma_e2, rss / residual_df_expected, tolerance = 1e-10)))
 
 cat("ridge_beta_var: 4/4 checks passed\n")
 cat(sprintf("  mean ratio new/old beta_var under LD: %.3f\n", ratio))
-cat(sprintf("  effective df: %.3f (n=%d, m=%d)\n", inferred_df, n, m))
+cat(sprintf("  effective df: %.3f; residual df: %.3f (n=%d, m=%d)\n",
+            df_eff_primal, residual_df_expected, n, m))
 cat(sprintf("  asymptotic beta_var at lambda=1e6: %.3e\n", asymptotic))

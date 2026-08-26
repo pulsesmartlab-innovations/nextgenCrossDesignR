@@ -47,6 +47,10 @@ trait_direction <- data.frame(
   economic_weight = c(1.00, 0.45, 1.20),
   stringsAsFactors = FALSE
 )
+# Raw-unit covariance inputs for Smith-Hazel b = P^-1 G a. In production,
+# estimate P and G from a suitably designed multi-environment/multi-trait model.
+phenotypic_covariance <- stats::cov(phenotype[, c("yield", "protein", "disease")])
+genetic_covariance <- diag(c(yield = 9.0, protein = 0.16, disease = 0.64))
 
 phenotype_file <- file.path(out_dir, "phenotype.csv")
 genotype_file <- file.path(out_dir, "genotype.csv")
@@ -94,6 +98,8 @@ result <- ng_run_cross_prediction(
   prediction_mode = "trait_by_trait",
   multi_trait_method = multi_trait_method,
   trait_weights = trait_weights,
+  phenotypic_covariance = phenotypic_covariance,
+  genetic_covariance = genetic_covariance,
   threshold_policy = threshold_policy,
   trait_value_metric = "var_complex",
   uc_variance_source = "pmv",

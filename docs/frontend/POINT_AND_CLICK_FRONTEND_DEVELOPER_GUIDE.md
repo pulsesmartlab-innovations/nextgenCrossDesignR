@@ -394,9 +394,10 @@ For robust posterior allocation, use:
 robust_plan <- ng_optimize_robust_mating_plan(
   posterior_scores = result$posterior_predictions[[1L]],
   n_crosses = n_crosses,
-  parent_K = ng_parent_kinship(result$cleaned_data$genotype),
+  parent_kinship = ng_parent_kinship(result$cleaned_data$genotype),
   gain_col = "usefulness_pmv_gebv",
-  robustness_quantile = 0.25,
+  # NULL uses the exact empirical lower credible bound cached from posterior draws.
+  robustness_quantile = NULL,
   objective = "posterior_quantile",
   max_crosses_per_parent = max_uses_per_parent,
   method = optimizer

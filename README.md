@@ -9,10 +9,15 @@ prediction** and **mate allocation** as two separate problems, so each can be
 solved with the right method and audited independently.
 
 <!-- badges -->
-![version](https://img.shields.io/badge/version-0.21.0-blue)
+![version](https://img.shields.io/badge/version-0.22.0-blue)
 ![R](https://img.shields.io/badge/R-%E2%89%A5%204.1-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![status](https://img.shields.io/badge/core%20path-validated%20(DH%2FRIL)-brightgreen)
+
+> **0.22.0 release-candidate status:** research/validation use. The installed code and
+> controlled AlphaSimR gates pass, but unrestricted production release remains on hold until
+> crop/population-specific historical field validation and independent quantitative-genetics
+> review. See the [0.22.0 release note](docs/V0_22_0_RELEASE_CANDIDATE.md).
 
 > A guided Shiny front-end, **[nextgenCrossWorkbench](https://github.com/pulsesmartlab-innovations/NextGenCrossDesign)**,
 > wraps this engine for point-and-click use. This repository is the backend engine
@@ -80,7 +85,7 @@ matrix. The PMV extension propagates effect uncertainty with
 ```r
 # from the source tarball attached to a release
 # (github.com/pulsesmartlab-innovations/nextgenCrossDesignR/releases -> Assets):
-install.packages("nextgenCrossDesign_0.21.0.tar.gz", repos = NULL, type = "source")
+install.packages("nextgenCrossDesign_0.22.0.tar.gz", repos = NULL, type = "source")
 
 # or directly from GitHub:
 # install.packages("remotes")
@@ -143,8 +148,8 @@ plan <- ng_optimize_multitrait_mating_plan(scores, traits, n_crosses = 100)
 ```
 
 Methods: `auto` (rank-normalized, equal weights unless supplied),
-`economic_index` (covariance-aware from relative economic weights),
-`desired_gain` (desired-gain index from target changes), and `weighted`.
+`economic_index` (Smith–Hazel; requires caller-supplied P and G),
+`desired_gain` (Pesek–Baker; requires caller-supplied P and G), and `weighted`.
 Thresholds are **soft by default** (missing a target is penalized, not
 discarded); use `strict_thresholds = TRUE` for hard quality/market cutoffs. For
 user-facing workflows prefer `ng_breeder_selection_objective()`.
@@ -187,7 +192,8 @@ result <- ng_run_cross_prediction(
   interpreting the axes: for the rank-based index methods (`auto` / `weighted` /
   `threshold`) it is `linearized_rank_index`, meaning the quadrant is indicative
   rather than a decomposition of `multi_trait_score`. `cross_confidence` and
-  `risk_bin` are within-run quantities and are not comparable across runs.
+  `risk_bin` are within-run quantities, resolved on the full post-filter candidate
+  pool and copied unchanged to the selected plan; they are not comparable across runs.
 
 Every run also returns a `constraint_diagnostics` block (crosses requested vs
 delivered, which caps bound the plan, lethal/marker/budget activity) so a plan
@@ -247,6 +253,13 @@ Two distinct, biologically-correct paths — pick by inheritance, not crop:
   PopVar/SimpleMating/AlphaMate/polyploid comparisons. Read this before describing
   a method as "better than" an external tool. [`BENCHMARK_NOTES.md`](BENCHMARK_NOTES.md)
   is the long-form history.
+- **Statistical release gate** —
+  [`docs/STATISTICAL_RELEASE_GATE.md`](docs/STATISTICAL_RELEASE_GATE.md): a
+  reproducible installed-package audit of quantitative-genetic identities,
+  compiled-kernel parity, LD graph pruning, relationship scales, formal
+  multi-trait indices, probability metrics, allocation constraints, and the
+  portfolio-risk/robust-allocation invariants. This
+  code gate is separate from the required historical forward-validation gate.
 - **Capability registry** — `ng_backend_capability_registry()` enumerates the
   methods, breeding systems, and UI controls a front-end can discover.
 
@@ -273,6 +286,15 @@ overrides: `NG_USE_CPP=1` (C++ kernel for 5K-marker runs),
 `NG_SHARED_SCORING=1` (shared score table across methods). See the runner headers
 and `docs/BACKEND_USER_GUIDE.md` for the full menu.
 
+The production-namespace statistical gate installs the package first and does
+not source the test suite:
+
+```bash
+mkdir -p /tmp/ngcd_release_gate_lib
+R CMD INSTALL --preclean --no-multiarch --library=/tmp/ngcd_release_gate_lib .
+NGCD_RELEASE_LIB=/tmp/ngcd_release_gate_lib Rscript tools/run_statistical_release_gate.R
+```
+
 ## Design note: DH/RIL target
 
 The default target is **DH/RIL cross design**, not generic F1 progeny variance.
@@ -290,6 +312,12 @@ but not yet tagged, so install from a built tarball or from `main` for those. Se
 [GitHub Releases](https://github.com/pulsesmartlab-innovations/nextgenCrossDesignR/releases)
 for full notes. Recent highlights:
 
+- **0.22.0 release candidate** — installed-package quantitative-genetics hardening and
+  portfolio-risk correction: marker-order and native-boundary guards; one candidate-pool
+  reference frame for confidence/risk/profile labels; exact-by-default robust posterior
+  allocation; RNG-isolated posterior sampling; and direct statistical (44/44) plus AlphaSimR
+  forward (8/8) release gates. See
+  [`docs/V0_22_0_RELEASE_CANDIDATE.md`](docs/V0_22_0_RELEASE_CANDIDATE.md) before upgrading.
 - **0.21.0** — exact phased autopolyploid within-family variance (`phased_haplotypes` +
   `marker_map`, `variance_model = "phased_exact"`; validated against simulated meiosis and
   collapsing exactly to the dosage result when unlinked) and posterior-ON cross confidence
@@ -299,8 +327,8 @@ for full notes. Recent highlights:
   split (dominance orthogonalized against the additive design), correct
   frequency-centred GRM for `poly4x` coancestry, simulated-variance Monte-Carlo SE
   surfaced, and the autopolyploid `variance_model` stated
-  (`unlinked_phase_marginalized` — unbiased over unknown phase, but it cannot
-  separate crosses differing only in linkage phase).
+  (`uniform_phase_prior_expectation` — an expectation under a uniform prior over
+  compatible phase, but it cannot separate crosses differing only in linkage phase).
 - **0.19.0** — multi-trait portfolio & risk on the selection index: `cross_level` =
   w′m, `cross_upside` = √(w′Sw) from the exact cross-trait covariance, plus
   `portfolio_basis` and per-cross risk attribution.

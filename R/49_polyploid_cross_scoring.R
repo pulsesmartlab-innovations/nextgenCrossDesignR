@@ -15,10 +15,11 @@
 # The moments depend ONLY on the parental dosage pair, so a (ploidy+1)x(ploidy+1) table is
 # precomputed once and looked up vectorized -- no per-cross simulation.
 #
-# VARIANCE MODEL -- "unlinked_phase_marginalized". The locus sums above set the between-locus
+# VARIANCE MODEL -- "uniform_phase_prior_expectation". The locus sums above set the between-locus
 # term to zero (R = I), and that deserves a precise statement rather than the vague label
 # "linkage-equilibrium approximation":
-#   * It is UNBIASED, not an approximation. Autopolyploid parental phase -- which homologue
+#   * It is exact only as an expectation under a UNIFORM prior over phase configurations
+#     consistent with dosage. Autopolyploid parental phase -- which homologue
 #     carries which allele -- is NOT identifiable from dosage. Averaged over the phase
 #     configurations consistent with the observed dosages, the between-locus gamete covariance is
 #     EXACTLY zero, even for completely linked loci (verified to 1e-16 by enumeration over all
@@ -30,8 +31,9 @@
 #     Variance-based metrics (usefulness) consequently separate autopolyploid crosses less sharply
 #     than the diploid path, where inbred parents make phase known and the exact recombination-
 #     aware a'Ra kernel applies.
-#   * Supplying phased polyploid haplotypes would make the exact computation possible; that is not
-#     implemented. The allopolyploid subgenome path (R/18) IS recombination-aware when a per-
+#   * The additive scorer in R/46 supports phased polyploid haplotypes for exact computation;
+#     this dominance scorer does not yet combine phase with dominance. The allopolyploid
+#     subgenome path (R/18) IS recombination-aware when a per-
 #     subgenome cM map is given, because disomic pairing makes phase tractable there.
 # Digenic dominance only (trigenic / quadrigenic dominance components are not modelled).
 
@@ -41,9 +43,44 @@
 # the same gamete -- is added at coefficient `dr`: with probability dr one gamete allele-pair is a
 # duplicated (IBD) copy of a random parental allele (2 copies), the remaining ploidy/2 - 2 alleles
 # drawn from the other ploidy - 1 alleles; with probability 1 - dr the gamete is pure Hypergeometric.
-# dr is ignored for diploids (a 1-allele gamete has no pair to double-reduce).
+# Nonzero dr is restricted below to the implemented autotetraploid model.
+ng_poly_validate_sexual_model <- function(ploidy, double_reduction = 0) {
+  P <- suppressWarnings(as.numeric(ploidy[[1L]]))
+  if (!is.finite(P) || P < 2 || abs(P - round(P)) > 1e-8 || as.integer(P) %% 2L != 0L) {
+    ng_stop("sexual polyploid cross moments require an even integer ploidy >= 2")
+  }
+  dr <- suppressWarnings(as.numeric(double_reduction[[1L]]))
+  if (!is.finite(dr) || dr < 0) {
+    ng_stop("double_reduction must be a finite non-negative coefficient")
+  }
+  # The implemented nonzero-DR gamete model contains one IBD sister-chromatid
+  # pair. That is a complete single-locus model for a diploid gamete from an
+  # autotetraploid, but not for higher even ploidies where a gamete can contain
+  # multiple IBD pairs. A generic [0,1] mixture also exceeds the defensible
+  # autotetraploid range. Fail closed outside the implemented domain.
+  if (dr > 0 && as.integer(P) != 4L) {
+    ng_stop("nonzero double_reduction is currently supported only for autotetraploids (ploidy = 4)")
+  }
+  # Here dr is the conventional coefficient alpha: the probability that a
+  # gamete contains two sister-chromatid copies IBD at the locus. Under the
+  # standard autotetraploid quadrivalent/equational-segregation model its
+  # theoretical range is 0..1/6. Models reporting larger coefficients require
+  # a different meiotic parameterization and are not represented by this
+  # simple single-IBD-pair mixture.
+  if (as.integer(P) == 4L && dr > (1 / 6) + 1e-12) {
+    ng_stop("autotetraploid double_reduction must be in 0..1/6 for the implemented conventional-alpha model")
+  }
+  list(ploidy = as.integer(P), double_reduction = dr)
+}
+
 ng_poly_gamete_pmf <- function(d, ploidy, dr = 0) {
-  P <- as.integer(ploidy); g <- P %/% 2L
+  valid <- ng_poly_validate_sexual_model(ploidy, dr)
+  P <- valid$ploidy; dr <- valid$double_reduction; g <- P %/% 2L
+  d <- suppressWarnings(as.numeric(d[[1L]]))
+  if (!is.finite(d) || d < 0 || d > P || abs(d - round(d)) > 1e-8) {
+    ng_stop("parental dosage must be an integer in 0..ploidy")
+  }
+  d <- as.integer(d)
   base <- stats::dhyper(0:g, m = d, n = P - d, k = g)
   if (dr <= 0 || g < 2L) return(base)
   dr_pmf <- numeric(g + 1L)
@@ -62,9 +99,12 @@ ng_poly_gamete_pmf <- function(d, ploidy, dr = 0) {
 
 # Precompute progeny-dosage moments for every parental dosage pair (di, dj) in 0..ploidy:
 # mu = E[X], varX = Var(X), EH = E[X(ploidy-X)], varH = Var(X(ploidy-X)), covXH = Cov(X,H). Returns
-# (P+1)x(P+1) matrices indexed [di+1, dj+1]. `double_reduction` sets the gamete DR coefficient.
+# (P+1)x(P+1) matrices indexed [di+1, dj+1]. Nonzero `double_reduction`
+# is currently supported only for the autotetraploid single-IBD-pair model.
 ng_polyploid_progeny_moment_table <- function(ploidy, double_reduction = 0) {
-  P <- as.integer(ploidy)
+  valid <- ng_poly_validate_sexual_model(ploidy, double_reduction)
+  P <- valid$ploidy
+  double_reduction <- valid$double_reduction
   gam <- lapply(0:P, ng_poly_gamete_pmf, ploidy = P, dr = double_reduction)   # gamete pmf per dosage
   x <- 0:P; Hx <- x * (P - x)
   mu <- varX <- EH <- varH <- covXH <- matrix(0, P + 1L, P + 1L)
@@ -159,6 +199,7 @@ ng_polyploid_score_crosses_dominance <- function(fit,
                     cross_mean = cross_mean, mid_parent_bv = mid_bv, heterosis = heterosis,
                     add_var = add_var, dom_var = dom_var, cross_var = cross_var,
                     cross_usefulness = cross_mean + intensity * sqrt(pmax(cross_var, 0)),
+                    pair_relationship = ng_poly4x_pair_relationship(parent_kinship, pairs),
                     pair_kinship = ng_poly4x_pair_coancestry(parent_kinship, pairs),
                     stringsAsFactors = FALSE)
   attr(out, "parent_kinship") <- parent_kinship
@@ -166,8 +207,8 @@ ng_polyploid_score_crosses_dominance <- function(fit,
   attr(out, "has_dominance") <- !is.null(bd)
   # Travels with the numbers: an autopolyploid within-family variance is unbiased over unknown
   # parental phase but cannot resolve linkage-phase differences between crosses (see header).
-  out$variance_model <- "unlinked_phase_marginalized"
-  attr(out, "variance_model") <- "unlinked_phase_marginalized"
+  out$variance_model <- "uniform_phase_prior_expectation"
+  attr(out, "variance_model") <- "uniform_phase_prior_expectation"
   attr(out, "dominance_model") <- if (is.null(bd)) NA_character_ else "digenic"
   attr(out, "double_reduction") <- as.numeric(double_reduction)
   out
@@ -225,6 +266,14 @@ ng_poly_hap_parents <- function(haplotypes, ploidy) {
             " homologues (e.g. ", paste(utils::head(wrong, 3L), collapse = ", "), ")")
   }
   if (any(idx < 1L | idx > ploidy)) ng_stop("phased_haplotypes homologue indices must be 1..", ploidy)
+  split_idx <- split(idx, parent)
+  bad_idx <- names(split_idx)[!vapply(split_idx, function(z) {
+    identical(sort(as.integer(z)), seq_len(as.integer(ploidy)))
+  }, logical(1L))]
+  if (length(bad_idx)) {
+    ng_stop("phased_haplotypes must contain each homologue index 1..", ploidy,
+            " exactly once per parent; offending: ", paste(utils::head(bad_idx, 3L), collapse = ", "))
+  }
   list(parent = parent, index = idx)
 }
 

@@ -5,9 +5,9 @@
 #'     construction and finished inbreds are effectively so; a heterozygous
 #'     locus beyond the QC tolerance is a genotyping/data error and is a
 #'     BLOCKER (do not proceed).
-#'   * "ril" -- recombinant inbred lines legitimately retain residual
-#'     heterozygosity at a few loci after finite selfing; het is accepted and
-#'     scoring proceeds (with the DH/RIL kernel, biased low at those loci).
+#'   * "ril" -- recombinant inbred lines may retain residual heterozygosity
+#'     after finite selfing; scoring then requires complete phased parental
+#'     haplotypes so the package does not silently use a biased inbred kernel.
 #' The legacy boolean `assume_inbred` is deprecated: if supplied it overrides
 #' `parent_type` (TRUE -> "inbred", FALSE -> "ril") with a one-time warning.
 #' Returns a single canonical parent_type string.
@@ -61,12 +61,44 @@ ng_score_crosses <- function(geno,
   geno <- ng_as_numeric_matrix(geno, "geno")
   ids <- as.character(ids)
   geno <- ng_check_same_ids(geno, ids, "geno")
+  if (is.null(effects$beta) || is.null(names(effects$beta)) || anyDuplicated(names(effects$beta))) {
+    ng_stop("effects$beta must be a uniquely named marker-effect vector")
+  }
+  missing_beta <- setdiff(colnames(geno), names(effects$beta))
+  if (length(missing_beta)) {
+    ng_stop("effects$beta is missing markers used by geno: ",
+            paste(utils::head(missing_beta, 6L), collapse = ", "))
+  }
+  beta_input <- suppressWarnings(as.numeric(effects$beta[colnames(geno)]))
+  if (any(!is.finite(beta_input))) ng_stop("effects$beta must be finite for every genotype marker")
+  names(beta_input) <- colnames(geno)
+  intercept_input <- suppressWarnings(as.numeric(effects$intercept))
+  if (length(intercept_input) != 1L || !is.finite(intercept_input)) {
+    ng_stop("effects$intercept must be one finite number")
+  }
+  if (is.null(effects$beta_var)) {
+    beta_var_input <- stats::setNames(rep(0, ncol(geno)), colnames(geno))
+  } else {
+    if (is.null(names(effects$beta_var)) || anyDuplicated(names(effects$beta_var))) {
+      ng_stop("effects$beta_var must be NULL or a uniquely named marker-variance vector")
+    }
+    missing_beta_var <- setdiff(colnames(geno), names(effects$beta_var))
+    if (length(missing_beta_var)) {
+      ng_stop("effects$beta_var is missing markers used by geno: ",
+              paste(utils::head(missing_beta_var, 6L), collapse = ", "))
+    }
+    beta_var_input <- suppressWarnings(as.numeric(effects$beta_var[colnames(geno)]))
+    if (any(!is.finite(beta_var_input)) || any(beta_var_input < 0)) {
+      ng_stop("effects$beta_var must contain finite non-negative marginal variances")
+    }
+    names(beta_var_input) <- colnames(geno)
+  }
   # The DH/RIL recombination-variance formula assumes both parents are fully
   # inbred (marker dosage in {0, 2}). When parents carry residual heterozygosity
   # the formula Cov(y_k, y_l) = d_k d_l (1 - 2 r_kl) no longer holds because the
   # F1 may be homozygous at some heterozygous loci. Refuse to silently produce
-  # wrong PMV: detect non-inbred dosages and either error out or downgrade to
-  # the relationship-distance baseline.
+  # wrong PMV: detect non-inbred dosages and require the information needed by
+  # the exact phased-parent correction.
   # A doubled haploid is 100% homozygous by construction, so DH material gets a
   # STRICT het-marker fraction floor (`dh_marker_fraction`, default 0.5%): true
   # het is a data error (wrong ploidy, contamination, a RIL mislabelled DH), and
@@ -89,15 +121,31 @@ ng_score_crosses <- function(geno,
       paste(head(inbred_audit$violators, 4L), collapse = ", "), parent_type
     )
     ng_stop(msg)
-  } else if (!block_het && length(inbred_audit$violators)) {
-    warning(sprintf(
-      "parent_type = 'ril': treating %d parent(s) as RILs with residual heterozygosity (expected for finite selfing). Note: DH / fully fixed lines are homozygous by construction -- if these were meant to be DH, the het loci are a data error, not biology (use parent_type = 'dh'/'inbred' to block). Supply phased_haplotypes to apply the exact residual-het variance (ng_gms_additive_var_general) to het-parent crosses; WITHOUT phased haplotypes the DH/RIL vpm / pmv below treat parents as fully inbred and are biased low (they omit the parental p(1-p) gametic segregation at the het loci; bias grows with the het fraction -- small for advanced RILs, larger for early generations). See docs/design/residual-het-parent-variance.md.",
-      length(inbred_audit$violators)
-    ), call. = FALSE)
+  }
+  has_residual_het <- !block_het && any(inbred_audit$fraction > 0)
+  if (has_residual_het && is.null(phased_haplotypes)) {
+    ng_stop("parent_type = 'ril' includes residual-heterozygous parents, but phased_haplotypes ",
+            "was not supplied. The inbred a'Ra kernel is biased low for these parents; ",
+            "supply complete phased haplotypes or use fully inbred parents.")
   }
   if (is.null(pairs)) pairs <- ng_make_pairs(ids, include_self = include_self)
+  pairs <- as.data.frame(pairs, stringsAsFactors = FALSE)
+  if (!all(c("parent1", "parent2") %in% names(pairs))) {
+    ng_stop("pairs must contain parent1 and parent2")
+  }
   pairs$parent1 <- as.character(pairs$parent1)
   pairs$parent2 <- as.character(pairs$parent2)
+  if (anyNA(pairs$parent1) || anyNA(pairs$parent2) ||
+      any(!nzchar(trimws(pairs$parent1))) || any(!nzchar(trimws(pairs$parent2)))) {
+    ng_stop("pairs must contain non-missing, non-blank parent IDs")
+  }
+  unknown_parents <- setdiff(unique(c(pairs$parent1, pairs$parent2)), ids)
+  if (length(unknown_parents)) {
+    ng_stop("pairs reference parents absent from ids: ", paste(unknown_parents, collapse = ", "))
+  }
+  if (anyDuplicated(ng_group_pair_key(pairs$parent1, pairs$parent2))) {
+    ng_stop("pairs contains duplicate unordered parent pairs")
+  }
 
   mean_source <- ng_choose_mean_source(
     geno = geno,
@@ -114,14 +162,29 @@ ng_score_crosses <- function(geno,
     ng_parent_kinship(geno, method = grm_method)
   } else {
     pk <- as.matrix(parent_kinship)
-    if (!is.null(rownames(pk)) && all(ids %in% rownames(pk))) pk[ids, ids, drop = FALSE] else pk
+    if (!is.numeric(pk) || nrow(pk) != ncol(pk) || is.null(rownames(pk)) ||
+        is.null(colnames(pk)) || anyDuplicated(rownames(pk)) || anyDuplicated(colnames(pk)) ||
+        !setequal(rownames(pk), colnames(pk))) {
+      ng_stop("parent_kinship must be a uniquely named square additive-relationship matrix")
+    }
+    missing_k <- setdiff(ids, intersect(rownames(pk), colnames(pk)))
+    if (length(missing_k)) {
+      ng_stop("parent_kinship is missing scored parents: ", paste(missing_k, collapse = ", "))
+    }
+    pk <- pk[ids, ids, drop = FALSE]
+    if (any(!is.finite(pk)) || max(abs(pk - t(pk))) > 1e-8) {
+      ng_stop("parent_kinship must contain a finite symmetric additive-relationship matrix")
+    }
+    pk <- (pk + t(pk)) / 2
+    ev <- eigen(pk, symmetric = TRUE, only.values = TRUE)$values
+    tol <- 1e-8 * max(1, max(abs(ev)))
+    if (min(ev) < -tol) ng_stop("parent_kinship must be positive semidefinite")
+    pk
   }
   rel_var <- ng_pair_relationship_variance(pairs, K)
 
-  beta <- effects$beta[colnames(geno)]
-  beta[!is.finite(beta)] <- 0
-  beta_var <- effects$beta_var[colnames(geno)]
-  beta_var[!is.finite(beta_var)] <- 0
+  beta <- beta_input
+  beta_var <- beta_var_input
   marker_map <- ng_prepare_marker_map(marker_map, colnames(geno), model = recomb_model)
   sorted <- ng_sort_by_map(geno, beta, beta_var, marker_map)
 
@@ -201,16 +264,17 @@ ng_score_crosses <- function(geno,
       beta_var = sorted$beta_var, beta_cov_full = posterior_cov_full)
     dh_var <- corr$vpm; dh_pmv <- corr$pmv; dh_pmv_full <- corr$pmv_full
   }
-  effect_rel <- max(0, min(1, mean_source$reliability))
-  # Blend mean sources with a smooth weight in the marker-effect reliability.
-  # This mixes BLUEs/adjusted phenotypes (no marker-effect uncertainty) with
-  # mid-parental GEBVs (genomic prediction), all in genetic-value units.
-  blended_mean <- effect_rel * mpv_gebv + (1 - effect_rel) * adjusted_mean
-  blended_mean[!is.finite(blended_mean)] <- parent_mean[!is.finite(blended_mean)]
+  effect_rel <- suppressWarnings(as.numeric(mean_source$reliability[[1L]]))
+  if (!is.finite(effect_rel)) effect_rel <- NA_real_
+  # Compatibility name only: this is now the midpoint of the explicitly chosen
+  # mean source, not an uncalibrated phenotype/GEBV interpolation.
+  blended_mean <- parent_mean
 
   out <- pairs
   out$mean_source <- mean_source$source
   out$effect_reliability <- effect_rel
+  out$effect_reliability_is_calibrated <- isTRUE(mean_source$reliability_is_calibrated)
+  out$effect_cv_predictive_r2 <- suppressWarnings(as.numeric((mean_source$cv_predictive_r2 %||% NA_real_)[[1L]]))
   out$progeny_target <- target
   out$mid_parent_value <- as.numeric(mpv_gebv)
   out$cross_mean <- as.numeric(parent_mean)
@@ -220,16 +284,16 @@ ng_score_crosses <- function(geno,
   # Relationship-distance metric (NOT a variance). Reported separately so the
   # OCS optimizer can use it as a diversity penalty; never combined with PMV.
   out$parent_distance <- rel_var$parent_distance
+  out$pair_relationship <- rel_var$pair_relationship
   out$pair_kinship <- rel_var$pair_kinship
   # Expected inbreeding of the immediate progeny of each cross = coancestry of the two
-  # parents (Meuwissen OCS: F_progeny = f(p1, p2)). pair_kinship is read off a VanRaden
-  # genomic relationship matrix G, and G_XY ~ numerator relationship ~ 2 x coancestry
-  # for non-inbred parents, so F_progeny ~ pair_kinship / 2. This is the pedigree/
+  # parents (Meuwissen OCS: F_progeny = f(p1, p2)). pair_relationship is read from
+  # the VanRaden genomic relationship matrix; pair_kinship is relationship / 2. This is the pedigree/
   # relationship-scale progeny inbreeding managed in tactical mate selection; it is distinct
   # from the eventual homozygosity of a finished DH/RIL line (which tends to 1
   # regardless of the parents). Reported so the optimizer and reports can treat progeny
   # inbreeding as a first-class quantity alongside parental (group) coancestry.
-  out$expected_progeny_inbreeding <- pmax(0, as.numeric(rel_var$pair_kinship) / 2)
+  out$expected_progeny_inbreeding <- pmax(0, as.numeric(rel_var$pair_kinship))
   # Within-family genetic-value variances under the requested progeny target
   # (DH or RIL), in (genetic value)^2 units. pmv adds the diagonal
   # posterior marker-effect uncertainty to vpm (VPM). When the
@@ -257,7 +321,7 @@ ng_score_crosses <- function(geno,
   out$usefulness_pmv_adj       <- out$cross_mean_adj    + i * sqrt(out$pmv)
   out$usefulness_vpm_blend <- out$cross_mean_blend             + i * sqrt(out$vpm)
   out$usefulness_pmv_blend     <- out$cross_mean_blend             + i * sqrt(out$pmv)
-  out$rank_score <- if (effect_rel >= min_effect_reliability) out$usefulness_pmv_gebv else out$usefulness_pmv_blend
+  out$rank_score <- out$usefulness_pmv_blend
   attr(out, "progeny_target") <- target
   attr(out, "recomb_model") <- recomb_model
   out
@@ -267,16 +331,18 @@ ng_pair_relationship_variance <- function(pairs, K) {
   p1 <- match(pairs$parent1, rownames(K))
   p2 <- match(pairs$parent2, rownames(K))
   v <- 0.5 * (diag(K)[p1] + diag(K)[p2]) - K[cbind(p1, p2)]
+  pair_relationship <- as.numeric(K[cbind(p1, p2)])
   data.frame(
     parent_distance = pmax(as.numeric(v), 0),
-    pair_kinship = as.numeric(K[cbind(p1, p2)])
+    pair_relationship = pair_relationship,
+    pair_kinship = pair_relationship / 2
   )
 }
 
 # Distribution of expected progeny inbreeding across a set of crosses (a
 # progeny-inbreeding histogram). `x` may be a scored candidate table or a
 # selected mating plan (uses expected_progeny_inbreeding, else falls back to
-# pair_kinship / 2), or a plain numeric vector of progeny-inbreeding values. Returns a
+# pair_kinship), or a plain numeric vector of progeny-inbreeding values. Returns a
 # per-bin data.frame (bin bounds, count, proportion) with mean/max/n as attributes;
 # ng_write_progeny_inbreeding_histogram_json() serializes it for the frontend.
 ng_progeny_inbreeding_histogram <- function(x, breaks = 20L, value_range = NULL) {
@@ -284,7 +350,7 @@ ng_progeny_inbreeding_histogram <- function(x, breaks = 20L, value_range = NULL)
     if ("expected_progeny_inbreeding" %in% names(x)) {
       as.numeric(x$expected_progeny_inbreeding)
     } else if ("pair_kinship" %in% names(x)) {
-      as.numeric(x$pair_kinship) / 2
+      as.numeric(x$pair_kinship)
     } else {
       ng_stop("x must have an expected_progeny_inbreeding or pair_kinship column")
     }
@@ -326,6 +392,57 @@ ng_dh_recomb_variance_pairs <- function(geno,
                                         recomb_model = NULL,
                                         target = c("DH", "RIL")) {
   target <- match.arg(target)
+  # This is an internal, performance-oriented kernel, but malformed dimensions
+  # must still fail in R rather than reaching native code. In particular, an
+  # absent chr_index previously became integer(0) at the .Call boundary and the
+  # C++ loop indexed beyond it. Public scoring prepares/sorts the map before this
+  # call; direct validation/research callers must do the same.
+  geno <- ng_as_numeric_matrix(geno, "geno")
+  marker_map <- as.data.frame(marker_map, stringsAsFactors = FALSE)
+  m <- ncol(geno)
+  if (length(beta) != m || length(beta_var) != m) {
+    ng_stop("beta and beta_var must each have one value per genotype marker")
+  }
+  if (any(!is.finite(as.numeric(beta))) ||
+      any(!is.finite(as.numeric(beta_var))) || any(as.numeric(beta_var) < 0)) {
+    ng_stop("beta must be finite and beta_var must be finite and non-negative")
+  }
+  required_map <- c("marker", "chr", "chr_index", "pos_cm")
+  missing_map <- setdiff(required_map, names(marker_map))
+  if (length(missing_map)) {
+    ng_stop("marker_map must be prepared with ng_prepare_marker_map and contain: ",
+            paste(required_map, collapse = ", "), "; missing: ",
+            paste(missing_map, collapse = ", "))
+  }
+  if (nrow(marker_map) != m ||
+      length(marker_map$chr_index) != m || length(marker_map$pos_cm) != m) {
+    ng_stop("marker_map must have exactly one prepared row per genotype marker")
+  }
+  if (is.null(colnames(geno)) ||
+      !identical(as.character(marker_map$marker), as.character(colnames(geno)))) {
+    ng_stop("prepared marker_map rows must match genotype markers in the same order")
+  }
+  if (anyNA(marker_map$chr_index) || any(!is.finite(as.numeric(marker_map$pos_cm)))) {
+    ng_stop("prepared marker_map chr_index and pos_cm must be complete and finite")
+  }
+  map_order <- order(marker_map$chr_index, marker_map$pos_cm, marker_map$marker)
+  if (!identical(as.integer(map_order), seq_len(m))) {
+    ng_stop("marker_map and genotype columns must be sorted by chromosome and genetic position")
+  }
+  ids <- as.character(ids)
+  if (length(ids) != nrow(geno) || anyNA(ids) || any(!nzchar(ids)) || anyDuplicated(ids)) {
+    ng_stop("ids must be unique, non-missing, and have one value per genotype row")
+  }
+  pairs <- as.data.frame(pairs, stringsAsFactors = FALSE)
+  if (!all(c("parent1", "parent2") %in% names(pairs))) {
+    ng_stop("pairs must contain parent1 and parent2")
+  }
+  pairs$parent1 <- as.character(pairs$parent1)
+  pairs$parent2 <- as.character(pairs$parent2)
+  if (anyNA(pairs$parent1) || anyNA(pairs$parent2) ||
+      length(setdiff(unique(c(pairs$parent1, pairs$parent2)), ids))) {
+    ng_stop("pairs must reference non-missing parent IDs present in ids")
+  }
   if (is.null(recomb_model)) {
     recomb_model <- if ("recomb_model" %in% names(marker_map)) {
       unique(as.character(marker_map$recomb_model))[[1L]]
@@ -725,8 +842,8 @@ ng_gms_additive_var_general <- function(parent1, parent2, haplo_mat, beta,
 # the exact phased-haplotype formula. Only het-parent crosses are touched;
 # inbred-parent crosses keep the a'Ra path byte-identical. Uses a DENSE
 # recombination kernel (the het correction is exact only densely; the a'Ra
-# window_cm truncation does not apply to it). Silently no-ops if the phased
-# haplotypes do not cover the scored markers.
+# window_cm truncation does not apply to it). Phase input is validated strictly
+# against the dosage matrix; incomplete or inconsistent phase is an error.
 ng_apply_het_parent_correction <- function(vpm, pmv, pmv_full,
                                            phased_haplotypes, sorted, pairs,
                                            target, recomb_model,
@@ -738,12 +855,36 @@ ng_apply_het_parent_correction <- function(vpm, pmv, pmv_full,
   }
   markers <- sorted$marker_map$marker
   ph <- phased_haplotypes
-  if (!all(markers %in% dimnames(ph)[[3L]])) return(list(vpm = vpm, pmv = pmv, pmv_full = pmv_full))
-  ph <- ph[, , markers, drop = FALSE]
+  ids_ph <- dimnames(ph)[[1L]]
+  marker_ph <- dimnames(ph)[[3L]]
+  if (anyDuplicated(ids_ph) || anyDuplicated(marker_ph)) {
+    ng_stop("phased_haplotypes sample and marker names must be unique")
+  }
+  missing_markers <- setdiff(markers, marker_ph)
+  if (length(missing_markers)) {
+    ng_stop("phased_haplotypes is missing scored markers: ",
+            paste(utils::head(missing_markers, 6L), collapse = ", "))
+  }
+  required_parents <- unique(c(as.character(pairs$parent1), as.character(pairs$parent2)))
+  missing_parents <- setdiff(required_parents, ids_ph)
+  if (length(missing_parents)) {
+    ng_stop("phased_haplotypes is missing scored parents: ",
+            paste(utils::head(missing_parents, 6L), collapse = ", "))
+  }
+  ph <- ph[required_parents, , markers, drop = FALSE]
+  if (any(!is.finite(ph)) || any(abs(ph - round(ph)) > 1e-8) || any(!(round(ph) %in% c(0, 1)))) {
+    ng_stop("phased_haplotypes must contain finite allele states 0/1")
+  }
+  dosage_from_phase <- ph[, 1L, , drop = FALSE] + ph[, 2L, , drop = FALSE]
+  dim(dosage_from_phase) <- c(length(required_parents), length(markers))
+  dimnames(dosage_from_phase) <- list(required_parents, markers)
+  observed_dosage <- sorted$geno[required_parents, markers, drop = FALSE]
+  if (any(!is.finite(observed_dosage)) || any(abs(dosage_from_phase - observed_dosage) > 1e-8)) {
+    ng_stop("phased_haplotypes allele sums must exactly match the scored genotype dosages")
+  }
   ids_ph <- dimnames(ph)[[1L]]
   het_of <- function(id) id %in% ids_ph && any(ph[id, 1L, ] != ph[id, 2L, ])
-  need <- intersect(unique(c(pairs$parent1, pairs$parent2)), ids_ph)
-  if (!length(need)) return(list(vpm = vpm, pmv = pmv, pmv_full = pmv_full))
+  need <- required_parents
   hap_rows <- matrix(0, nrow = 2L * length(need), ncol = length(markers),
                      dimnames = list(as.vector(rbind(paste0(need, "_HapA"),
                                                      paste0(need, "_HapB"))), markers))

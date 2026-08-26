@@ -42,7 +42,8 @@ ng_polyploid_prep_dosage <- function(dosage, ploidy, min_maf = 0, impute_missing
   maf <- pmin(p, 1 - p)
   keep <- is.finite(maf) & maf >= min_maf & p > 0 & p < 1
   if (!any(keep)) ng_stop("no polymorphic markers pass min_maf = ", min_maf)
-  list(M = M[, keep, drop = FALSE], p = p[keep], ids = ids, ploidy = ploidy)
+  list(M = M[, keep, drop = FALSE], p = p[keep], ids = ids, ploidy = ploidy,
+       missing = (!obs)[, keep, drop = FALSE])
 }
 
 # Correct polyploid additive GRM, generalizing two standard estimators to arbitrary ploidy.
@@ -81,11 +82,15 @@ ng_polyploid_grm <- function(dosage,
 
 # Polyploid DOMINANCE (digenic) relationship matrix -- needed when both additive and dominance
 # effects drive parent selection and crossing (e.g. cassava and other outbred clonal crops). The
-# digenic dominance covariate at a marker is the number of heterozygous allele pairs, H = d*(ploidy
-# - d) (for diploid this is the classic heterozygote indicator scaled), centered on its mean. As
-# with the additive GRM: "vanraden" uses one overall scaling; "yang" standardizes each marker.
-# The crossproduct is BLAS-backed; for very large marker sets the fused C++ kernel avoids
-# materializing the design matrix (used when compiled and use_cpp = TRUE).
+# digenic dominance covariate starts from the number of heterozygous allele pairs,
+# H = d*(ploidy-d), and removes its expected additive regression under polysomic
+# Hardy-Weinberg equilibrium:
+#   D = H - P(P-1)pq - (P-1)(1-2p)(d-Pp).
+# At P=2 this is exactly the Vitezica statistical dominance coding
+# (-2p^2, 2pq, -2q^2), so the matrix does not silently recycle additive signal
+# as "dominance". "vanraden" scales by sum Var(D_k); "yang" standardizes each
+# marker by sqrt(Var(D_k)). Missing genotypes contribute zero centered
+# information. The crossproduct is BLAS-backed.
 ng_polyploid_dominance_grm <- function(dosage,
                                        ploidy = 2L,
                                        method = c("vanraden", "yang"),
@@ -96,15 +101,25 @@ ng_polyploid_dominance_grm <- function(dosage,
   method <- match.arg(method)
   prep <- ng_polyploid_prep_dosage(dosage, ploidy, min_maf = min_maf, impute_missing = impute_missing)
   M <- prep$M; ids <- prep$ids; pk <- prep$p; ploidy <- prep$ploidy
-  H <- M * (ploidy - M)                              # digenic heterozygosity covariate
-  hbar <- colMeans(H)
-  D <- sweep(H, 2L, hbar, "-")                       # centered dominance design
+  W <- sweep(M, 2L, ploidy * pk, "-")
+  H <- M * (ploidy - M)
+  hbar <- ploidy * (ploidy - 1) * pk * (1 - pk)
+  b <- (ploidy - 1) * (1 - 2 * pk)
+  D <- sweep(H, 2L, hbar, "-") - sweep(W, 2L, b, "*")
+  if (any(prep$missing)) D[prep$missing] <- 0
+  dosage_support <- 0:ploidy
+  var_d <- vapply(seq_along(pk), function(j) {
+    dj <- dosage_support * (ploidy - dosage_support) - hbar[[j]] -
+      b[[j]] * (dosage_support - ploidy * pk[[j]])
+    sum(stats::dbinom(dosage_support, size = ploidy, prob = pk[[j]]) * dj^2)
+  }, numeric(1L))
   if (identical(method, "yang")) {
-    sdv <- sqrt(apply(H, 2L, stats::var)); sdv[!is.finite(sdv) | sdv <= 0] <- 1
+    sdv <- sqrt(var_d); sdv[!is.finite(sdv) | sdv <= 0] <- Inf
     Z <- sweep(D, 2L, sdv, "/")
+    Z[!is.finite(Z)] <- 0
     G <- tcrossprod(Z) / ncol(Z)
   } else {
-    denom <- sum(apply(H, 2L, stats::var))
+    denom <- sum(var_d)
     if (!is.finite(denom) || denom <= 0) ng_stop("dominance GRM scaling denominator is not positive")
     G <- tcrossprod(D) / denom
   }
@@ -113,6 +128,7 @@ ng_polyploid_dominance_grm <- function(dosage,
   attr(G, "n_markers") <- ncol(M)
   attr(G, "method") <- paste0(method, "_dominance_polyploid")
   attr(G, "component") <- "dominance"
+  attr(G, "coding") <- "digenic_statistical_orthogonal"
   if (isTRUE(return_freq)) attr(G, "allele_freq") <- pk
   G
 }
@@ -126,7 +142,8 @@ ng_polyploid_qc <- function(dosage,
                             max_missing_marker = 0.20,
                             max_missing_sample = 0.20,
                             min_maf = 0.0,
-                            drop_monomorphic = TRUE) {
+                            drop_monomorphic = TRUE,
+                            impute_missing = FALSE) {
   ploidy <- suppressWarnings(as.numeric(ploidy)[[1]])
   if (!is.finite(ploidy) || ploidy < 2 || abs(ploidy - round(ploidy)) > 1e-8) {
     ng_stop("ploidy must be an integer >= 2")
@@ -159,6 +176,19 @@ ng_polyploid_qc <- function(dosage,
 
   keep_m <- !drop_marker; keep_s <- !drop_sample
   clean <- M[keep_s, keep_m, drop = FALSE]
+  n_imputed <- 0L
+  if (isTRUE(impute_missing) && anyNA(clean)) {
+    for (j in seq_len(ncol(clean))) {
+      missing_j <- !is.finite(clean[, j])
+      if (!any(missing_j)) next
+      observed_j <- as.integer(clean[!missing_j, j])
+      if (!length(observed_j)) next
+      tab_j <- table(observed_j)
+      mode_j <- as.integer(names(tab_j)[which.max(tab_j)])
+      clean[missing_j, j] <- mode_j
+      n_imputed <- n_imputed + sum(missing_j)
+    }
+  }
 
   marker_report <- data.frame(marker = mk, missing = marker_missing, allele_freq = p,
                               maf = maf, monomorphic = monomorphic, dropped = drop_marker,
@@ -171,9 +201,11 @@ ng_polyploid_qc <- function(dosage,
     n_markers_dropped = sum(drop_marker), n_samples_dropped = sum(drop_sample),
     n_monomorphic = sum(monomorphic), n_duplicate_samples = length(dup_samples),
     n_duplicate_markers = length(dup_markers),
+    n_missing_imputed = n_imputed,
     n_samples_clean = nrow(clean), n_markers_clean = ncol(clean)
   )
-  pass <- n_out_of_range == 0L && !length(dup_samples) && ncol(clean) > 0L && nrow(clean) > 1L
+  pass <- n_out_of_range == 0L && !length(dup_samples) && !length(dup_markers) &&
+    !anyNA(clean) && ncol(clean) > 0L && nrow(clean) > 1L
   list(pass = pass, summary = summary, marker_report = marker_report,
        sample_report = sample_report, duplicate_samples = dup_samples,
        duplicate_markers = dup_markers, clean = clean)

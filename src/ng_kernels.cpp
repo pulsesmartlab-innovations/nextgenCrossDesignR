@@ -157,15 +157,46 @@ DataFrame ng_dh_recomb_pairs_cpp(NumericMatrix geno,
                                  double window_cm = -1.0) {
   const int n_pairs = pair_parent1.size();
   const int m = geno.ncol();
+  if (beta.size() != m || beta_var.size() != m || chr.size() != m || pos_cm.size() != m) {
+    stop("geno, beta, beta_var, chr, and pos_cm must have matching marker dimensions");
+  }
+  if (ids.size() != geno.nrow()) {
+    stop("ids must have one value per genotype row");
+  }
+  if (pair_parent2.size() != n_pairs) {
+    stop("pair_parent1 and pair_parent2 must have equal lengths");
+  }
   std::unordered_map<std::string, int> id_index;
-  for (int i = 0; i < ids.size(); ++i) id_index[as<std::string>(ids[i])] = i;
+  for (int i = 0; i < ids.size(); ++i) {
+    if (CharacterVector::is_na(ids[i])) stop("ids must not contain missing values");
+    const std::string id = as<std::string>(ids[i]);
+    if (id.empty()) stop("ids must not contain blank values");
+    if (id_index.find(id) != id_index.end()) stop("ids must be unique");
+    id_index[id] = i;
+  }
+  for (int k = 0; k < m; ++k) {
+    if (IntegerVector::is_na(chr[k]) || !R_finite(pos_cm[k]) ||
+        !R_finite(beta[k]) || !R_finite(beta_var[k]) || beta_var[k] < 0.0) {
+      stop("chr, pos_cm, beta, and beta_var must be complete and valid");
+    }
+  }
 
   NumericVector dh_recomb_var(n_pairs);
   NumericVector dh_pmv_var(n_pairs);
 
   for (int r = 0; r < n_pairs; ++r) {
-    const int i = id_index[as<std::string>(pair_parent1[r])];
-    const int j = id_index[as<std::string>(pair_parent2[r])];
+    if (CharacterVector::is_na(pair_parent1[r]) || CharacterVector::is_na(pair_parent2[r])) {
+      stop("pair parent IDs must not be missing");
+    }
+    const std::string parent1 = as<std::string>(pair_parent1[r]);
+    const std::string parent2 = as<std::string>(pair_parent2[r]);
+    const std::unordered_map<std::string, int>::const_iterator it1 = id_index.find(parent1);
+    const std::unordered_map<std::string, int>::const_iterator it2 = id_index.find(parent2);
+    if (it1 == id_index.end() || it2 == id_index.end()) {
+      stop("pair parent IDs must be present in ids");
+    }
+    const int i = it1->second;
+    const int j = it2->second;
     double v = 0.0;
     double pmv = 0.0;
 

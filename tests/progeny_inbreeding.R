@@ -4,7 +4,7 @@ helper <- c(file.path("tests", "helper_load.R"), "helper_load.R",
             file.path("..", "tests", "helper_load.R"))
 source(helper[file.exists(helper)][[1L]])
 
-# --- 1. expected_progeny_inbreeding == parental coancestry (pair_kinship / 2) ---
+# --- 1. expected_progeny_inbreeding == parental coancestry (relationship / 2) ---
 # Hand-built relationship matrix so we know the answer exactly.
 parents <- c("A", "B", "C", "D")
 K <- matrix(c(
@@ -16,11 +16,11 @@ K <- matrix(c(
 pairs <- data.frame(parent1 = c("A", "A", "C"), parent2 = c("B", "C", "D"),
                     stringsAsFactors = FALSE)
 rv <- ng_pair_relationship_variance(pairs, K)
-# ng_score_crosses computes expected_progeny_inbreeding = pair_kinship / 2; check the
-# relationship the metric encodes directly against the hand matrix.
+# `K` is a relationship matrix; pair_kinship and progeny F are K_ij / 2.
 expected_f <- c(0.50, 0.10, 0.30) / 2
-stopifnot(isTRUE(all.equal(rv$pair_kinship, c(0.50, 0.10, 0.30))))
-stopifnot(isTRUE(all.equal(pmax(0, rv$pair_kinship / 2), expected_f)))
+stopifnot(isTRUE(all.equal(rv$pair_relationship, c(0.50, 0.10, 0.30))))
+stopifnot(isTRUE(all.equal(rv$pair_kinship, expected_f)))
+stopifnot(isTRUE(all.equal(pmax(0, rv$pair_kinship), expected_f)))
 
 # --- 2. histogram bins sum to n, mean attribute matches ---
 set.seed(7)
@@ -46,8 +46,8 @@ L <- matrix(rnorm(np * np, 0, 0.3), np, np)
 G <- crossprod(L) / np
 diag(G) <- diag(G) + 1
 dimnames(G) <- list(pp, pp)
-scores$pair_kinship <- G[cbind(match(scores$parent1, pp), match(scores$parent2, pp))]
-scores$expected_progeny_inbreeding <- pmax(0, scores$pair_kinship / 2)
+scores$pair_kinship <- G[cbind(match(scores$parent1, pp), match(scores$parent2, pp))] / 2
+scores$expected_progeny_inbreeding <- pmax(0, scores$pair_kinship)
 
 base <- ng_optimize_mating_plan(scores, 12L, parent_kinship = G, lambda_progeny_inbreeding = 0)
 pen  <- ng_optimize_mating_plan(scores, 12L, parent_kinship = G, lambda_progeny_inbreeding = 50)
@@ -77,10 +77,10 @@ stopifnot("assume_inbred" %in% names(formals(ng_design_crosses)))
 stopifnot("expected_progeny_inbreeding" %in% names(dg$scores))
 # (b) no bare `inbreeding` column silently created that could be confused
 stopifnot(!("inbreeding" %in% names(dg$scores)))
-# (c) the two are independent: the column is parent coancestry (pair_kinship/2), computed
+# (c) the two are independent: the column is parent coancestry (pair_kinship), computed
 #     regardless of the inbred assumption, and it varies across crosses (not a flag)
 stopifnot(isTRUE(all.equal(dg$scores$expected_progeny_inbreeding,
-                           pmax(0, dg$scores$pair_kinship / 2))))
+                           pmax(0, dg$scores$pair_kinship))))
 stopifnot(diff(range(dg$scores$expected_progeny_inbreeding)) > 0)
 # (d) the parameter-name families are disjoint stems: no ng_* API argument is named
 #     exactly "inbreeding", and the parent-state stem "assume_inbred" is never reused for
@@ -91,7 +91,7 @@ stopifnot("lambda_progeny_inbreeding" %in% opt_args) # progeny penalty is fully 
 stopifnot(!("assume_inbred" %in% opt_args))          # parent-state flag not leaked here
 
 # --- 5. the two collinear per-cross penalties must NOT stack ---
-# expected_progeny_inbreeding = max(0, pair_kinship/2), so lambda_progeny_inbreeding and
+# expected_progeny_inbreeding = max(0, pair_kinship), so lambda_progeny_inbreeding and
 # lambda_mating act on the SAME parent-pair axis and add. Setting BOTH is now a PREVENTIVE
 # hard error (was a one-time warning); use the unified mate_relatedness control instead.
 set.seed(112)
@@ -101,8 +101,8 @@ so <- data.frame(parent1 = po[cbo[, 1]], parent2 = po[cbo[, 2]], stringsAsFactor
 so$usefulness_pmv_gebv <- rnorm(nrow(so), 8, 2)
 Lo <- matrix(rnorm(no * no, 0, 0.3), no, no); Go <- crossprod(Lo) / no
 diag(Go) <- diag(Go) + 1; dimnames(Go) <- list(po, po)
-so$pair_kinship <- Go[cbind(match(so$parent1, po), match(so$parent2, po))]
-so$expected_progeny_inbreeding <- pmax(0, so$pair_kinship / 2)
+so$pair_kinship <- Go[cbind(match(so$parent1, po), match(so$parent2, po))] / 2
+so$expected_progeny_inbreeding <- pmax(0, so$pair_kinship)
 
 err <- tryCatch(ng_optimize_mating_plan(so, 10L, parent_kinship = Go, lambda_mating = 1,
                                         lambda_progeny_inbreeding = 10),

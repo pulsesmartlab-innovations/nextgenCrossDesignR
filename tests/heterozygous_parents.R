@@ -45,20 +45,29 @@ if (!grepl("inbred", conditionMessage(err))) {
   stop("Error message should mention the inbred-parent assumption: ", conditionMessage(err))
 }
 
-# ---- ng_score_crosses warns but proceeds when assume_inbred = FALSE ----------------------
-warned <- FALSE
-res <- withCallingHandlers(
+# ---- RIL residual heterozygosity requires complete phase ---------------------------------
+no_phase <- tryCatch(
   ng_score_crosses(geno = geno_outbred, effects = effects, marker_map = mk,
                    ids = rownames(geno_outbred),
                    adjusted_pheno = setNames(rnorm(2L), rownames(geno_outbred)),
                    selection_prop = 0.5, use_cpp = FALSE,
-                   assume_inbred = FALSE),
-  warning = function(w) {
-    if (grepl("inbred", conditionMessage(w))) warned <<- TRUE
-    invokeRestart("muffleWarning")
-  }
+                   parent_type = "ril"),
+  error = function(e) conditionMessage(e)
 )
-stopifnot(warned)
+stopifnot(grepl("phased_haplotypes", no_phase, fixed = TRUE))
+ph <- array(
+  0, dim = c(nrow(geno_outbred), 2L, ncol(geno_outbred)),
+  dimnames = list(rownames(geno_outbred), c("hap1", "hap2"), colnames(geno_outbred))
+)
+ph[, 1L, ] <- ifelse(geno_outbred == 2, 1, 0)
+ph[, 2L, ] <- ifelse(geno_outbred >= 1, 1, 0)
+res <- ng_score_crosses(
+  geno = geno_outbred, effects = effects, marker_map = mk,
+  ids = rownames(geno_outbred),
+  adjusted_pheno = setNames(rnorm(2L), rownames(geno_outbred)),
+  selection_prop = 0.5, use_cpp = FALSE,
+  parent_type = "ril", phased_haplotypes = ph
+)
 stopifnot(nrow(res) == 1L)
 stopifnot(is.finite(res$pmv))
 

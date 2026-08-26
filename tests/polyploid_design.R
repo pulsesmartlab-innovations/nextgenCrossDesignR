@@ -63,7 +63,8 @@ for (ploidy in c(2L, 4L)) {
   # --- optional dominance path (needs a phenotype) scores on genotypic value + heterosis ---
   pheno <- as.numeric(dosage %*% effects) + rnorm(np); names(pheno) <- ids
   plan_dom <- ng_polyploid_design_crosses(dosage, n_crosses = 8L, ploidy = ploidy, phenotype = pheno,
-                                     dominance = TRUE, gain = "usefulness", method = "greedy_local")
+                                     dominance = TRUE, allow_experimental_dominance = TRUE,
+                                     gain = "usefulness", method = "greedy_local")
   stopifnot(nrow(plan_dom) == 8L, isTRUE(attr(plan_dom, "summary")$dominance),
             "cross_usefulness" %in% names(plan_dom), "heterosis" %in% names(plan_dom))
   cat(sprintf("ploidy %d: score + design + controls + QC + dominance OK\n", ploidy))

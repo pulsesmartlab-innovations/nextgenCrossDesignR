@@ -65,7 +65,7 @@ stopifnot(isTRUE(all.equal(K, expected_K, tolerance = 1e-12)))
 pairs <- data.frame(parent1 = c("P1", "P1"), parent2 = c("P2", "P1"), stringsAsFactors = FALSE)
 co <- ng_poly4x_pair_coancestry(K, pairs)
 stopifnot(length(co) == 2L)
-stopifnot(isTRUE(all.equal(co, K[cbind(pairs$parent1, pairs$parent2)], tolerance = 1e-12)))
+stopifnot(isTRUE(all.equal(co, K[cbind(pairs$parent1, pairs$parent2)] / 2, tolerance = 1e-12)))
 
 K_dup <- K
 rownames(K_dup) <- c("P1", "P1")

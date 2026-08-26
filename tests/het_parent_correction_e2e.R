@@ -1,7 +1,6 @@
 # End-to-end: with parent_type='ril' AND phased_haplotypes, het-parent crosses
-# get the exact residual-het variance (ng_gms_additive_var_general) instead of
-# the biased-low inbred a'Ra. Inbred-only crosses (and every run without phased
-# haplotypes) are untouched.
+# get the exact residual-het variance (ng_gms_additive_var_general). A run
+# without phase is blocked rather than returning the biased-low inbred a'Ra.
 helper <- c(file.path("tests", "helper_load.R"), "helper_load.R",
             file.path("nextgen_cross_design", "tests", "helper_load.R"),
             file.path("..", "tests", "helper_load.R"))
@@ -26,21 +25,44 @@ args0 <- list(
   marker_map = mm, id_col = "NAME", map_position_unit = "bp", bp_per_cm = 1e6,
   n_crosses = 10L, progeny = "RIL", parent_type = "ril", seed = 1L)
 
-res_bias <- suppressWarnings(do.call(ng_run_cross_prediction, args0))                                # no phase
+missing_phase <- tryCatch(
+  do.call(ng_run_cross_prediction, args0),
+  error = function(e) conditionMessage(e)
+)
+stopifnot(grepl("phased_haplotypes", missing_phase, fixed = TRUE))
 res_corr <- suppressWarnings(do.call(ng_run_cross_prediction, c(args0, list(phased_haplotypes = ph)))) # phase
-cb <- res_bias$candidate_crosses; cc <- res_corr$candidate_crosses
-vcol <- grep("_vpm$", names(cb), value = TRUE)[1]
+cc <- res_corr$candidate_crosses
+vcol <- grep("_vpm$", names(cc), value = TRUE)[1]
 stopifnot(!is.na(vcol))
-o <- match(paste(cb$parent1, cb$parent2), paste(cc$parent1, cc$parent2))
-is_p1 <- cb$parent1 == "P01" | cb$parent2 == "P01"
+is_p1 <- cc$parent1 == "P01" | cc$parent2 == "P01"
+stopifnot(any(is_p1), all(is.finite(cc[[vcol]])))
 
-# het-parent crosses: corrected >= biased (never lower), strictly higher on average
-stopifnot(all(cc[[vcol]][o][is_p1] >= cb[[vcol]][is_p1] - 1e-9))
-stopifnot(mean(cc[[vcol]][o][is_p1]) > mean(cb[[vcol]][is_p1]))
-# inbred-only crosses: byte-identical (correction never touches them)
-stopifnot(isTRUE(all.equal(cb[[vcol]][!is_p1], cc[[vcol]][o][!is_p1])))
-# and a run WITHOUT phased haplotypes is unchanged for ALL crosses (no silent shift)
-stopifnot(inherits(res_bias, "ng_cross_prediction_result"))
+# Independently reconstruct the exact phased variance and the forbidden
+# inbred-parent shortcut for every P01 cross. This proves the runner wires the
+# exact kernel and that the missing-phase guard prevents a material downward bias.
+markers <- colnames(res_corr$cleaned_data$genotype)
+beta <- res_corr$marker_effects$yield$beta[markers]
+R <- ng_recomb_decay_matrix(res_corr$cleaned_data$marker_map, target = "RIL")
+hap_rows <- matrix(
+  0, nrow = 2L * length(ids), ncol = length(markers),
+  dimnames = list(as.vector(rbind(paste0(ids, "_HapA"), paste0(ids, "_HapB"))), markers)
+)
+for (k in seq_along(ids)) {
+  hap_rows[2L * k - 1L, ] <- ph[ids[[k]], 1L, markers]
+  hap_rows[2L * k, ] <- ph[ids[[k]], 2L, markers]
+}
+exact <- biased <- rep(NA_real_, nrow(cc))
+for (i in which(is_p1)) {
+  exact[[i]] <- ng_gms_additive_var_general(
+    cc$parent1[[i]], cc$parent2[[i]], hap_rows, beta, R, target = "RIL"
+  )[["VPM"]]
+  i1 <- match(cc$parent1[[i]], ids); i2 <- match(cc$parent2[[i]], ids)
+  a <- 0.5 * (geno[i1, markers] - geno[i2, markers]) * beta
+  biased[[i]] <- as.numeric(crossprod(a, R %*% a))
+}
+stopifnot(max(abs(cc[[vcol]][is_p1] - exact[is_p1])) < 1e-8)
+stopifnot(all(exact[is_p1] >= biased[is_p1] - 1e-9))
+stopifnot(mean(exact[is_p1]) > mean(biased[is_p1]))
 
-cat(sprintf("het_parent_correction_e2e: het-parent vpm corrected up (%.4f -> %.4f), inbred-only unchanged\n",
-            mean(cb[[vcol]][is_p1]), mean(cc[[vcol]][o][is_p1])))
+cat(sprintf("het_parent_correction_e2e: missing phase blocked; exact het-parent VPM exceeds biased a'Ra (%.4f -> %.4f)\n",
+            mean(biased[is_p1]), mean(exact[is_p1])))

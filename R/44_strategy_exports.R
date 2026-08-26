@@ -29,6 +29,7 @@ ng_frontier_export_payload <- function(scores,
     diversity_emphasis = vapply(seq_len(nrow(fr)),
       function(i) ng_frontier_achieved_emphasis(fr$mean_gain[[i]], gain_range), numeric(1)),
     mean_gain = fr$mean_gain,
+    group_relationship = fr$group_relationship,
     group_coancestry = fr$group_coancestry,
     mean_progeny_inbreeding = progeny_f,
     unique_parents = fr$unique_parents,
@@ -45,6 +46,7 @@ ng_frontier_export_payload <- function(scores,
          achieved_emphasis = s$achieved_emphasis,
          selected_lambda_group = s$selected_lambda_group,
          mean_gain = s$mean_gain,
+         group_relationship = s$group_relationship,
          group_coancestry = s$group_coancestry,
          mean_progeny_inbreeding = s$mean_progeny_inbreeding,
          unique_parents = s$unique_parents)
@@ -110,7 +112,7 @@ ng_run_comparison_payload <- function(runs, generated_at = Sys.time()) {
   if (!length(runs)) ng_stop("runs is empty")
   labels <- names(runs)
   if (is.null(labels)) labels <- paste0("run", seq_along(runs))
-  fields <- c("n_crosses", "mean_gain", "total_gain", "group_coancestry",
+  fields <- c("n_crosses", "mean_gain", "total_gain", "group_relationship", "group_coancestry",
               "mean_progeny_inbreeding", "max_progeny_inbreeding", "mean_pair_kinship",
               "unique_parents", "max_parent_use", "diversity_emphasis", "achieved_emphasis",
               "total_cost", "n_committed", "constraints_reduced_plan")

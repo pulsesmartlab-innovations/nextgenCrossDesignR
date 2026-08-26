@@ -127,6 +127,8 @@ missing_exe <- tryCatch(
     map_chr_col = "Chromosome",
     map_pos_bp_col = "Position_BP",
     map_position_unit = "bp",
+    bp_per_cm = 1e6,
+    parent_type = "inbred",
     trait_value_metric = "var_complex",
     duplicate_action = "none",
     n_crosses = 2,

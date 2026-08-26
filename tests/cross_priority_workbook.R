@@ -141,13 +141,13 @@ res_p <- ng_run_cross_prediction(
 ti_p <- ng_cpw_trait_table(stats::setNames(c("increase", "decrease"), c("yield", "protein")),
                            res_p$selected_crosses)
 sel_p <- ng_cpw_make_selected(res_p$selected_crosses, ti_p, NULL, NULL, 10L)
-pf_cols <- c("portfolio_profile", "cross_level", "cross_upside", "risk_bin_within_plan",
-             "cross_confidence_within_plan", "risk_driver_trait", "risk_driver_share",
+pf_cols <- c("portfolio_profile", "cross_level", "cross_upside", "risk_bin_within_candidate_pool",
+             "cross_confidence_within_candidate_pool", "risk_driver_trait", "risk_driver_share",
              "portfolio_basis")
 stopifnot(all(pf_cols %in% names(sel_p)))
 stopifnot(nrow(sel_p) == nrow(res_p$selected_crosses))
 # Values survive the transfer, not just the headers.
-stopifnot(all(sel_p$risk_bin_within_plan %in% c("low", "med", "high")))
+stopifnot(all(sel_p$risk_bin_within_candidate_pool %in% c("low", "med", "high")))
 stopifnot(all(sel_p$portfolio_profile %in%
                 c("breakthrough", "workhorse", "long_shot", "deprioritize")))
 stopifnot(all(is.finite(sel_p$cross_upside)), all(sel_p$cross_upside >= 0))

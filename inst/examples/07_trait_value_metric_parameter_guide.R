@@ -10,7 +10,8 @@
 #     uc_variance_source = "pmv", i.e. mean +/- i * SD). Never much worse than the best; clearly
 #     best for oligogenic traits with good training + heritability.
 #   * As a TOP-LEVEL trait_value_metric, "vpm" (friendly name: family_variance) and "pmv"
-#     (friendly name: reliable_family_variance) rank crosses by the predicted family VARIANCE
+#     (legacy token: reliable_family_variance; UI label: prediction-aware family variance / PMV)
+#     rank crosses by the predicted family VARIANCE
 #     itself -- segregating variation only, no mean term, direction-agnostic. They are NOT
 #     merit/usefulness rankings on their own. To combine mean + variance (the old usefulness
 #     behavior), use trait_value_metric = "usefulness" with uc_variance_source = "vpm" or "pmv".

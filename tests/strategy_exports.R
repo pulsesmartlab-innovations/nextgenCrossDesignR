@@ -14,8 +14,8 @@ scores <- data.frame(parent1 = pp[cmb[, 1]], parent2 = pp[cmb[, 2]],
 scores$usefulness_pmv_gebv <- rnorm(nrow(scores), 10, 2)
 L <- matrix(rnorm(np * np, 0, 0.3), np, np)
 G <- crossprod(L) / np; diag(G) <- diag(G) + 1; dimnames(G) <- list(pp, pp)
-scores$pair_kinship <- G[cbind(match(scores$parent1, pp), match(scores$parent2, pp))]
-scores$expected_progeny_inbreeding <- pmax(0, scores$pair_kinship / 2)
+scores$pair_kinship <- G[cbind(match(scores$parent1, pp), match(scores$parent2, pp))] / 2
+scores$expected_progeny_inbreeding <- pmax(0, scores$pair_kinship)
 n_crosses <- 12L
 
 # --- 1. frontier payload: schema, points, strategy presets ---

@@ -36,6 +36,13 @@ run <- function(geno, ...) do.call(ng_run_cross_prediction, c(list(
   trait_direction = data.frame(Trait = "yield", Selection_direction = "increase"),
   marker_map = mm, id_col = "NAME", map_position_unit = "bp", bp_per_cm = 1e6,
   n_crosses = 8L, progeny = "DH", seed = 1L), list(...)))
+phase_of <- function(geno) {
+  out <- array(0, c(nrow(geno), 2L, ncol(geno)),
+               dimnames = list(ids, c("hap1", "hap2"), colnames(geno)))
+  out[, 1L, ] <- ifelse(geno == 2, 1, 0)
+  out[, 2L, ] <- ifelse(geno >= 1, 1, 0)
+  out
+}
 
 # clean inbred data: default parent_type = "inbred" scores without error
 stopifnot(inherits(run(G), "ng_cross_prediction_result"))
@@ -44,10 +51,16 @@ err_dh <- tryCatch({ run(Ghet, parent_type = "dh"); NULL }, error = function(e) 
 stopifnot(!is.null(err_dh), grepl("BLOCKED", err_dh))
 err_default <- tryCatch({ run(Ghet); NULL }, error = function(e) conditionMessage(e))
 stopifnot(!is.null(err_default), grepl("BLOCKED", err_default))     # default blocks too
-# RIL declaration + het -> proceeds (with the biased-kernel warning)
-stopifnot(inherits(suppressWarnings(run(Ghet, parent_type = "ril")), "ng_cross_prediction_result"))
-# legacy assume_inbred=FALSE proceeds (mapped to ril) with a deprecation warning
-stopifnot(inherits(suppressWarnings(run(Ghet, assume_inbred = FALSE)), "ng_cross_prediction_result"))
+# RIL declaration + het requires phase; with complete consistent phase it proceeds.
+err_ril_phase <- tryCatch({ run(Ghet, parent_type = "ril"); NULL },
+                          error = function(e) conditionMessage(e))
+stopifnot(!is.null(err_ril_phase), grepl("phased_haplotypes", err_ril_phase, fixed = TRUE))
+stopifnot(inherits(run(Ghet, parent_type = "ril", phased_haplotypes = phase_of(Ghet)),
+                   "ng_cross_prediction_result"))
+# legacy assume_inbred=FALSE maps to RIL and is subject to the same phase requirement.
+stopifnot(inherits(suppressWarnings(run(
+  Ghet, assume_inbred = FALSE, phased_haplotypes = phase_of(Ghet)
+)), "ng_cross_prediction_result"))
 
 ## --- DH strict floor (0.5%) -----------------------------------------------
 # A DH line is 100% homozygous by construction, so 'dh' uses a strict 0.5%
@@ -60,7 +73,8 @@ stopifnot(!is.null(err_dh_above), grepl("BLOCKED", err_dh_above))       # dh: ab
 Gbelow <- G; Gbelow[1, 1] <- 1L                    # 1/240 = 0.42% < 0.5% floor (genotyping noise)
 stopifnot(inherits(run(Gbelow, parent_type = "dh"), "ng_cross_prediction_result"))       # dh: below floor passes
 stopifnot(inherits(run(Gabove, parent_type = "inbred"), "ng_cross_prediction_result"))   # inbred: 0.83% < 2%, tolerated
-stopifnot(inherits(suppressWarnings(run(Gabove, parent_type = "ril")), "ng_cross_prediction_result"))
+stopifnot(inherits(run(Gabove, parent_type = "ril", phased_haplotypes = phase_of(Gabove)),
+                   "ng_cross_prediction_result"))
 
 ## --- registry advertises parent_type as a control (so frontends can render it) ---
 ctls <- ng_backend_controls()
@@ -69,4 +83,4 @@ stopifnot(length(pt) == 1L)
 stopifnot(identical(pt[[1]]$default, "inbred"))
 stopifnot(setequal(vapply(pt[[1]]$choices, function(x) x$value, ""), c("inbred", "dh", "ril")))
 
-cat("parent_type_het_governance: DH 0.5% floor (above blocks, noise passes); inbred tolerates; RIL proceeds; legacy reconciled; registry advertises parent_type\n")
+cat("parent_type_het_governance: DH 0.5% floor; inbred tolerance; RIL phase required; legacy reconciled; registry advertises parent_type\n")

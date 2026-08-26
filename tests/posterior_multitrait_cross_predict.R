@@ -51,6 +51,7 @@ post_scores <- ng_posterior_multitrait_cross_predict(
   ids = rownames(geno_use), pairs = pairs,
   n_draws = 30L, posterior_method = "closed_form",
   genetic_covariance_method = "beta_posterior",
+  genetic_covariance = G_true,
   index_method = "economic_index", value_mode = "mean",
   selection_prop = 0.20, target = "DH",
   recomb_model = "haldane", use_cpp = FALSE,

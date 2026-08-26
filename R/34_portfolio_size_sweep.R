@@ -13,9 +13,10 @@
 #       algorithm. Robust on smooth concave curves; returns NA when the
 #       curve is too noisy, too linear, or has the maximum at a boundary.
 #   - "ne_target": smallest K with Ne_estimate >= ne_min (default 30).
-#       Ne_estimate = 1 / (2 * group_coancestry), Falconer-Mackay
-#       approximation. Sustainability-aware: keeps the program above an
-#       effective-population-size floor.
+#       The optimizer reports q = c'Gc on additive-relationship scale, so
+#       group coancestry is q/2 and Ne_estimate = 1/(2*(q/2)) = 1/q.
+#       This is a mating-contribution approximation, not demographic Ne.
+#       Sustainability-aware: keeps the program above a stated approximation floor.
 #   - "coancestry_budget": largest K with group_coancestry <= coancestry_max
 #       (default 0.05). Hard ceiling on relatedness pressure.
 #
@@ -57,6 +58,7 @@ ng_optimize_mating_plan_curve <- function(scores,
       K = K,
       total_gain        = plan_summary$total_gain,
       mean_gain         = plan_summary$mean_gain,
+      group_relationship = plan_summary$group_relationship,
       group_coancestry  = plan_summary$group_coancestry,
       unique_parents    = plan_summary$unique_parents,
       stringsAsFactors  = FALSE
@@ -64,18 +66,22 @@ ng_optimize_mating_plan_curve <- function(scores,
   }
   curve <- do.call(rbind, rows)
   rownames(curve) <- NULL
+  curve$total_score <- curve$total_gain
 
-  curve$marginal_gain <- c(NA_real_, diff(curve$total_gain))
+  curve$marginal_gain <- c(NA_real_, diff(curve$total_score))
+  curve$marginal_score <- curve$marginal_gain
   base_marg <- curve$marginal_gain[2L]
   curve$relative_marginal <- if (is.finite(base_marg) && base_marg > 0) {
     curve$marginal_gain / base_marg
   } else {
     rep(NA_real_, nrow(curve))
   }
-  # Ne_estimate: Falconer-Mackay approximation. Inf when coancestry is 0.
+  # Explicit aliases: group_relationship = c'Gc and group_coancestry = c'Gc/2.
+  curve$group_coancestry_coefficient <- curve$group_coancestry
+  # Ne_estimate: 1/(2 Delta-F), with Delta-F represented by q/2.
   curve$Ne_estimate <- ifelse(
-    is.finite(curve$group_coancestry) & curve$group_coancestry > 0,
-    1 / (2 * curve$group_coancestry),
+    is.finite(curve$group_relationship) & curve$group_relationship > 0,
+    1 / curve$group_relationship,
     Inf
   )
 

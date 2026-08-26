@@ -28,7 +28,10 @@ for (ploidy in c(2L, 4L)) {
   train <- 1:150; test <- 151:200
   # additive-only vs additive+dominance
   fit_a <- ng_polyploid_fit_effects(dosage[train, ], pheno[train], ploidy = ploidy, model = "additive")
-  fit_ad <- ng_polyploid_fit_effects(dosage[train, ], pheno[train], ploidy = ploidy, model = "additive_dominance")
+  fit_ad <- ng_polyploid_fit_effects(
+    dosage[train, ], pheno[train], ploidy = ploidy,
+    model = "additive_dominance", allow_experimental_dominance = TRUE
+  )
   stopifnot(is.null(fit_a$beta_dom), !is.null(fit_ad$beta_dom))
 
   # predict genotypic value on held-out clones
@@ -59,7 +62,10 @@ fo <- runif(mo, 0.05, 0.95)                       # skewed frequencies: the coll
 Mo <- matrix(rbinom(no * mo, Po, rep(fo, each = no)), no, mo,
              dimnames = list(ido, sprintf("W%03d", seq_len(mo))))
 yo <- as.numeric(Mo %*% rnorm(mo, 0, .2) + (Mo * (Po - Mo)) %*% rnorm(mo, 0, .1)) + rnorm(no, 0, .5)
-fo_fit <- ng_polyploid_fit_effects(Mo, yo, ploidy = Po, model = "additive_dominance", seed = 2L)
+fo_fit <- ng_polyploid_fit_effects(
+  Mo, yo, ploidy = Po, model = "additive_dominance", seed = 2L,
+  allow_experimental_dominance = TRUE
+)
 
 stopifnot(!is.null(fo_fit$b_orth), length(fo_fit$b_orth) == mo, all(is.finite(fo_fit$b_orth)))
 Wo <- sweep(Mo, 2L, Po * fo_fit$allele_freq, "-")

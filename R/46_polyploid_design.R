@@ -24,6 +24,9 @@ ng_polyploid_score_crosses <- function(dosage, effects, ploidy = 2L, pairs = NUL
                                   recomb_model = c("haldane", "kosambi")) {
   recomb_model <- match.arg(recomb_model)
   grm_method <- match.arg(grm_method)
+  valid_model <- ng_poly_validate_sexual_model(ploidy, double_reduction)
+  ploidy <- valid_model$ploidy
+  double_reduction <- valid_model$double_reduction
   geno <- ng_polyploid_as_dosage_matrix(dosage, ploidy = ploidy, name = "dosage")
   ids <- rownames(geno)
   if (is.null(ids) || anyNA(ids) || any(!nzchar(trimws(ids)))) ng_stop("dosage must have parent row names")
@@ -66,6 +69,26 @@ ng_polyploid_score_crosses <- function(dosage, effects, ploidy = 2L, pairs = NUL
       ng_stop("double_reduction is not modelled on the phased path; set double_reduction = 0 ",
               "to use phased haplotypes, or drop phased_haplotypes to use the dosage path")
     }
+    H <- as.matrix(phased_haplotypes)
+    storage.mode(H) <- "double"
+    if (any(!is.finite(H) | !(H %in% c(0, 1)))) {
+      ng_stop("phased_haplotypes must contain finite 0/1 allele indicators")
+    }
+    if (!setequal(colnames(H), colnames(geno))) {
+      ng_stop("phased_haplotypes marker columns must match dosage marker columns")
+    }
+    H <- H[, colnames(geno), drop = FALSE]
+    hinfo <- ng_poly_hap_parents(H, ploidy)
+    needed <- unique(c(p1, p2))
+    if (length(setdiff(needed, unique(hinfo$parent)))) {
+      ng_stop("phased_haplotypes is missing one or more parents used in pairs")
+    }
+    for (id in needed) {
+      phase_dosage <- colSums(H[hinfo$parent == id, , drop = FALSE])
+      if (!isTRUE(all.equal(as.numeric(phase_dosage), as.numeric(geno[id, ]), tolerance = 0))) {
+        ng_stop("phased_haplotypes dosage sums do not match dosage for parent ", id)
+      }
+    }
     poly_var <- ng_poly_phased_within_family_var(
       phased_haplotypes, data.frame(parent1 = p1, parent2 = p2, stringsAsFactors = FALSE),
       beta = stats::setNames(eff, colnames(geno)), marker_map = marker_map,
@@ -86,7 +109,8 @@ ng_polyploid_score_crosses <- function(dosage, effects, ploidy = 2L, pairs = NUL
     poly_var = poly_var,
     poly_usefulness = (gebv[p1] + gebv[p2]) / 2 + intensity * sqrt(pmax(poly_var, 0)),
     poly_parent1_gebv = gebv[p1], poly_parent2_gebv = gebv[p2],
-    variance_model = if (use_phase) "phased_exact" else "unlinked_phase_marginalized",
+    variance_model = if (use_phase) "phased_exact" else "uniform_phase_prior_expectation",
+    pair_relationship = ng_poly4x_pair_relationship(parent_kinship, pairs),
     pair_kinship = ng_poly4x_pair_coancestry(parent_kinship, pairs),
     stringsAsFactors = FALSE
   )
@@ -111,16 +135,29 @@ ng_polyploid_design_crosses <- function(dosage,
                                    run_qc = TRUE,
                                    qc = list(),
                                    dominance = FALSE,
+                                   allow_experimental_dominance = FALSE,
                                    gain = c("mean", "usefulness"),
                                    selection_prop = 0.10,
                                    double_reduction = 0,
                                    grm_method = c("vanraden", "yang"),
                                    ...) {
   gain <- match.arg(gain); grm_method <- match.arg(grm_method)
+  n_crosses_num <- suppressWarnings(as.numeric(n_crosses))
+  if (length(n_crosses_num) != 1L || !is.finite(n_crosses_num) || n_crosses_num < 1 ||
+      abs(n_crosses_num - round(n_crosses_num)) > 1e-8) {
+    ng_stop("n_crosses must be a positive integer")
+  }
+  n_crosses <- as.integer(round(n_crosses_num))
+  valid_model <- ng_poly_validate_sexual_model(ploidy, double_reduction)
+  ploidy <- valid_model$ploidy
+  double_reduction <- valid_model$double_reduction
   # Ploidy-aware QC first (dosage range 0..ploidy, missingness, MAF, monomorphic, duplicates);
   # cleans the dosage matrix before scoring. Set run_qc = FALSE to skip.
   if (isTRUE(run_qc)) {
     qc_res <- do.call(ng_polyploid_qc, c(list(dosage = dosage, ploidy = ploidy), qc))
+    if (!isTRUE(qc_res$pass)) {
+      ng_stop("polyploid QC failed; resolve out-of-range/missing/duplicate dosage issues or request explicit QC imputation")
+    }
     dosage <- qc_res$clean
     if (!is.null(effects) && length(effects) != ncol(dosage)) {
       # keep effects aligned to the markers QC retained
@@ -138,7 +175,8 @@ ng_polyploid_design_crosses <- function(dosage,
     y <- suppressWarnings(as.numeric(phenotype))
     names(y) <- if (!is.null(names(phenotype))) names(phenotype) else rownames(geno)
     fit <- ng_polyploid_fit_effects(geno, y[rownames(geno)], ploidy = ploidy,
-                                    model = "additive_dominance", seed = ridge_seed)
+                                    model = "additive_dominance", seed = ridge_seed,
+                                    allow_experimental_dominance = allow_experimental_dominance)
     scores <- ng_polyploid_score_crosses_dominance(fit, geno, pairs = pairs, selection_prop = selection_prop,
                                               double_reduction = double_reduction, grm_method = grm_method)
     gain_col <- if (identical(gain, "usefulness")) "cross_usefulness" else "cross_mean"

@@ -40,27 +40,55 @@ ng_multitrait_validation_scenario <- function(n_parents = 20L,
   p1 <- pairs$parent1
   p2 <- pairs$parent2
   latent_gap <- abs(latent[p1] - latent[p2])
-  realized_yield <- 0.5 * (parent_yield[p1] + parent_yield[p2]) +
+  mid_yield <- 0.5 * (parent_yield[p1] + parent_yield[p2])
+  mid_disease <- 0.5 * (parent_disease[p1] + parent_disease[p2])
+  mid_quality <- 0.5 * (parent_quality[p1] + parent_quality[p2])
+  realized_yield <- mid_yield +
     1.5 * latent_gap + stats::rnorm(nrow(pairs), sd = 2.0)
-  realized_disease <- 0.5 * (parent_disease[p1] + parent_disease[p2]) +
+  realized_disease <- mid_disease +
     0.8 * latent_gap + stats::rnorm(nrow(pairs), sd = 3.0)
-  realized_quality <- 0.5 * (parent_quality[p1] + parent_quality[p2]) +
+  realized_quality <- mid_quality +
     0.4 * latent_gap + stats::rnorm(nrow(pairs), sd = 1.2)
 
   scores <- pairs
-  scores$pred_yield <- realized_yield + stats::rnorm(nrow(pairs), sd = 2.5 + 4 * prediction_noise)
-  scores$pred_disease <- realized_disease + stats::rnorm(nrow(pairs), sd = 3.5 + 5 * prediction_noise)
-  scores$pred_quality <- realized_quality + stats::rnorm(nrow(pairs), sd = 1.5 + 2 * prediction_noise)
+  prediction_sd <- c(
+    yield = 2.5 + 4 * prediction_noise,
+    disease = 3.5 + 5 * prediction_noise,
+    quality = 1.5 + 2 * prediction_noise
+  )
+  # Predictions are generated from the latent additive cross means, not from
+  # the realized validation outcomes. The previous construction added noise
+  # to `realized_*`, leaking the evaluation outcome into the selection input.
+  scores$pred_yield <- mid_yield + stats::rnorm(nrow(pairs), sd = prediction_sd[["yield"]])
+  scores$pred_disease <- mid_disease + stats::rnorm(nrow(pairs), sd = prediction_sd[["disease"]])
+  scores$pred_quality <- mid_quality + stats::rnorm(nrow(pairs), sd = prediction_sd[["quality"]])
   scores$realized_yield <- realized_yield
   scores$realized_disease <- realized_disease
   scores$realized_quality <- realized_quality
-  scores$pair_kinship <- 0.02 + 0.18 * exp(-latent_gap)
+
+  # A PSD parent relationship fixture whose off-diagonal coancestry is the
+  # pair_kinship exposed in the score table.
+  parent_relationship <- 0.04 + 0.36 * exp(-abs(outer(latent, latent, "-")))
+  diag(parent_relationship) <- 1
+  dimnames(parent_relationship) <- list(parent_id, parent_id)
+  scores$pair_kinship <- parent_relationship[cbind(p1, p2)] / 2
+
+  trait_names <- c("yield", "disease", "quality")
+  genetic_covariance <- stats::cov(cbind(
+    yield = mid_yield, disease = mid_disease, quality = mid_quality
+  ))
+  phenotypic_covariance <- genetic_covariance + diag(prediction_sd^2, length(trait_names))
+  dimnames(genetic_covariance) <- dimnames(phenotypic_covariance) <- list(trait_names, trait_names)
 
   traits <- ng_multitrait_validation_traits()
   list(
     scores = scores,
     traits = traits,
     realized_cols = ng_multitrait_validation_realized_cols(traits),
+    phenotypic_covariance = phenotypic_covariance,
+    genetic_covariance = genetic_covariance,
+    covariance_source = "simulation_additive_midparent_plus_known_prediction_error",
+    parent_kinship = parent_relationship,
     parent_values = data.frame(
       parent = parent_id,
       latent = latent,
@@ -157,6 +185,7 @@ ng_multitrait_validation_evaluate_plan <- function(plan,
     out$mean_pair_kinship <- mean(plan$pair_kinship, na.rm = TRUE)
   }
   if (!is.null(plan_summary$group_coancestry)) out$group_coancestry <- plan_summary$group_coancestry
+  if (!is.null(plan_summary$group_relationship)) out$group_relationship <- plan_summary$group_relationship
   if (!is.null(plan_summary$lambda_group)) out$lambda_group <- plan_summary$lambda_group
   if (!is.null(plan_summary$lambda_mating)) out$lambda_mating <- plan_summary$lambda_mating
   if (!is.null(plan_summary$lambda_parent_use)) out$lambda_parent_use <- plan_summary$lambda_parent_use
@@ -173,16 +202,24 @@ ng_run_multitrait_validation <- function(scores = NULL,
                                          methods = ng_multitrait_validation_default_methods(),
                                          allocator = c("topn", "ocs"),
                                          parent_kinship = NULL,
+                                         phenotypic_covariance = NULL,
+                                         genetic_covariance = NULL,
                                          ocs_lambda_group = 0.05,
                                          ocs_lambda_mating = 0,
                                          output_dir = NULL,
                                          prefix = "multitrait_validation") {
   allocator <- match.arg(allocator)
+  scores_from_scenario <- is.null(scores)
   if (is.null(scores) || is.null(traits)) {
     scenario <- ng_multitrait_validation_scenario(n_parents = n_parents, seed = seed)
     if (is.null(scores)) scores <- scenario$scores
     if (is.null(traits)) traits <- scenario$traits
     if (is.null(realized_cols)) realized_cols <- scenario$realized_cols
+    if (isTRUE(scores_from_scenario)) {
+      if (is.null(parent_kinship)) parent_kinship <- scenario$parent_kinship
+      if (is.null(phenotypic_covariance)) phenotypic_covariance <- scenario$phenotypic_covariance
+      if (is.null(genetic_covariance)) genetic_covariance <- scenario$genetic_covariance
+    }
   }
   scores <- as.data.frame(scores, stringsAsFactors = FALSE)
   traits <- ng_multitrait_spec(traits)
@@ -213,7 +250,11 @@ ng_run_multitrait_validation <- function(scores = NULL,
   names(selected) <- names(summaries) <- methods
   for (method in methods) {
     plan <- if (identical(allocator, "topn")) {
-      ng_multitrait_select_topn(scores, traits, n_crosses = n_crosses, method = method)
+      ng_multitrait_select_topn(
+        scores, traits, n_crosses = n_crosses, method = method,
+        phenotypic_covariance = phenotypic_covariance,
+        genetic_covariance = genetic_covariance
+      )
     } else {
       ng_optimize_multitrait_mating_plan(
         scores = scores,
@@ -224,7 +265,9 @@ ng_run_multitrait_validation <- function(scores = NULL,
         optimizer_method = "greedy_local",
         max_crosses_per_parent = max(2L, ceiling(n_crosses / 2)),
         lambda_group = ocs_lambda_group,
-        lambda_mating = ocs_lambda_mating
+        lambda_mating = ocs_lambda_mating,
+        phenotypic_covariance = phenotypic_covariance,
+        genetic_covariance = genetic_covariance
       )
     }
     plan <- as.data.frame(plan, stringsAsFactors = FALSE)
@@ -257,6 +300,8 @@ ng_run_multitrait_validation <- function(scores = NULL,
     scores = scores,
     traits = traits,
     realized_cols = realized_cols,
+    phenotypic_covariance = phenotypic_covariance,
+    genetic_covariance = genetic_covariance,
     allocator = allocator
   )
 }

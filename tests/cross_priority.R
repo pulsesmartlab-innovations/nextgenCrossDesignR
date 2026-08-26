@@ -46,14 +46,17 @@ stopifnot(identical(as.integer(custom_counts[c("highly_priority", "priority", "m
 
 set.seed(7101)
 parents <- sprintf("D%03d", seq_len(50L))
-geno <- matrix(stats::rbinom(50L * 18L, size = 2L, prob = 0.5), nrow = 50L,
+geno <- matrix(2L * stats::rbinom(50L * 18L, size = 1L, prob = 0.5), nrow = 50L,
                dimnames = list(parents, sprintf("m%02d", seq_len(18L))))
 y <- stats::setNames(rowSums(geno[, 1:4, drop = FALSE]) + stats::rnorm(50L, sd = 0.1), parents)
+marker_map <- data.frame(marker = colnames(geno), chr = 1L,
+                         pos_cm = seq(0, 85, length.out = ncol(geno)))
 design <- suppressWarnings(ng_design_crosses(
   geno = geno,
   y = y,
+  marker_map = marker_map,
   use_cpp = FALSE,
-  assume_inbred = FALSE
+  parent_type = "inbred"
 ))
 stopifnot(nrow(design$plan) == 100L)
 

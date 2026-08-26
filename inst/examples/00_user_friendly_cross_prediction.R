@@ -139,6 +139,8 @@ selection_prop <- 0.10
 progeny <- "RILs"                # "DH", "DHs", "RIL", or "RILs"
 recomb_model <- "haldane" # "haldane" or "kosambi"
 assume_inbred <- FALSE
+# Applies only to externally supplied effects that explicitly carry calibrated
+# breeding-value reliability; native ridge CV predictive R2 is not reliability.
 min_effect_reliability <- 0.35
 
 # PMV and posterior settings.
@@ -161,8 +163,8 @@ multi_trait_method <- "auto"
 # Choices:
 #   "auto"            equal directional weights when no weights are supplied
 #   "weighted"        user-supplied trait_weights
-#   "economic_index"  economic weights
-#   "desired_gain"    desired-gain targets
+#   "economic_index"  economic weights plus validated P and G
+#   "desired_gain"    desired-gain targets plus validated P and G
 
 threshold_policy <- "soft"  # "soft" or "strict"
 threshold_penalty_weight <- 1.0

@@ -171,6 +171,39 @@ marker-effect covariance in PMV scoring. When
 \code{run_posterior_prediction = TRUE}, posterior cross-prediction tables are
 returned in \code{result$posterior_predictions}.
 
+\code{method_varPMV = "fast"} is the diagonal marker-effect-posterior PMV and
+is retained as a valid approximation; \code{"full_posterior"} additionally
+uses off-diagonal marker-effect covariance. A genetic marker map is required
+for recombination-aware variance. Physical positions require an explicit
+\code{bp_per_cm}; the package does not infer a universal physical-to-genetic
+conversion.
+
+Ridge \code{cv_predictive_r2} is out-of-fold phenotype predictive ability, not
+breeding-value reliability or accuracy squared. Native fits therefore report
+uncalibrated reliability as missing. Formal \code{economic_index} and
+\code{desired_gain} scoring requires both a phenotypic covariance matrix P and
+an additive-genetic covariance matrix G; candidate-cross score covariance is
+not used as a substitute. \code{ng_estimate_genetic_covariance(method="auto")}
+requires the sommer multivariate REML engine. The explicit
+\code{two_stage_ridge} option is a warned diagnostic heuristic.
+The legacy \code{cross_mean_blend} column is retained for compatibility but is
+now exactly the midpoint of the explicitly selected mean source; it is not an
+uncalibrated phenotype/GEBV interpolation.
+Superior-progeny probabilities assume independent Gaussian progeny draws. In
+posterior prediction they use the actual per-draw GEBV family mean and a
+within-family genetic variance; a custom ranking score is not treated as a
+family mean.
+
+Relationship units are explicit in scored and optimized outputs:
+\code{pair_relationship} and \code{group_relationship} are on the VanRaden
+additive-relationship scale, while \code{pair_kinship} and
+\code{group_coancestry} are one half of those quantities. Expected immediate
+progeny inbreeding and \code{target_coancestry} use coancestry units.
+For \code{parent_type="ril"}, fully inbred parents use the standard RIL
+kernel. Any residual-heterozygous parent requires complete 0/1 phased
+haplotypes whose allele sums match the dosage matrix; the package does not
+return the known downward-biased inbred approximation.
+
 Use \code{ng_write_crossing_plan_workbook()} to create breeder-facing Excel
 workbooks with top parents, recommended crosses, full-sib screening, editable
 criteria, and an embedded selection-index chart.

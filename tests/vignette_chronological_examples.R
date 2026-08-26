@@ -446,7 +446,8 @@ for (token in required_multitrait_economic_tokens) {
 required_multitrait_desired_tokens <- c(
   "multi_trait_method <- \"desired_gain\"",
   "desired_change = c(",
-  "economic_weight = c(",
+  "phenotypic_covariance <-",
+  "genetic_covariance <-",
   "ng_run_cross_prediction(",
   "multi_trait_method = multi_trait_method",
   "stopifnot(identical(result$objective$method, \"desired_gain\"))",

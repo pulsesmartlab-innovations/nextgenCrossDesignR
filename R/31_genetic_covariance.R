@@ -1,9 +1,8 @@
-# Built-in estimator for the additive genetic covariance matrix G and the
-# phenotypic covariance matrix P across traits. Both are needed by
-# `ng_add_multitrait_score(method = "economic_index" | "desired_gain")` to drive
-# Pesek-Baker and Smith-Hazel selection-index solves. The estimators are
-# zero-external-dependency by default (two-stage ridge); they opportunistically
-# use `sommer::mmer` when available for a fully multivariate REML fit.
+# Estimators for the additive genetic covariance matrix G and phenotypic
+# covariance matrix P across traits. Both are needed by formal Smith-Hazel and
+# Pesek-Baker index calculations. `method = "auto"` requires the joint
+# multivariate REML implementation in sommer. The separate-trait ridge method
+# below is retained only as an explicitly requested diagnostic heuristic.
 #
 # Statistical justification (two_stage_ridge):
 #   For trait t, fit ridge marker effects beta_hat_t on the same n x m geno used
@@ -12,7 +11,7 @@
 #   additive-genetic covariance of breeding values g = X_c beta is
 #       Var(g) = X_c X_c' * Var(beta) = K * denom * Var(beta_k)  (iid markers).
 #
-#   We construct G_hat from two parts that are individually robust:
+#   The diagnostic heuristic constructs G_hat from two plug-in parts:
 #
 #   (a) Diagonals via GBLUP lambda-inversion (method-of-moments). Under the
 #       GBLUP model the optimal ridge penalty is
@@ -20,22 +19,18 @@
 #       so the genetic variance is identifiable from the chosen lambda and the
 #       fitted residual variance as
 #           sigma_g^2_t = sigma_e^2_t * denom / lambda_t.
-#       This is a direct REML-style estimate that does not suffer from the
-#       ridge-attenuation bias of inner-product plug-ins (the beta_hat scale
-#       drops out entirely).
+#       This identity is model-dependent and lambda is selected by prediction,
+#       not estimated jointly as a variance-component ratio. It is therefore
+#       not a REML estimate.
 #
 #   (b) Off-diagonals via the sample correlation of the trait marker-effect
-#       vectors. Under independent-ridge fits with the SAME design X,
-#           Cor(beta_hat_t, beta_hat_s) ~ Cor(beta_true_t, beta_true_s)
-#       up to identical multiplicative shrinkage per trait, which cancels in
-#       the Pearson correlation. The estimator is biased toward 0 by the
-#       trait-specific noise in beta_hat, but it preserves the sign and the
-#       relative ordering of the genetic correlations, which is what
-#       downstream Smith-Hazel / Pesek-Baker solves use.
+#       vectors. Correlated residuals and trait-specific shrinkage can both
+#       contaminate this correlation, so it must not be treated as a formal
+#       genetic correlation.
 #
 #   G_hat = D %*% R_beta %*% D with D = sqrt(diag(sigma_g^2)). The result is
 #   on the same scale as a GBLUP variance component fit against the VanRaden
-#   K, so it is directly comparable to ng_parent_kinship() downstream.
+#   K only under the working ridge assumptions above.
 #
 #   The G is then projected to the nearest positive-semidefinite matrix using
 #   Matrix::nearPD() if available, or a documented eigen-clip fallback.
@@ -95,10 +90,12 @@ ng_genetic_cov_two_stage_ridge <- function(geno, Y, ridge_lambda = NULL,
   colnames(Beta) <- trait_names
   rownames(Beta) <- colnames(geno)
   reliabilities <- rep(NA_real_, t)
+  cv_predictive_r2 <- rep(NA_real_, t)
   lambdas <- rep(NA_real_, t)
   sigma_e2s <- rep(NA_real_, t)
   sigma_g2s <- rep(NA_real_, t)
-  names(reliabilities) <- names(lambdas) <- names(sigma_e2s) <- names(sigma_g2s) <- trait_names
+  names(reliabilities) <- names(cv_predictive_r2) <- names(lambdas) <-
+    names(sigma_e2s) <- names(sigma_g2s) <- trait_names
 
   for (j in seq_len(t)) {
     y_j <- Y[, j]
@@ -111,7 +108,7 @@ ng_genetic_cov_two_stage_ridge <- function(geno, Y, ridge_lambda = NULL,
       seed = seed + j
     )
     Beta[, j] <- fit_j$beta
-    reliabilities[[j]] <- fit_j$reliability
+    cv_predictive_r2[[j]] <- fit_j$cv_predictive_r2
     lambdas[[j]] <- fit_j$lambda
     sigma_e2s[[j]] <- fit_j$sigma_e2
     # GBLUP lambda-inversion: sigma_g^2 = sigma_e^2 * denom / lambda. Floor at
@@ -143,6 +140,7 @@ ng_genetic_cov_two_stage_ridge <- function(geno, Y, ridge_lambda = NULL,
 
   out <- list(G_hat = G_hat,
               reliabilities = reliabilities,
+              cv_predictive_r2 = cv_predictive_r2,
               lambdas = lambdas,
               sigma_e2 = sigma_e2s,
               sigma_g2 = sigma_g2s,
@@ -206,10 +204,10 @@ ng_genetic_cov_sommer_remml <- function(geno, Y) {
 
 # Estimate additive genetic covariance G across traits from a training set.
 #
-# `method = "auto"` chooses `sommer_remml` when the `sommer` package is
-# installed, and otherwise falls back to `two_stage_ridge`. If the sommer fit
-# errors (singular, non-convergence, etc.) we emit a `warning()` and fall back
-# to `two_stage_ridge` so callers always receive a valid G_hat.
+# `method = "auto"` requires the multivariate REML engine. The two-stage ridge
+# estimator is retained only as an explicit diagnostic heuristic; correlated
+# residuals can induce correlated univariate marker-effect estimates and hence
+# masquerade as genetic covariance.
 ng_estimate_genetic_covariance <- function(geno,
                                            Y,
                                            method = c("auto", "two_stage_ridge", "sommer_remml"),
@@ -238,27 +236,34 @@ ng_estimate_genetic_covariance <- function(geno,
 
   resolved_method <- method
   if (method == "auto") {
-    resolved_method <- if (requireNamespace("sommer", quietly = TRUE)) "sommer_remml" else "two_stage_ridge"
+    if (!requireNamespace("sommer", quietly = TRUE)) {
+      ng_stop("method = 'auto' requires sommer for multivariate REML; install sommer, ",
+              "supply a validated G, or request two_stage_ridge explicitly as a heuristic")
+    }
+    resolved_method <- "sommer_remml"
   }
 
   diag_list <- list()
   if (resolved_method == "sommer_remml") {
     sommer_out <- ng_genetic_cov_sommer_remml(geno, Y)
     if (!is.null(sommer_out$error)) {
-      warning("sommer REML failed (", sommer_out$error, "); falling back to two_stage_ridge")
-      resolved_method <- "two_stage_ridge"
+      ng_stop("sommer multivariate REML failed: ", sommer_out$error,
+              ". No heuristic fallback was used.")
     } else {
       G_hat <- sommer_out$G_hat
       diag_list$engine <- "sommer_remml"
     }
   }
   if (resolved_method == "two_stage_ridge") {
+    warning("two_stage_ridge is a heuristic diagnostic, not a multivariate variance-component estimator; do not use it as formal G when residual traits may be correlated",
+            call. = FALSE)
     ts <- ng_genetic_cov_two_stage_ridge(geno, Y, ridge_lambda = ridge_lambda,
                                           kfold = kfold, seed = seed,
                                           return_diagnostics = return_diagnostics)
     G_hat <- ts$G_hat
     diag_list$engine <- "two_stage_ridge"
     diag_list$reliabilities <- ts$reliabilities
+    diag_list$cv_predictive_r2 <- ts$cv_predictive_r2
     diag_list$lambdas <- ts$lambdas
     diag_list$sigma_e2 <- ts$sigma_e2
     diag_list$sigma_g2 <- ts$sigma_g2
@@ -275,6 +280,7 @@ ng_estimate_genetic_covariance <- function(geno,
   attr(G_hat, "n_used") <- nrow(Y)
   attr(G_hat, "method") <- diag_list$engine
   attr(G_hat, "requested_method") <- method
+  attr(G_hat, "formal_variance_component_estimate") <- identical(diag_list$engine, "sommer_remml")
   if (return_diagnostics) attr(G_hat, "diagnostics") <- diag_list
   G_hat
 }
@@ -352,21 +358,21 @@ ng_estimate_phenotypic_covariance <- function(Y, shrinkage = c("none", "auto")) 
 #
 # Two modes:
 #
-#   method = "beta_posterior" (default; fast, coherent with D1).
+#   method = "beta_posterior" (fast diagnostic approximation).
 #     For each trait, fit per-trait ridge once and draw S samples of beta_t
 #     from the BCM closed-form posterior conditional on (sigma_e2_t, lambda_t).
 #     For draw s, construct G_s = D R_beta^s D where D = sqrt(sigma_g2) is
 #     fixed across draws (lambda-inversion is hyperparameter-conditional) and
 #     R_beta^s = cor(beta_1^s, ..., beta_t^s) recomputed per draw. This is
-#     the natural Bayesian companion to ng_posterior_cross_predict() since it
-#     consumes the same BCM samples; the diagonals are fixed and only the
-#     correlation matrix carries posterior uncertainty.
+#     This is not a joint multi-trait posterior: the diagonals are fixed and
+#     only the plug-in marker-effect correlation carries uncertainty.
 #
-#   method = "parametric_bootstrap" (slower; covers hyperparameter uncertainty).
+#   method = "parametric_bootstrap" (slower diagnostic approximation).
 #     Resample Gaussian residuals around each per-trait ridge fit, regenerate
 #     y_t^b = fitted_t + epsilon_t^b, and rerun ng_genetic_cov_two_stage_ridge
-#     end-to-end (CV-tuning lambda included). This integrates over the joint
-#     uncertainty in (beta, sigma_e2, lambda) at the cost of refitting B times.
+#     end-to-end (CV-tuning lambda included). It propagates uncertainty within
+#     the same separate-trait heuristic; it does not create a joint multivariate
+#     variance-component model.
 #
 # Returns a t x t x n_draws array with attribute `G_mean` (posterior mean
 # matrix), `method`, `n_draws`. Off-diagonal credible intervals can be read
@@ -377,8 +383,15 @@ ng_posterior_genetic_covariance <- function(geno,
                                             method = c("beta_posterior", "parametric_bootstrap"),
                                             ridge_lambda = NULL,
                                             kfold = 5L,
-                                            seed = 1L) {
+                                            seed = 1L,
+                                            allow_heuristic = FALSE) {
   method <- match.arg(method)
+  if (!isTRUE(allow_heuristic)) {
+    ng_stop("ng_posterior_genetic_covariance currently uses univariate ridge heuristics, ",
+            "not a joint multivariate posterior; set allow_heuristic = TRUE only for diagnostics")
+  }
+  warning("returning heuristic covariance draws from separate univariate ridge fits",
+          call. = FALSE)
   geno <- ng_as_numeric_matrix(geno, "geno")
   Y <- as.matrix(Y)
   if (is.null(colnames(Y))) ng_stop("Y must have column names (one per trait)")

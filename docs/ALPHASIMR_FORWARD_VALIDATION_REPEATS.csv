@@ -1,0 +1,5 @@
+panel,all_checks_pass,dh_variance_ratio,dh_variance_pearson,ril_variance_ratio,ril_variance_pearson,api_ril_mean_spearman,api_ril_usefulness_spearman,api_dh_mean_spearman,api_dh_usefulness_spearman,api_dh_top_decile_enrichment,api_dh_variance_spearman
+1,TRUE,0.9998,0.9869,1.0060,0.9918,0.7228,0.7339,0.7238,0.6652,0.5704,0.5829
+2,TRUE,1.0070,0.9860,1.0200,0.9873,0.8892,0.8634,0.8603,0.7589,0.8426,0.2789
+3,TRUE,1.0050,0.9927,0.9856,0.9902,0.8772,0.8447,0.8658,0.8409,0.9122,0.5157
+4,TRUE,0.9955,0.9878,0.9699,0.9920,0.7958,0.7833,0.8416,0.8161,0.7425,0.6257

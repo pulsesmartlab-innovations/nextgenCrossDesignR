@@ -86,14 +86,16 @@ ev <- eigen(S_full, symmetric = TRUE, only.values = TRUE)$values
 stopifnot(min(ev) >= -1e-10)
 cat("Test 6 (Sigma_c with G_hat): OK\n")
 
-# ---- Test 7: PSD projection for non-PSD G_hat -----------------------------
+# ---- Test 7: non-PSD G_hat is rejected ------------------------------------
 R_bad <- matrix(c(1, 0.9, 0.9,
                   0.9, 1, -0.9,
                   0.9, -0.9, 1), 3, 3)
-S_proj <- ng_build_cross_trait_covariance(per_trait_var = v, G_hat = R_bad)
-ev_proj <- eigen(S_proj, symmetric = TRUE, only.values = TRUE)$values
-stopifnot(min(ev_proj) >= -1e-10)
-cat(sprintf("Test 7 (PSD projection): smallest eigenvalue = %g  OK\n", min(ev_proj)))
+bad_g_error <- tryCatch(
+  ng_build_cross_trait_covariance(per_trait_var = v, G_hat = R_bad),
+  error = function(e) conditionMessage(e)
+)
+stopifnot(grepl("not positive semidefinite", bad_g_error, fixed = TRUE))
+cat("Test 7 (non-PSD G rejected): OK\n")
 
 # ---- Test 5b: negative per_trait_var is rejected --------------------------
 err <- tryCatch(
@@ -199,6 +201,12 @@ ids9 <- paste0("L", seq_len(n9))
 markers9 <- paste0("M", seq_len(m9))
 geno9 <- 2L * matrix(rbinom(n9 * m9, 1L, 0.4), n9, m9,
                      dimnames = list(ids9, markers9))
+marker_map9 <- data.frame(
+  marker = markers9,
+  chr = rep(1:3, length.out = m9),
+  pos_cm = rep(seq(0, 100, length.out = m9 / 3L), 3L),
+  stringsAsFactors = FALSE
+)
 Y9 <- cbind(
   yield   = as.numeric(geno9 %*% rnorm(m9, sd = 0.05) + rnorm(n9, sd = 0.4)),
   disease = as.numeric(geno9 %*% rnorm(m9, sd = 0.04) + rnorm(n9, sd = 0.4))
@@ -220,8 +228,10 @@ Y9_use <- Y9[pair_ids9, , drop = FALSE]
 post9 <- ng_posterior_multitrait_cross_predict(
   geno = geno9_use, Y = Y9_use, traits = traits9,
   ids = pair_ids9, pairs = pairs9,
+  marker_map = marker_map9,
   n_draws = 30L, posterior_method = "closed_form",
   genetic_covariance_method = "beta_posterior",
+  genetic_covariance = diag(c(yield = 1, disease = 1)),
   index_method = "economic_index", value_mode = "mean",
   use_cpp = FALSE, seed = 7L,
   tau_lower_vec = c(0, -Inf),

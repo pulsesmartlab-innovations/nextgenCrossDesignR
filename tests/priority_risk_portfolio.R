@@ -7,7 +7,10 @@ source(helper[file.exists(helper)][[1L]])
 # --- ng_midparent_pev: quadratic form, centered, per-cross variation ---
 set.seed(1)
 m <- 12L; ids <- sprintf("P%d", 1:5)
-geno <- matrix(rbinom(length(ids) * m, 2, 0.5), length(ids), m, dimnames = list(ids, NULL))
+geno <- matrix(
+  rbinom(length(ids) * m, 2, 0.5), length(ids), m,
+  dimnames = list(ids, paste0("M", seq_len(m)))
+)
 B <- crossprod(matrix(rnorm(m * m), m)) / m         # a valid m x m covariance
 pairs <- data.frame(parent1 = c("P1","P1","P3"), parent2 = c("P2","P3","P4"),
                     stringsAsFactors = FALSE)
@@ -33,12 +36,13 @@ stopifnot(as.character(cc$risk_bin[1]) == "low", as.character(cc$risk_bin[5]) ==
 stopifnot(is.ordered(cc$risk_bin))
 cc2 <- ng_cross_confidence(pev2, effect_based_x = FALSE)
 stopifnot(cc2$confidence_method == "midparent_pev")
-# NULL/degenerate -> reliability, NA bins
+# NULL/degenerate -> explicitly unavailable, NA bins
 cn <- ng_cross_confidence(rep(NA_real_, 4), effect_based_x = TRUE)
-stopifnot(cn$confidence_method == "reliability", all(is.na(cn$risk_bin)))
-# Degenerate-spread: distinct pev that all clamp to 0 -> reliability fallback
+stopifnot(cn$confidence_method == "relative_precision_unavailable", all(is.na(cn$risk_bin)))
+# Degenerate-spread: distinct PEVs that all clamp to 0 -> unavailable
 cd <- ng_cross_confidence(c(-1, -2, -3), effect_based_x = TRUE)
-stopifnot(cd$confidence_method == "reliability", all(is.na(cd$cross_confidence)), all(is.na(cd$risk_bin)))
+stopifnot(cd$confidence_method == "relative_precision_unavailable",
+          all(is.na(cd$cross_confidence)), all(is.na(cd$risk_bin)))
 cat("ng_cross_confidence test passed\n")
 
 # --- portfolio profile: median cuts, 4 quadrants ---
@@ -196,16 +200,14 @@ stopifnot(all(c("prob_top_tier", "cross_confidence", "risk_bin") %in%
 # questions: joint merit x uncertainty vs uncertainty alone).
 stopifnot(!isTRUE(all.equal(sc_on$prob_top_tier, sc_on$cross_confidence)))
 
-# The metric being summarized must follow trait_value_metric. Under the pre-F2 behaviour the
-# posterior always summarized usefulness, so these two runs would have produced IDENTICAL
-# confidence; they must not.
+# The metric being summarized must follow trait_value_metric. Here `mean` is
+# the explicitly chosen adjusted-phenotype mid-parent mean, which is fixed
+# across marker-effect posterior draws. Its posterior SD is exactly zero, so
+# the honest result is unavailable relative precision rather than a fabricated
+# posterior confidence interval.
 r_mean <- run_post(TRUE, "mean")
-stopifnot(identical(r_mean$selected_crosses$confidence_method[[1L]], "posterior_ci"))
-pk <- function(d) paste(pmin(d$parent1, d$parent2), pmax(d$parent1, d$parent2))
-cu <- r_on$candidate_crosses; cm <- r_mean$candidate_crosses
-idx <- match(pk(cu), pk(cm))
-stopifnot(!anyNA(idx))
-rho <- stats::cor(cu$cross_confidence, cm$cross_confidence[idx],
-                  method = "spearman", use = "complete.obs")
-stopifnot(is.finite(rho), rho < 0.99)
+stopifnot(identical(r_mean$selected_crosses$confidence_method[[1L]],
+                    "relative_precision_unavailable"))
+stopifnot(all(is.na(r_mean$selected_crosses$cross_confidence)))
+stopifnot(isFALSE(r_mean$priority_risk_diagnostics$posterior_used))
 cat("posterior-ON confidence + prob_top_tier test passed\n")

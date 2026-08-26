@@ -280,9 +280,14 @@ ng_polyploid_subgenome_score_crosses <- function(geno_by_subgenome,
     if (recombination_aware) {
       # Same kernel as the diploid path; beta_var = 0 => VPM = a' R a (no effect
       # uncertainty inflation), the honest default when no posterior is supplied.
+      # Map preparation aligns rows but does not sort the caller's genotype
+      # columns. Sort all linked inputs together before the chromosome recursion.
+      sorted <- ng_sort_by_map(
+        geno, effects, rep(0, length(effects)), marker_map = map_list[[sg]]
+      )
       v <- ng_dh_recomb_variance_pairs(
-        geno = geno, beta = effects, beta_var = rep(0, length(effects)),
-        marker_map = map_list[[sg]], ids = rownames(geno), pairs = candidate_pairs,
+        geno = sorted$geno, beta = sorted$effects, beta_var = sorted$beta_var,
+        marker_map = sorted$marker_map, ids = rownames(geno), pairs = candidate_pairs,
         window_cm = window_cm, use_cpp = use_cpp,
         recomb_model = recomb_model, target = progeny_target
       )
@@ -300,6 +305,7 @@ ng_polyploid_subgenome_score_crosses <- function(geno_by_subgenome,
     poly_gain = as.numeric(gain),
     poly_var = as.numeric(variance),
     poly_usefulness = as.numeric(gain + intensity * sqrt(pmax(variance, 0))),
+    pair_relationship = ng_poly4x_pair_relationship(parent_kinship, candidate_pairs),
     pair_kinship = ng_poly4x_pair_coancestry(parent_kinship, candidate_pairs),
     poly_variance_model = variance_model,
     stringsAsFactors = FALSE

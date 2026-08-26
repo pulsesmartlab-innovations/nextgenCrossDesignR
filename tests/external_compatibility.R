@@ -150,7 +150,7 @@ target_scores <- data.frame(
   parent1 = c("T1", "T1", "T2", "T4", "T4", "T5"),
   parent2 = c("T2", "T3", "T3", "T5", "T1", "T2"),
   cross_mean = c(10.0, 9.8, 9.7, 6.0, 6.2, 6.1),
-  pair_kinship = c(0.90, 0.80, 0.80, 0.02, 0.02, 0.02),
+  pair_kinship = c(0.90, 0.80, 0.80, 0.02, 0.02, 0.02) / 2,
   stringsAsFactors = FALSE
 )
 gain_target <- ng_alphamate_style_select(

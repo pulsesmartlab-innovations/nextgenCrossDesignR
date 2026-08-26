@@ -26,25 +26,110 @@ ng_group_pair_key <- function(g1, g2) {
 }
 
 # Map each candidate cross to its parents' group labels. parent_group is a named vector
-# (parent id -> group). Parents with no entry get group NA (treated as universally legal).
+# (parent id -> group). The public permission filter rejects missing parent/group mappings.
 ng_cross_groups <- function(scores, parent_group) {
   pg <- parent_group[as.character(scores$parent1)]
   qg <- parent_group[as.character(scores$parent2)]
   list(g1 = unname(pg), g2 = unname(qg))
 }
 
+ng_validate_parent_group_mapping <- function(scores, parent_group) {
+  if (is.null(parent_group)) ng_stop("parent_group is required for group constraints")
+  if (is.null(names(parent_group)) || anyDuplicated(names(parent_group))) {
+    ng_stop("parent_group must be a uniquely named vector indexed by parent ID")
+  }
+  requested <- unique(c(as.character(scores$parent1), as.character(scores$parent2)))
+  missing_parent <- setdiff(requested, names(parent_group))
+  if (length(missing_parent)) {
+    ng_stop("parent_group is missing candidate parent IDs: ",
+            paste(utils::head(missing_parent, 6L), collapse = ", "))
+  }
+  mapped <- as.character(parent_group[requested])
+  if (anyNA(mapped) || any(!nzchar(trimws(mapped)))) {
+    ng_stop("every candidate parent must have a non-missing group for group constraints")
+  }
+  invisible(TRUE)
+}
+
 ng_filter_group_permission <- function(scores, parent_group, group_permission) {
-  if (is.null(parent_group) || is.null(group_permission)) return(scores)
+  if (is.null(parent_group) && is.null(group_permission)) return(scores)
+  if (is.null(group_permission)) return(scores)
+  ng_validate_parent_group_mapping(scores, parent_group)
   gr <- ng_cross_groups(scores, parent_group)
   g1 <- gr$g1; g2 <- gr$g2
   gp <- as.matrix(group_permission)
+  if (is.null(rownames(gp)) || is.null(colnames(gp))) {
+    ng_stop("group_permission must have group row and column names")
+  }
+  used_groups <- unique(c(g1, g2))
+  if (anyNA(used_groups) || any(!nzchar(trimws(used_groups)))) {
+    ng_stop("every candidate parent must have a non-missing group when group_permission is supplied")
+  }
+  missing_group <- union(setdiff(used_groups, rownames(gp)), setdiff(used_groups, colnames(gp)))
+  if (length(missing_group)) {
+    ng_stop("group_permission does not cover groups: ", paste(missing_group, collapse = ", "))
+  }
   allowed <- vapply(seq_len(nrow(scores)), function(i) {
     a <- g1[[i]]; b <- g2[[i]]
-    if (is.na(a) || is.na(b)) return(TRUE)
-    if (!(a %in% rownames(gp)) || !(b %in% colnames(gp))) return(TRUE)
     isTRUE(as.logical(gp[a, b])) || isTRUE(as.logical(gp[b, a]))
   }, logical(1))
   scores[allowed, , drop = FALSE]
+}
+
+# Final, explicit audit after all repair stages. Protected/committed crosses may
+# make a requested cap infeasible; that override must be reported, never hidden.
+ng_audit_mating_constraints <- function(scores, selected, parents,
+                                        max_crosses_per_parent,
+                                        min_use = NA_real_,
+                                        min_unique_parents = NULL,
+                                        parent_group = NULL,
+                                        group_quota = NULL,
+                                        cost_col = NULL,
+                                        budget = Inf) {
+  selected <- as.integer(selected)
+  counts <- ng_parent_counts(scores[selected, , drop = FALSE], parents)
+  capacity <- names(counts)[counts > max_crosses_per_parent]
+  used <- names(counts)[counts > 0]
+  min_use_bad <- if (is.finite(min_use) && min_use > 1) used[counts[used] < min_use] else character(0)
+  min_unique_bad <- if (!is.null(min_unique_parents) && is.finite(min_unique_parents) &&
+                        length(used) < min_unique_parents) {
+    sprintf("%d<%d", length(used), as.integer(min_unique_parents))
+  } else character(0)
+  quota_bad <- character(0)
+  if (!is.null(parent_group) && !is.null(group_quota) && length(group_quota)) {
+    gr <- ng_cross_groups(scores, parent_group)
+    tab <- table(ng_group_pair_key(gr$g1, gr$g2)[selected])
+    audit_parts <- strsplit(names(group_quota), "||", fixed = TRUE)
+    audit_keys <- vapply(audit_parts, function(x) ng_group_pair_key(x[[1L]], x[[2L]]), character(1L))
+    names(group_quota) <- audit_keys
+    quota_bad <- audit_keys[vapply(audit_keys, function(k) {
+      observed <- if (is.na(tab[k])) 0 else as.numeric(tab[k])
+      observed > as.numeric(group_quota[[k]])
+    }, logical(1L))]
+  }
+  total_cost <- NA_real_
+  over_budget <- FALSE
+  if (!is.null(cost_col) && cost_col %in% names(scores)) {
+    total_cost <- sum(as.numeric(scores[[cost_col]][selected]), na.rm = TRUE)
+    over_budget <- is.finite(budget) && total_cost > budget + 1e-9
+  }
+  violations <- c(
+    if (length(capacity)) paste0("parent_capacity:", paste(capacity, collapse = ",")),
+    if (length(min_use_bad)) paste0("min_use:", paste(min_use_bad, collapse = ",")),
+    if (length(min_unique_bad)) paste0("min_unique_parents:", min_unique_bad),
+    if (length(quota_bad)) paste0("group_quota:", paste(quota_bad, collapse = ",")),
+    if (over_budget) "budget"
+  )
+  list(
+    all_hard_constraints_satisfied = !length(violations),
+    violations = violations,
+    capacity_violating_parents = capacity,
+    min_use_violating_parents = min_use_bad,
+    min_unique_parents_violation = min_unique_bad,
+    quota_violations = quota_bad,
+    total_cost = total_cost,
+    over_budget = over_budget
+  )
 }
 
 # Drop-based min-use-if-used: any used parent below the floor is banned and its
@@ -86,7 +171,32 @@ ng_enforce_min_use_if_used <- function(scores, selected, parents,
 ng_enforce_group_quota <- function(scores, selected, parents, parent_group,
                                    group_quota, max_crosses_per_parent, n_crosses,
                                    protected = integer(0)) {
-  if (is.null(parent_group) || is.null(group_quota) || !length(group_quota)) return(selected)
+  if (is.null(group_quota) || !length(group_quota)) return(selected)
+  ng_validate_parent_group_mapping(scores, parent_group)
+  if (is.null(names(group_quota)) || any(!nzchar(names(group_quota))) || anyDuplicated(names(group_quota))) {
+    ng_stop("group_quota must be a uniquely named vector keyed as 'group1||group2'")
+  }
+  key_parts <- strsplit(names(group_quota), "||", fixed = TRUE)
+  if (any(lengths(key_parts) != 2L) || any(!nzchar(unlist(key_parts, use.names = FALSE)))) {
+    ng_stop("group_quota names must use exactly 'group1||group2'")
+  }
+  known_groups <- unique(as.character(parent_group))
+  key_groups <- unlist(key_parts, use.names = FALSE)
+  unknown_groups <- setdiff(key_groups, known_groups)
+  if (length(unknown_groups)) {
+    ng_stop("group_quota names contain unknown groups: ", paste(unknown_groups, collapse = ", "))
+  }
+  canonical_keys <- vapply(key_parts, function(x) ng_group_pair_key(x[[1L]], x[[2L]]), character(1L))
+  if (anyDuplicated(canonical_keys)) {
+    ng_stop("group_quota contains duplicate unordered group-pair keys")
+  }
+  names(group_quota) <- canonical_keys
+  quota_value <- suppressWarnings(as.numeric(group_quota))
+  if (any(!is.finite(quota_value)) || any(quota_value < 0) ||
+      any(abs(quota_value - round(quota_value)) > 1e-8)) {
+    ng_stop("group_quota values must be finite non-negative integers")
+  }
+  group_quota[] <- as.integer(round(quota_value))
   gr <- ng_cross_groups(scores, parent_group)
   key <- ng_group_pair_key(gr$g1, gr$g2)
   quota_keys <- names(group_quota)
@@ -208,7 +318,10 @@ ng_enforce_budget <- function(scores, selected, cost_col, budget, parents,
       if (idx %in% selected) next
       if (cost[idx] > remaining) next
       a <- p1[idx]; b <- p2[idx]
-      if (counts[a] >= max_crosses_per_parent || counts[b] >= max_crosses_per_parent) next
+      if (a == b) {
+        if (counts[a] + 2L > max_crosses_per_parent) next
+      } else if (counts[a] + 1L > max_crosses_per_parent ||
+                 counts[b] + 1L > max_crosses_per_parent) next
       selected <- c(selected, idx)
       counts[a] <- counts[a] + 1L; counts[b] <- counts[b] + 1L
       remaining <- remaining - cost[idx]

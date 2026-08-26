@@ -121,40 +121,67 @@ ng_ld_prune_indices <- function(geno,
                                 r2_threshold = 0.9,
                                 maf_threshold = 0.01,
                                 ploidy = 2,
-                                backend = c("auto", "cpp", "r")) {
+                                backend = c("auto", "cpp", "r"),
+                                marker_map = NULL) {
   backend <- match.arg(backend)
-  use_cpp <- backend %in% c("auto", "cpp") && ng_ld_backend_available()
-  force_cpp <- identical(backend, "cpp")
-  if (isTRUE(use_cpp)) {
-    out <- tryCatch(
-      ng_ld_prune_graph_cpp(
-        geno = geno,
-        window = as.integer(window),
-        r2_threshold = as.numeric(r2_threshold),
-        maf_threshold = as.numeric(maf_threshold),
-        ploidy = as.numeric(ploidy)
-      ),
-      error = function(e) {
-        if (isTRUE(force_cpp)) stop(e)
-        NULL
+  run_one <- function(g) {
+    use_cpp <- backend %in% c("auto", "cpp") && ng_ld_backend_available()
+    force_cpp <- identical(backend, "cpp")
+    if (isTRUE(use_cpp)) {
+      out <- tryCatch(
+        ng_ld_prune_graph_cpp(
+          geno = g,
+          window = as.integer(window),
+          r2_threshold = as.numeric(r2_threshold),
+          maf_threshold = as.numeric(maf_threshold),
+          ploidy = as.numeric(ploidy)
+        ),
+        error = function(e) {
+          if (isTRUE(force_cpp)) stop(e)
+          NULL
+        }
+      )
+      if (!is.null(out)) {
+        out <- as.integer(out)
+        attr(out, "backend") <- "cpp"
+        return(out)
       }
-    )
-    if (!is.null(out)) {
-      out <- as.integer(out)
-      attr(out, "backend") <- "cpp"
-      return(out)
+    } else if (isTRUE(force_cpp)) {
+      ng_stop("C++ LD pruning backend is not available. Load the package with use_cpp = TRUE or install from source.")
     }
-  } else if (isTRUE(force_cpp)) {
-    ng_stop("C++ LD pruning backend is not available. Load the package with use_cpp = TRUE or install from source.")
+    out <- ng_ld_prune_graph_r(
+      geno = g, window = window, r2_threshold = r2_threshold,
+      maf_threshold = maf_threshold, ploidy = ploidy
+    )
+    attr(out, "backend") <- "r"
+    out
   }
-  out <- ng_ld_prune_graph_r(
-    geno = geno,
-    window = window,
-    r2_threshold = r2_threshold,
-    maf_threshold = maf_threshold,
-    ploidy = ploidy
-  )
-  attr(out, "backend") <- "r"
+
+  if (is.null(marker_map)) return(run_one(geno))
+  mm <- as.data.frame(marker_map, stringsAsFactors = FALSE)
+  if (!all(c("marker", "chr", "pos_cm") %in% names(mm))) {
+    ng_stop("marker_map for LD pruning must contain marker, chr, and pos_cm")
+  }
+  if (anyDuplicated(mm$marker)) ng_stop("marker_map marker names must be unique for LD pruning")
+  mm <- mm[match(colnames(geno), as.character(mm$marker)), , drop = FALSE]
+  chr_value <- as.character(mm$chr)
+  pos_value <- suppressWarnings(as.numeric(mm$pos_cm))
+  if (anyNA(mm$marker) || anyNA(chr_value) || any(!nzchar(trimws(chr_value))) ||
+      any(!is.finite(pos_value))) {
+    ng_stop("marker_map is missing non-blank chromosomes or finite positions for genotype markers used in LD pruning")
+  }
+  ord <- order(chr_value, pos_value, as.character(mm$marker))
+  chr_ord <- chr_value[ord]
+  keep_original <- integer(0)
+  backends <- character(0)
+  for (cc in unique(chr_ord)) {
+    idx_original <- ord[chr_ord == cc]
+    kept_local <- run_one(geno[, idx_original, drop = FALSE])
+    backends <- c(backends, attr(kept_local, "backend", exact = TRUE))
+    keep_original <- c(keep_original, idx_original[as.integer(kept_local)])
+  }
+  out <- sort(as.integer(keep_original))
+  attr(out, "backend") <- if (length(unique(backends)) == 1L) unique(backends) else "mixed"
   out
 }
 
@@ -163,7 +190,8 @@ ng_ld_prune_markers <- function(geno,
                                 r2_threshold = 0.9,
                                 maf_threshold = 0.01,
                                 ploidy = 2,
-                                backend = c("auto", "cpp", "r")) {
+                                backend = c("auto", "cpp", "r"),
+                                marker_map = NULL) {
   backend <- match.arg(backend)
   geno <- ng_ld_validate_inputs(
     geno = geno,
@@ -180,7 +208,8 @@ ng_ld_prune_markers <- function(geno,
     r2_threshold = r2_threshold,
     maf_threshold = maf_threshold,
     ploidy = ploidy,
-    backend = backend
+    backend = backend,
+    marker_map = marker_map
   )
   backend_used <- attr(keep_idx, "backend", exact = TRUE)
   if (is.null(backend_used)) backend_used <- "r"
@@ -195,6 +224,7 @@ ng_ld_prune_markers <- function(geno,
     r2_threshold = as.numeric(r2_threshold),
     maf_threshold = as.numeric(maf_threshold),
     ploidy = as.numeric(ploidy),
+    map_aware = !is.null(marker_map),
     stringsAsFactors = FALSE
   )
   list(
@@ -210,7 +240,8 @@ ng_ld_prune_geno <- function(geno,
                              r2_threshold = 0.9,
                              maf_threshold = 0.01,
                              ploidy = 2,
-                             backend = c("auto", "cpp", "r")) {
+                             backend = c("auto", "cpp", "r"),
+                             marker_map = NULL) {
   backend <- match.arg(backend)
   geno <- ng_ld_validate_inputs(
     geno = geno,
@@ -225,7 +256,8 @@ ng_ld_prune_geno <- function(geno,
     r2_threshold = r2_threshold,
     maf_threshold = maf_threshold,
     ploidy = ploidy,
-    backend = backend
+    backend = backend,
+    marker_map = marker_map
   )
   out <- geno[, pruned$keep_markers, drop = FALSE]
   attr(out, "ld_pruning_report") <- pruned$report

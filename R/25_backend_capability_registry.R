@@ -28,13 +28,13 @@ ng_backend_controls <- function() {
     enum("trait_value_metric", "Cross-scoring metric", "scoring", "usefulness",
       c(mid_parent_mean          = "Mid-parent mean (predicted family mean)",
         family_variance          = "Family variance (segregating variation)",
-        reliable_family_variance = "Reliable family variance (uncertainty-aware)",
+        reliable_family_variance = "Prediction-aware family variance (PMV)",
         usefulness               = "Usefulness (mean + i * within-family SD)",
         parent_distance          = "Parent distance (screening only)"),
       capability = "dh_ril_pmv_scoring"),
     enum("uc_variance_source", "Usefulness variance source", "scoring", "reliable_family_variance",
       c(family_variance          = "Family variance",
-        reliable_family_variance = "Reliable family variance"),
+        reliable_family_variance = "Prediction-aware family variance (PMV)"),
       depends_on = "trait_value_metric=usefulness"),
     enum("method_varPMV", "Variance accuracy", "scoring", "fast",
       c(fast           = "Standard (fast)",
@@ -326,17 +326,17 @@ ng_backend_capability_registry <- function(generated_at = Sys.time()) {
       "ng_lethal_recessive_spec; ng_lethal_recessive_cross_risk",
       "ng_optimize_mating_plan(cost_col=, budget=, lambda_cost=, logistic_col=, lambda_logistic=); ng_run_cross_prediction(cross_cost=, cost_col=, budget=, lambda_cost=, logistic_col=, lambda_logistic=)",
       "ng_polyploid_grm(method=); ng_polyploid_dominance_grm(method=); ng_polyploid_qc",
-      "ng_polyploid_design_crosses(dominance=, gain=, double_reduction=, grm_method=); ng_polyploid_fit_effects; ng_polyploid_predict_value; ng_polyploid_score_crosses_dominance",
+      "ng_polyploid_design_crosses(dominance=, allow_experimental_dominance=, gain=, double_reduction=, grm_method=); ng_polyploid_fit_effects; ng_polyploid_predict_value; ng_polyploid_score_crosses_dominance",
       "ng_run_cross_prediction(training_genotype=, training_phenotype=, training_genotype_file=, training_phenotype_file=)"
     ),
     evidence = c(
       "End-to-end breeder workflow for QC, duplicate removal, trait-by-trait marker effects, cross prediction, multi-trait scoring, OCS allocation, priority tiers, and output files.",
       "Rank-normalized default for unknown breeder weights with threshold penalties.",
       "Uses declared relative trait weights after orienting increase/decrease directions.",
-      "Covariance-aware economic coefficients estimated from oriented/scaled trait covariance.",
-      "Full economic desired-gain solver using desired changes, economic weights, stabilized covariance, and diagnostic responses.",
+      "Smith-Hazel economic coefficients from caller-supplied phenotypic P and additive-genetic G: b = P^-1 G a.",
+      "Pesek-Baker desired-gain direction from caller-supplied P and G: b is proportional to G^-1 d, with response scaled by index variance from P.",
       "Soft thresholds by default with optional strict filtering.",
-      "Diploid DH/RIL recombination-aware PMV, usefulness, kinship, and reliability diagnostics.",
+      "Diploid DH/RIL recombination-aware PMV, usefulness, kinship, CV predictive ability, and explicitly labelled uncertainty diagnostics.",
       "Current validated DH/RIL parent-count decision rule from replicated evidence.",
       "Gain/diversity/parent-use constrained mating plans with greedy, repair, and MIP modes.",
       "Allocates progeny counts across selected families using score-weighted or marginal top-k logic.",
@@ -352,7 +352,7 @@ ng_backend_capability_registry <- function(generated_at = Sys.time()) {
       "Flag and optionally exclude carrier x carrier matings at deleterious recessive loci.",
       "Optional per-cross cost (soft penalty + hard budget) and logistic/geographic penalty folded into the allocation objective.",
       "Correct allele-frequency-based polyploid additive and dominance GRMs (VanRaden or Yang/GCTA, generalized to ploidy) plus ploidy-aware QC (0..ploidy range, missingness, MAF, monomorphic, duplicates); replaces the diploid-oriented kinship.",
-      "Any-ploidy one-call mate design with optional additive+dominance modelling for clonal/heterosis crops (cassava, sugarcane, potato): genotypic-value parent selection, heterosis-inclusive cross mean + within-family additive+dominance variance, optional double reduction, C++-accelerated. Additive-only is the default. Dominance is DIGENIC only (no trigenic/quadrigenic components) and is fitted on a design orthogonalized against the additive design using the observed per-marker regression, so the additive/dominance split is identified rather than decided by ridge shrinkage. Within-family variance uses variance_model = 'unlinked_phase_marginalized': autopolyploid parental phase is not identifiable from dosage, and averaged over the phase configurations consistent with the observed dosages the between-locus covariance is exactly zero, so the variance is UNBIASED but cannot separate two crosses differing only in linkage phase -- unlike the diploid path (exact recombination-aware a'Ra with known phase) and the allopolyploid subgenome path (per-subgenome a'Ra when a cM map is supplied).",
+      "Any-even-ploidy one-call mate design with optional additive+dominance modelling for clonal/heterosis crops (cassava, sugarcane, potato): genotypic-value parent selection, heterosis-inclusive cross mean + within-family additive+dominance variance, C++-accelerated. Nonzero double reduction is currently restricted to the autotetraploid single-IBD-pair model. Additive-only is the default; additive+dominance is an explicit experimental mode because both components currently share one ridge penalty. Dominance is DIGENIC only (no trigenic/quadrigenic components). Within-family dosage variance uses variance_model = 'uniform_phase_prior_expectation': autopolyploid parental phase is not identifiable from dosage, so the result is an expectation under a stated uniform prior over compatible phases and cannot separate crosses differing only in linkage phase -- unlike the diploid path (exact recombination-aware a'Ra with known phase) and the allopolyploid subgenome path (per-subgenome a'Ra when a cM map is supplied).",
       "Enlarge the marker-effect training set with extra genotyped+phenotyped individuals that are NOT candidate parents (the parents are the main genotype/phenotype tables). Improves effect-based metrics (mean/usefulness/pmv/vpm/var_complex), not parent_distance. The result reports training_only_count, effect_training_n, and training_ids so the frontend can display 'trained on N, crossing K parents'."
     ),
     stringsAsFactors = FALSE
@@ -380,8 +380,11 @@ ng_backend_capability_registry <- function(generated_at = Sys.time()) {
       "than a decomposition of multi_trait_score -- the frontend MUST badge this case). Multi-trait ",
       "runs also attribute the risk: risk_driver_trait/risk_driver_share per cross, plus per-trait ",
       "index_traits and risk_disproportionate_traits in priority_risk_diagnostics. Confidence is a ",
-      "within-run normalization and risk_bin is within-run tertiles -- neither is comparable across ",
-      "runs. Posterior-ON confidence and prob_top_tier are not implemented."
+      "within-run normalization and risk_bin is within-run tertiles, both resolved once on the full ",
+      "post-filter candidate pool and copied unchanged to the selected subset -- neither is ",
+      "comparable across runs. Single-trait posterior-ON runs use the posterior SD of the selected ",
+      "metric (confidence_method='posterior_ci') and report prob_top_tier separately; multi-trait ",
+      "posterior risk is not implemented because the production score is generally rank-nonlinear."
     ),
     stringsAsFactors = FALSE
   ))
