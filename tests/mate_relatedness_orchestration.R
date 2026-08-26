@@ -15,12 +15,15 @@ expect_error <- function(expr, pattern) {
 set.seed(1)
 ids <- sprintf("P%02d", 1:8)
 pairs <- ng_make_pairs(ids, include_self = FALSE)
+Z <- matrix(rnorm(length(ids) * 4L), nrow = length(ids))
+K <- tcrossprod(Z) / 4L
+K <- K / mean(diag(K))
+dimnames(K) <- list(ids, ids)
 scores <- data.frame(parent1 = pairs$parent1, parent2 = pairs$parent2,
                      gain = rnorm(nrow(pairs), 10, 2),
-                     pair_kinship = pmax(0, rnorm(nrow(pairs), 0.1, 0.1)),
                      stringsAsFactors = FALSE)
-scores$expected_progeny_inbreeding <- pmax(0, scores$pair_kinship / 2)
-K <- diag(length(ids)); dimnames(K) <- list(ids, ids)
+scores$pair_kinship <- K[cbind(scores$parent1, scores$parent2)] / 2
+scores$expected_progeny_inbreeding <- pmax(0, scores$pair_kinship)
 plan <- function(...) ng_optimize_mating_plan(scores, n_crosses = 5, gain_col = "gain",
                                               parent_kinship = K, method = "greedy_local", ...)
 

@@ -52,7 +52,8 @@ stopifnot(all(eigen(G_hat, only.values = TRUE)$values > -1e-8))
 # ---- beta_posterior mode (fast; D1-coherent) --------------------------------
 set.seed(42L)
 draws_bp <- ng_posterior_genetic_covariance(
-  geno, Y, n_draws = 60L, method = "beta_posterior", seed = 42L
+  geno, Y, n_draws = 60L, method = "beta_posterior", seed = 42L,
+  allow_heuristic = TRUE
 )
 stopifnot(identical(dim(draws_bp), c(t_traits, t_traits, 60L)))
 stopifnot(identical(attr(draws_bp, "method"), "beta_posterior"))
@@ -82,7 +83,8 @@ if (any(abs(G_post_off) > abs(G_hat_off) + 1e-3)) {
 
 # ---- parametric_bootstrap mode (covers hyperparameter uncertainty) ----------
 draws_pb <- ng_posterior_genetic_covariance(
-  geno, Y, n_draws = 30L, method = "parametric_bootstrap", seed = 7L
+  geno, Y, n_draws = 30L, method = "parametric_bootstrap", seed = 7L,
+  allow_heuristic = TRUE
 )
 stopifnot(identical(dim(draws_pb), c(t_traits, t_traits, 30L)))
 stopifnot(identical(attr(draws_pb, "method"), "parametric_bootstrap"))

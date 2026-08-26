@@ -175,6 +175,16 @@ ng_multitrait_crop_validation_scenario <- function(scenario = "compact_selfing",
   if (is.null(colnames(geno))) colnames(geno) <- sprintf("M%05d", seq_len(ncol(geno)))
   parent_kinship <- ng_parent_kinship(geno)
 
+  # The AlphaSimR data-generating model supplies the additive covariance
+  # directly. For a random cross mean, Var((A1 + A2)/2) = G_A/2; prediction
+  # errors were added independently below with known trait-specific variance.
+  sd_a <- sqrt(as.numeric(profile$var))
+  genetic_covariance <- 0.5 * (profile$corA * outer(sd_a, sd_a))
+  prediction_error_variance <- as.numeric(profile$var) * prediction_noise^2
+  phenotypic_covariance <- genetic_covariance + diag(prediction_error_variance, nrow(traits))
+  dimnames(genetic_covariance) <- dimnames(phenotypic_covariance) <-
+    list(traits$trait, traits$trait)
+
   pairs <- ng_make_pairs(parent_ids, include_self = FALSE)
   p1 <- match(pairs$parent1, parent_ids)
   p2 <- match(pairs$parent2, parent_ids)
@@ -217,6 +227,9 @@ ng_multitrait_crop_validation_scenario <- function(scenario = "compact_selfing",
     parent_values = parent_values,
     parent_genotype = geno,
     parent_kinship = parent_kinship,
+    phenotypic_covariance = phenotypic_covariance,
+    genetic_covariance = genetic_covariance,
+    covariance_source = "AlphaSimR_additive_G_cross_mean_plus_known_prediction_error",
     trait_profile = profile,
     crop_scenario = crop_scenario,
     config = data.frame(
@@ -346,6 +359,8 @@ ng_run_multitrait_crop_validation_grid <- function(scenarios = c("compact_selfin
           methods = methods,
           allocator = allocator,
           parent_kinship = scenario_obj$parent_kinship,
+          phenotypic_covariance = scenario_obj$phenotypic_covariance,
+          genetic_covariance = scenario_obj$genetic_covariance,
           ocs_lambda_group = ocs_lambda_group,
           ocs_lambda_mating = ocs_lambda_mating
         )

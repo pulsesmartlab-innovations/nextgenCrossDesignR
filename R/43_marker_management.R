@@ -135,6 +135,13 @@ ng_lethal_recessive_cross_risk <- function(geno, pairs, spec, ploidy = 2,
     prog <- as.numeric(stats::convolve(g1, rev(g2), type = "open"))
     prog[prog < 0] <- 0
     prog <- prog / sum(prog)
+    # FFT/convolution round-off can leave probabilities of order 1e-17 in
+    # Mendelian classes that are exactly impossible (for example safe x safe
+    # at a recessive lethal). Do not turn that numerical dust into a carrier
+    # cross flag. The tolerance is far below any biologically representable
+    # probability in the supported finite-ploidy models.
+    prog[prog < 100 * .Machine$double.eps] <- 0
+    prog <- prog / sum(prog)
     locus_prob[i, j] <- sum(prog[(0:P) >= threshold[j]])
   }
   loci <- rowSums(locus_prob > 0)

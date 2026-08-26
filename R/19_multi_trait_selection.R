@@ -770,7 +770,10 @@ ng_score_breeder_objective <- function(scores,
     genetic_covariance = genetic_covariance,
     source = objective$source
   )
-  scored$multi_trait_threshold_policy <- objective$threshold_policy
+  # Preserve the data-frame shape for an empty candidate set. Assigning a
+  # scalar to a zero-row data frame raises before the caller can issue the
+  # intended "not enough feasible candidates" diagnostic.
+  scored$multi_trait_threshold_policy <- rep(objective$threshold_policy, nrow(scored))
   meta <- attr(scored, "multi_trait")
   meta$breeder_objective_method_requested <- objective$method_requested
   meta$breeder_objective_method_reason <- objective$diagnostics$method_reason

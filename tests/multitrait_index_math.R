@@ -31,21 +31,21 @@ traits <- ng_multitrait_spec(
   economic_weight = c(2, 1, 1)
 )
 
-# ---- Default (phenotypic_proxy) -----------------------------------------------------------
-scored_default <- ng_add_multitrait_score(scores, traits, method = "economic_index")
-meta_default <- attr(scored_default, "multi_trait")
-stopifnot(identical(meta_default$economic_index_cov_source, "phenotypic_proxy"))
-stopifnot(grepl("Sigma_hat", meta_default$economic_index_cov_solve_form, fixed = TRUE))
+# ---- Missing quantitative-genetic matrices are rejected ----------------------------------
+missing_both <- tryCatch(
+  ng_add_multitrait_score(scores, traits, method = "economic_index"),
+  error = function(e) conditionMessage(e)
+)
+stopifnot(grepl("requires both phenotypic_covariance", missing_both, fixed = TRUE))
 
-# ---- User-supplied G (Pesek-Baker / genetic-covariance solve) ----------------------------
+# ---- G alone is not a Smith-Hazel index ---------------------------------------------------
 G <- diag(c(4, 25, 16))                   # arbitrary diagonal G
 dimnames(G) <- list(traits$trait, traits$trait)
-scored_genetic <- ng_add_multitrait_score(
-  scores, traits, method = "economic_index", genetic_covariance = G
+missing_P <- tryCatch(
+  ng_add_multitrait_score(scores, traits, method = "economic_index", genetic_covariance = G),
+  error = function(e) conditionMessage(e)
 )
-meta_genetic <- attr(scored_genetic, "multi_trait")
-stopifnot(identical(meta_genetic$economic_index_cov_source, "genetic_covariance"))
-stopifnot(grepl("G\\^\\{-1\\} a", meta_genetic$economic_index_cov_solve_form))
+stopifnot(grepl("requires both phenotypic_covariance", missing_P, fixed = TRUE))
 
 # ---- User-supplied P AND G (Smith-Hazel) -------------------------------------------------
 P <- diag(c(8, 60, 35))                   # arbitrary diagonal P
@@ -62,7 +62,8 @@ stopifnot(grepl("P\\^\\{-1\\} G a", meta_sh$economic_index_cov_solve_form))
 # With diagonal P and G, b = P^{-1} G a / |.|, predicted = G b (genetic-units response).
 # The index is applied to value_z = sign*(raw - center)/scale, so raw-unit external
 # covariances enter as M_z = L M L with L = diag(sign/scale). The predicted response is
-# therefore the value_z-mapped G_z %*% b, not the raw-unit G %*% b. L is rebuilt here from
+# therefore the value_z-mapped G_z %*% b divided by the index SD, not the raw-unit
+# G %*% b. L is rebuilt here from
 # first principles (scale = IQR/1.349) rather than via ng_multitrait_cov_to_value_z, so this
 # stays an independent check of the mapping instead of restating it.
 sh_scale <- vapply(traits$trait, function(tt) stats::IQR(scores[[tt]]) / 1.349, numeric(1))
@@ -73,33 +74,38 @@ P_z <- P * outer(L_sh, L_sh)
 
 b_sh <- meta_sh$economic_index_coefficients
 pred_sh <- meta_sh$economic_index_predicted_response
-if (max(abs(pred_sh - as.numeric(G_z %*% b_sh))) > 1e-8) {
-  stop("Smith-Hazel predicted response should equal G_z %*% b (value_z-mapped G)")
+sigma_i <- sqrt(as.numeric(crossprod(b_sh, P_z %*% b_sh)))
+expected_response <- as.numeric(G_z %*% b_sh) / sigma_i
+if (max(abs(pred_sh - expected_response)) > 1e-8) {
+  stop("Smith-Hazel predicted response should equal G_z %*% b / sigma_I")
 }
 # The defect this guards against: reporting the P-projection instead of the G-projection.
 if (max(abs(pred_sh - as.numeric(P_z %*% b_sh))) < 1e-8) {
   stop("Smith-Hazel predicted response must not equal P %*% b")
 }
 
-# ---- Single ridge: heavy ridge must shrink coefficients toward target ----------------
-# When ridge is large (ridge_scale comparable to diag), the solution should
-# approach the prior target rather than blowing up.
+# ---- Single ridge: coefficients equal the one-penalty Smith-Hazel solve ------------------
 fit_small <- ng_multitrait_economic_index_fit(
   value_z = matrix(rnorm(n * 3, sd = 0.5), nrow = n),
-  traits = traits, ridge = 1e-6
+  traits = traits, ridge = 1e-6,
+  phenotypic_covariance = P, genetic_covariance = G
 )
 fit_huge <- ng_multitrait_economic_index_fit(
   value_z = matrix(rnorm(n * 3, sd = 0.5), nrow = n),
-  traits = traits, ridge = 1e6
+  traits = traits, ridge = 1e6,
+  phenotypic_covariance = P, genetic_covariance = G
 )
 stopifnot(all(is.finite(fit_small$coefficients)))
 stopifnot(all(is.finite(fit_huge$coefficients)))
-gap_small <- max(abs(fit_small$coefficients - fit_small$target))
-gap_huge  <- max(abs(fit_huge$coefficients  - fit_huge$target))
-if (gap_huge >= gap_small) {
-  stop(sprintf("heavy ridge should shrink toward target; gap_huge=%.4f >= gap_small=%.4f",
-               gap_huge, gap_small))
+one_ridge_reference <- function(ridge, target) {
+  rhs <- as.numeric(G %*% target)
+  b <- as.numeric(solve(P + diag(ridge * mean(diag(P)), nrow(P)), rhs))
+  b / sum(abs(b))
 }
+ref_small <- one_ridge_reference(1e-6, fit_small$target)
+ref_huge <- one_ridge_reference(1e6, fit_huge$target)
+stopifnot(max(abs(fit_small$coefficients - ref_small)) < 1e-10)
+stopifnot(max(abs(fit_huge$coefficients - ref_huge)) < 1e-10)
 
 # ---- Threshold autoscale: a violation of one trait-SD should bind --------------------
 traits_thr <- ng_multitrait_spec(
@@ -133,7 +139,6 @@ if (ratio < 0.5 || ratio > 5) {
 }
 
 cat("multitrait_index_math: 5/5 checks passed\n")
-cat(sprintf("  cov sources covered: phenotypic_proxy, genetic_covariance, smith_hazel\n"))
-cat(sprintf("  ridge shrinkage check: gap_small=%.4f gap_huge=%.4f (huge < small)\n",
-            gap_small, gap_huge))
+cat(sprintf("  covariance contract covered: missing P/G rejected; Smith-Hazel P + G solved\n"))
+cat("  ridge solve check: package coefficients equal the single-penalty closed form\n")
 cat(sprintf("  autoscaled penalty/IQR ratio: %.3f\n", ratio))

@@ -253,13 +253,13 @@ scores_r <- data.frame(
   parent1 = pairs_r$parent1,
   parent2 = pairs_r$parent2,
   usefulness_pmv_gebv = sort(rnorm(n_r, mean = 5, sd = 1), decreasing = TRUE),
-  pair_kinship = runif(n_r, 0, 0.2),
   stringsAsFactors = FALSE
 )
 # Synthetic parent_kinship (positive-definite kinship-like matrix).
 Z <- matrix(rnorm(length(ids_r) * 5L), nrow = length(ids_r))
 K_r <- tcrossprod(Z) / 5 + diag(0.05, length(ids_r))
 rownames(K_r) <- colnames(K_r) <- ids_r
+scores_r$pair_kinship <- K_r[cbind(scores_r$parent1, scores_r$parent2)] / 2
 
 curve_r <- ng_optimize_mating_plan_curve(
   scores = scores_r, K_range = 4:15,

@@ -1298,6 +1298,8 @@ ng_cp__stage_allocate <- function(ctx) {
       optimizer_method = optimizer_method,
       threshold_penalty_weight = threshold_penalty_weight,
       threshold_penalty_autoscale = threshold_penalty_autoscale,
+      phenotypic_covariance = phenotypic_covariance,
+      genetic_covariance = genetic_covariance,
       marker_target_spec = marker_target_spec,
       marker_geno = geno,
       lambda_marker = lambda_marker,

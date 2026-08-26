@@ -1,15 +1,4 @@
-root_candidates <- c(
-  file.path(getwd(), "nextgen_cross_design"),
-  getwd(),
-  file.path("..", "nextgen_cross_design"),
-  file.path("..")
-)
-root_hits <- root_candidates[file.exists(file.path(root_candidates, "R", "load.R"))]
-stopifnot(length(root_hits) > 0L)
-root <- normalizePath(root_hits[[1]], mustWork = TRUE)
-source(file.path(root, "tools", "ng_project_libpath.R")); ng_prepend_project_lib(file.path(dirname(root), ".Rlib"))
-source(file.path(root, "R", "load.R"))
-ng_load(root, use_cpp = FALSE, verbose = FALSE)
+source(file.path("tests", "helper_load.R"))
 
 registry <- ng_backend_capability_registry(
   generated_at = as.POSIXct("2026-05-07 00:00:00", tz = "UTC")
@@ -72,7 +61,10 @@ stopifnot(all(c(
   "poly4x_policy"
 ) %in% methods$id))
 stopifnot(identical(methods$default[methods$id == "multitrait_auto"], TRUE))
-stopifnot(grepl("covariance", methods$evidence[methods$id == "multitrait_economic_index"], ignore.case = TRUE))
+stopifnot(grepl(
+  "caller-supplied phenotypic P and additive-genetic G",
+  methods$evidence[methods$id == "multitrait_economic_index"], fixed = TRUE
+))
 
 workflow_ids <- registry$workflows$id
 stopifnot(all(c(

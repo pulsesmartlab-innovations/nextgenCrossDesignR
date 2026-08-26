@@ -2,7 +2,8 @@
 # RAW trait units, but the index is applied to value_z = sign*(raw-center)/scale. The fix maps the
 # external G/P (and the economic weights) into the value_z space so the package's economic-index
 # ranking reproduces the true raw Smith-Hazel index b = P^{-1} G a exactly. Regression: without an
-# external covariance the (self-consistent) internal path is unchanged.
+# external covariance the formal method is rejected rather than substituting
+# candidate-cross score covariance for P and G.
 ng_test_use_cpp <- FALSE
 helper <- c(file.path("tests", "helper_load.R"), "helper_load.R",
             file.path("nextgen_cross_design", "tests", "helper_load.R"),
@@ -42,8 +43,11 @@ top <- scores[which.max(scored$mt), ]; bot <- scores[which.min(scored$mt), ]
 merit <- function(r) 2 * r$pred_yield - 3 * r$pred_disease      # oriented economic merit
 stopifnot(merit(top) > merit(bot))
 
-# Regression: economic_index WITHOUT an external covariance still runs and ranks (internal path).
-scored0 <- ng_add_multitrait_score(scores, traits, method = "economic_index", out_col = "mt")
-stopifnot(is.finite(scored0$mt), length(unique(rank(scored0$mt))) > 1L)
+# Regression: economic_index WITHOUT P and G fails loudly.
+missing_cov <- tryCatch(
+  ng_add_multitrait_score(scores, traits, method = "economic_index", out_col = "mt"),
+  error = function(e) conditionMessage(e)
+)
+stopifnot(grepl("requires both phenotypic_covariance", missing_cov, fixed = TRUE))
 
 cat("multitrait_economic_index_external_cov.R: PASS\n")

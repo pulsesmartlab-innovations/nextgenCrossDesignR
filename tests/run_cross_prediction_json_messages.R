@@ -1,7 +1,7 @@
 # The headless JSON contract (tools/run_cross_prediction_json.R) must surface the
 # backend's user-facing messages so the frontend can DISPLAY them:
-#   - warnings (e.g. the residual-het RIL advisory) -> result$warnings[]
-#   - a blocker (e.g. a DH/inbred parent carrying het) -> a structured
+#   - a residual-het RIL without phase -> a structured blocker
+#   - a DH/inbred parent carrying het -> a structured
 #     result$status = "error" with result$error$message, NOT an uncaught crash.
 helper <- c(file.path("tests", "helper_load.R"), "helper_load.R",
             file.path("nextgen_cross_design", "tests", "helper_load.R"),
@@ -34,11 +34,10 @@ run_json <- function(cfg, out) {
   jsonlite::fromJSON(out, simplifyVector = TRUE, simplifyDataFrame = FALSE)
 }
 
-# RIL + het: proceeds (status ok) and the residual-het advisory is captured
+# RIL + het without phase: structured error, because the inbred a'Ra kernel is biased.
 r_ril <- run_json(file.path(td, "cfg_ril.json"), file.path(td, "res_ril.json"))
-stopifnot(identical(r_ril$status, "ok"))
-stopifnot(length(r_ril$warnings) >= 1L)
-stopifnot(any(grepl("residual heterozygosity", unlist(r_ril$warnings))))
+stopifnot(identical(r_ril$status, "error"))
+stopifnot(!is.null(r_ril$error_message), grepl("phased_haplotypes", r_ril$error_message, fixed = TRUE))
 
 # DH + het: structured error result (not a crash) with the blocker message
 r_dh <- run_json(file.path(td, "cfg_dh.json"), file.path(td, "res_dh.json"))
@@ -56,11 +55,12 @@ run_stage <- function(cfg_file, stage, run_dir) {
           stdout = FALSE, stderr = FALSE, env = "NGCD_SKIP_CPP=1")
   jsonlite::fromJSON(out, simplifyVector = TRUE, simplifyDataFrame = FALSE)
 }
-# RIL: the residual-het advisory surfaces in the predict stage's warnings
+# RIL: the missing-phase blocker surfaces in the predict stage.
 rd <- tempfile("stg_ril_"); dir.create(rd)
 invisible(run_stage(file.path(td, "cfg_ril.json"), "qc", rd))
 sp <- run_stage(file.path(td, "cfg_ril.json"), "predict", rd)
-stopifnot(length(sp$warnings) >= 1L, any(grepl("residual heterozygosity", unlist(sp$warnings))))
+stopifnot(identical(sp$status, "error"), isTRUE(sp$error),
+          !is.null(sp$error_message), grepl("phased_haplotypes", sp$error_message, fixed = TRUE))
 # DH: the blocker surfaces as a structured error in the predict stage
 rd2 <- tempfile("stg_dh_"); dir.create(rd2)
 invisible(run_stage(file.path(td, "cfg_dh.json"), "qc", rd2))
@@ -68,4 +68,4 @@ sd <- run_stage(file.path(td, "cfg_dh.json"), "predict", rd2)
 stopifnot(identical(sd$status, "error"), isTRUE(sd$error),
           !is.null(sd$error_message), grepl("BLOCKED", sd$error_message))
 
-cat("run_cross_prediction_json_messages: warnings + blocker surfaced in BOTH monolith and staged JSON contracts\n")
+cat("run_cross_prediction_json_messages: phase and fixed-line blockers surfaced in BOTH monolith and staged JSON contracts\n")

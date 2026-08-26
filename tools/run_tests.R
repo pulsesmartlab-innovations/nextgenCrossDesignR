@@ -66,12 +66,15 @@ if (run_harness) {
   for (s in scripts) {
     nm <- basename(s)
     t0 <- Sys.time()
-    status <- system2(rscript, shQuote(s), stdout = FALSE, stderr = FALSE)
+    output <- suppressWarnings(system2(rscript, shQuote(s), stdout = TRUE, stderr = TRUE))
+    status <- attr(output, "status")
+    if (is.null(status)) status <- 0L
     secs <- round(as.numeric(difftime(Sys.time(), t0, units = "secs")))
     if (identical(status, 0L)) {
       cat(sprintf("  PASS  %-52s %4ds\n", nm, secs))
     } else {
       cat(sprintf("  FAIL  %-52s %4ds\n", nm, secs))
+      if (length(output)) cat(paste0("        ", output, collapse = "\n"), "\n")
       failures <- c(failures, paste0("harness: ", nm))
     }
   }

@@ -1,15 +1,4 @@
-root_candidates <- c(
-  file.path(getwd(), "nextgen_cross_design"),
-  getwd(),
-  file.path("..", "nextgen_cross_design"),
-  file.path("..")
-)
-root_hits <- root_candidates[file.exists(file.path(root_candidates, "R", "load.R"))]
-stopifnot(length(root_hits) > 0L)
-root <- normalizePath(root_hits[[1]], mustWork = TRUE)
-source(file.path(root, "tools", "ng_project_libpath.R")); ng_prepend_project_lib(file.path(dirname(root), ".Rlib"))
-source(file.path(root, "R", "load.R"))
-ng_load(root, use_cpp = FALSE, verbose = FALSE)
+source(file.path("tests", "helper_load.R"))
 
 if (!requireNamespace("AlphaSimR", quietly = TRUE)) {
   message("AlphaSimR unavailable; skipping multi-trait crop validation test")
@@ -51,6 +40,9 @@ stopifnot(is.matrix(scenario$parent_genotype))
 stopifnot(!any(scenario$parent_genotype == 1, na.rm = TRUE))
 stopifnot(is.matrix(scenario$parent_kinship))
 stopifnot(identical(rownames(scenario$parent_kinship), scenario$parent_values$parent))
+stopifnot(is.matrix(scenario$phenotypic_covariance), is.matrix(scenario$genetic_covariance))
+stopifnot(min(eigen(scenario$phenotypic_covariance, symmetric = TRUE, only.values = TRUE)$values) > 0)
+stopifnot(min(eigen(scenario$genetic_covariance, symmetric = TRUE, only.values = TRUE)$values) >= -1e-10)
 
 ocs_direct <- ng_run_multitrait_validation(
   scores = scenario$scores,
@@ -61,6 +53,8 @@ ocs_direct <- ng_run_multitrait_validation(
   methods = "auto",
   allocator = "ocs",
   parent_kinship = scenario$parent_kinship,
+  phenotypic_covariance = scenario$phenotypic_covariance,
+  genetic_covariance = scenario$genetic_covariance,
   ocs_lambda_group = 0.20
 )
 stopifnot("group_coancestry" %in% names(ocs_direct$summary))

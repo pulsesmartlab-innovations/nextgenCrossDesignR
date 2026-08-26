@@ -12,7 +12,7 @@ scores <- data.frame(parent1 = pp[cmb[, 1]], parent2 = pp[cmb[, 2]], stringsAsFa
 scores$usefulness_pmv_gebv <- rnorm(nrow(scores), 10, 2)
 L <- matrix(rnorm(np * np, 0, 0.3), np, np)
 K <- crossprod(L) / np; diag(K) <- diag(K) + 1; dimnames(K) <- list(pp, pp)
-scores$pair_kinship <- K[cbind(match(scores$parent1, pp), match(scores$parent2, pp))]
+scores$pair_kinship <- K[cbind(match(scores$parent1, pp), match(scores$parent2, pp))] / 2
 n_crosses <- 15L
 
 # Frontier gives the achievable coancestry range.

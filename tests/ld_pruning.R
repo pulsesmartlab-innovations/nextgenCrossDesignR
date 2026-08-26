@@ -13,13 +13,18 @@ geno[, 9] <- 0
 geno[1:2, 9] <- 1
 rownames(geno) <- paste0("P", seq_len(nrow(geno)))
 colnames(geno) <- paste0("M", seq_len(ncol(geno)))
+marker_map <- data.frame(
+  marker = colnames(geno), chr = 1L, pos_cm = seq(0, by = 1, length.out = ncol(geno)),
+  stringsAsFactors = FALSE
+)
 
 r_pruned <- ng_ld_prune_markers(
   geno,
   window = 3L,
   r2_threshold = 0.8,
   maf_threshold = 0.03,
-  backend = "r"
+  backend = "r",
+  marker_map = marker_map
 )
 
 stopifnot(is.character(r_pruned$keep_markers))
@@ -36,7 +41,8 @@ if (exists("ng_ld_prune_graph_cpp", mode = "function", inherits = TRUE)) {
     window = 3L,
     r2_threshold = 0.8,
     maf_threshold = 0.03,
-    backend = "cpp"
+    backend = "cpp",
+    marker_map = marker_map
   )
   stopifnot(identical(cpp_pruned$keep_markers, r_pruned$keep_markers))
   stopifnot(identical(cpp_pruned$report$backend, "cpp"))
@@ -47,15 +53,22 @@ filtered <- ng_ld_prune_geno(
   window = 3L,
   r2_threshold = 0.8,
   maf_threshold = 0.03,
-  backend = "r"
+  backend = "r",
+  marker_map = marker_map
 )
 stopifnot(identical(colnames(filtered), r_pruned$keep_markers))
 stopifnot(is.data.frame(attr(filtered, "ld_pruning_report")))
 
 y <- stats::setNames(stats::rnorm(nrow(geno)), rownames(geno))
+geno_design <- geno
+geno_design[!is.finite(geno_design)] <- 0
+geno_design <- 2L * (geno_design > 0)
+dimnames(geno_design) <- dimnames(geno)
+geno_design[, "M9"] <- 0L
 plan <- suppressWarnings(ng_design_crosses(
-  geno = geno,
+  geno = geno_design,
   y = y,
+  marker_map = marker_map,
   n_crosses = 4L,
   max_crosses_per_parent = 2L,
   ld_pruning = TRUE,
@@ -64,9 +77,9 @@ plan <- suppressWarnings(ng_design_crosses(
   ld_maf_threshold = 0.03,
   ld_backend = "r",
   use_cpp = FALSE,
-  # Synthetic LD-pruning fixture contains heterozygous dosages; the DH/RIL
-  # variance kernel assumes inbred parents, so disable the guard here.
-  assume_inbred = FALSE
+  # This fixture tests graph pruning, not residual-heterozygous RIL variance.
+  # Use the explicit inbred declaration after the pruning contract is checked.
+  parent_type = "inbred"
 ))
 stopifnot(is.data.frame(plan$ld_pruning_report))
 stopifnot(plan$ld_pruning_report$markers_after == length(plan$effects$beta))

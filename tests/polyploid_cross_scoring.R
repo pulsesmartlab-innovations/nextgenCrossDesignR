@@ -114,7 +114,10 @@ fs <- runif(ms, 0.1, 0.9)
 Ms <- matrix(rbinom(ns * ms, Ps, rep(fs, each = ns)), ns, ms,
              dimnames = list(idss, sprintf("V%03d", seq_len(ms))))
 ys <- as.numeric(Ms %*% rnorm(ms, 0, .25) + (Ms * (Ps - Ms)) %*% rnorm(ms, 0, .12)) + rnorm(ns, 0, .5)
-fits <- ng_polyploid_fit_effects(Ms, ys, ploidy = Ps, model = "additive_dominance", seed = 3L)
+fits <- ng_polyploid_fit_effects(
+  Ms, ys, ploidy = Ps, model = "additive_dominance", seed = 3L,
+  allow_experimental_dominance = TRUE
+)
 scs <- ng_polyploid_score_crosses_dominance(fits, Ms, double_reduction = drs, use_cpp = FALSE)
 
 sim_gam <- function(dvec, P, dr) vapply(dvec, function(d) {

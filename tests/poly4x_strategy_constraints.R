@@ -24,7 +24,7 @@ cmb <- t(utils::combn(np, 2L))
 scores <- data.frame(parent1 = pp[cmb[, 1]], parent2 = pp[cmb[, 2]],
                      stringsAsFactors = FALSE)
 scores$poly4x_usefulness <- rnorm(nrow(scores), 12, 4)
-scores$pair_kinship <- K[cbind(scores$parent1, scores$parent2)]
+scores$pair_kinship <- K[cbind(scores$parent1, scores$parent2)] / 2
 scores$poly4x_pair_coancestry <- scores$pair_kinship
 attr(scores, "parent_kinship") <- K
 
