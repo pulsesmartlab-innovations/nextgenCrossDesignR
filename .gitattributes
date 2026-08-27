@@ -1,0 +1,24 @@
+# Normalize line endings. Store text as LF in the repository and check it out as
+# LF on every platform, so a Windows editor can't reintroduce CRLF churn.
+* text=auto eol=lf
+
+# Explicit for the source/text this package ships (kept LF everywhere).
+*.R      text eol=lf
+*.Rmd    text eol=lf
+*.Rd     text eol=lf
+*.md     text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.csv    text eol=lf
+*.svg    text eol=lf
+*.css    text eol=lf
+Dockerfile text eol=lf
+
+# Binary assets - never touch line endings.
+*.png    binary
+*.gif    binary
+*.pdf    binary
+*.jpg    binary
+*.tar.gz binary
+*.rds    binary
+*.RData  binary
