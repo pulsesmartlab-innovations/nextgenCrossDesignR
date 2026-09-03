@@ -540,6 +540,10 @@ Remove the old behaviour before wiring the new one, so no code path can reach bo
 - Delete: `tests/trait_checks.R`
 - Modify: `R/39_cross_prediction_runner.R:1190-1250` (the `trait_checks` block)
 - Modify: `NAMESPACE`, `man/nextgenCrossDesign-api.Rd`
+- Modify: `vignettes/nextgenCrossDesign.Rmd:1746` — the API table lists
+  `ng_apply_trait_checks()`, which this task deletes. This repo executes its vignette, so a
+  stale reference fails `R CMD check` at Task 10. Replace it with
+  `ng_attach_check_reference()` in that row.
 
 **Interfaces:**
 - Consumes: nothing.
