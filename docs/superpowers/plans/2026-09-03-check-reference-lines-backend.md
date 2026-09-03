@@ -29,6 +29,12 @@ LD, GRM, or `ng_make_pairs()`, which is what makes the "reference only" claim te
 - **The invariant:** a run with checks must produce cross predictions byte-identical to the
   same run without checks. Task 7 enforces it; every other task must not break it.
 - Ties are never violations (`>=`, not `>`).
+- **`%||%` is NOT available.** It is defined only as a local inside one function body
+  (`R/39_cross_prediction_runner.R:1568`) and is neither exported nor imported by the package.
+  Use explicit `if (is.null(x)) ... else ...`; do not define a local copy in a new file.
+- **`ng_predict_gebv(geno, effects)` reads `effects$beta`** (named numeric over marker ids)
+  **and `effects$intercept`** (`R/02_effects.R:188`). There is no `$effect` field anywhere in
+  this package — any test fixture must use `beta`/`intercept`.
 - Direction vocabulary: `reject_if = "below"` means the breeder wants the mid-parent **above**
   the check (an `increase` trait). `reject_if = "above"` means they want it **below**
   (a `decrease` trait).
@@ -173,6 +179,12 @@ from the axis it is drawn on.
 
 **Interfaces:**
 - Consumes: `ng_align_check_geno()` from Task 1.
+- **`ng_predict_gebv(geno, effects)` reads `effects$beta` (a named numeric over marker ids) and
+  `effects$intercept`** (`R/02_effects.R:188`). Test fixtures must use those field names — there
+  is no `$effect` field anywhere in this package.
+- **`%||%` is NOT a package helper.** It exists only as a local inside one function body
+  (`R/39_cross_prediction_runner.R:1568`) and is neither exported nor imported. Use explicit
+  `if (is.null(x))` checks; do not define a local copy.
 - Produces: `ng_check_reference_value(source, check_geno_aligned, effects, check_records = NULL)`
   → named numeric vector over `rownames(check_geno_aligned)`. Returns `NA_real_` for any check
   with no record on a non-GEBV source. `check_records` is a named list with any of
@@ -185,7 +197,7 @@ simplest is to append this block and add a new `cat("task 2 ok\n")` at the end o
 
 ```r
 # --- Task 2: value resolution follows the run's mean source -----------------
-eff <- list(marker = markers, effect = c(m1 = 1, m2 = 0.5, m3 = -2))
+eff <- list(beta = c(m1 = 1, m2 = 0.5, m3 = -2), intercept = 0)
 al <- ng_align_check_geno(chk, markers)   # CHK_A = (m1=2, m2=2, m3=0); CHK_B = (0, 0, 2)
 
 # GEBV source -> predicted from the check's own markers with the SAME effects
@@ -793,7 +805,8 @@ Replace the deleted veto block (same position — after the lethal guard, before
     }
     # Progeny per family is the breeder's number, not ours. It scales P(beat check) directly,
     # so there is no default: a made-up family size would silently drive a reported probability.
-    kp <- suppressWarnings(as.integer(check_progeny_size[[1L]] %||% NA_integer_))
+    kp <- if (is.null(check_progeny_size)) NA_integer_ else
+      suppressWarnings(as.integer(check_progeny_size[[1L]]))
     if (!length(kp) || is.na(kp) || kp < 1L) {
       ng_stop("check_progeny_size is required with trait_checks: give the number of progeny ",
               "you will raise per family. It sets P(beat check) -- the chance a cross throws a ",
@@ -1108,7 +1121,8 @@ ng_cpw_checks_sheet <- function(trait_check_reference, crosses) {
     }, numeric(1)),
     source = as.character(trait_check_reference$source[spec$trait]),
     n_crosses_on_wrong_side = vapply(spec$trait, function(tr) {
-      sprintf("%d / %d", as.integer(wrong[[tr]] %||% NA_integer_), n_total)
+      w <- wrong[[tr]]
+      sprintf("%d / %d", if (is.null(w)) NA_integer_ else as.integer(w), n_total)
     }, character(1)),
     stringsAsFactors = FALSE, row.names = NULL)
 }
@@ -1259,12 +1273,12 @@ ng_check_line_value <- function(trait_check_reference, multi_trait_meta = NULL, 
     suppressWarnings(as.numeric(trait_check_reference$values[[tr]][[ck]]))
   }
   if (!is.null(trait) || nrow(spec) == 1L) {
-    tr <- trait %||% spec$trait[[1L]]
+    tr <- if (is.null(trait)) spec$trait[[1L]] else trait
     if (!(tr %in% spec$trait)) return(NA_real_)
     v <- val(tr)
     return(if (length(v) && is.finite(v)) v else NA_real_)
   }
-  method <- as.character(multi_trait_meta$method %||% "")
+  method <- as.character(if (is.null(multi_trait_meta$method)) "" else multi_trait_meta$method)
   if (!(method %in% c("weighted", "economic_index", "desired_gain"))) return(NA_real_)
   w <- multi_trait_meta$weights
   if (is.null(w) || !length(w)) return(NA_real_)
@@ -1283,7 +1297,7 @@ In `ng_plot_priority_score_vs_kinship()`, add the formals `check_line = NULL`,
 ```r
   if (!is.null(check_line) && is.finite(check_line)) {
     graphics::abline(h = check_line, lty = 2, lwd = 2, col = "#B00020")
-    graphics::mtext(sprintf("check: %s", check_label %||% "reference"),
+    graphics::mtext(sprintf("check: %s", if (is.null(check_label)) "reference" else check_label),
                     side = 4, at = check_line, las = 1, cex = 0.7, col = "#B00020")
   }
 ```
