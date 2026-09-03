@@ -35,3 +35,29 @@ ng_align_check_geno <- function(check_geno, marker_names, ploidy = 2L) {
   }
   out
 }
+
+# Resolve each check's value onto the SAME source the cross means used. ng_choose_mean_source()
+# returns one of "GEBV", "GEBV_low_reliability", "GEBV_uncalibrated", "BLUP", "BLUE",
+# "adjusted_pheno" -- per trait. A GEBV* source predicts from the check's markers with the
+# trait's fitted effects; a phenotypic source reads the check's own record. A check with no
+# record on a phenotypic source is NA (not evaluable) and must NEVER silently fall back to a
+# GEBV, which would put the reference on a different scale from the axis it is drawn on.
+ng_check_reference_value <- function(source, check_geno_aligned, effects, check_records = NULL) {
+  source <- as.character(source)[[1L]]
+  ids <- rownames(check_geno_aligned)
+  if (startsWith(source, "GEBV")) {
+    # Adapt effects structure for ng_predict_gebv: rename $effect to $beta if needed
+    adapted_effects <- effects
+    if (is.null(adapted_effects$beta) && !is.null(adapted_effects$effect)) {
+      adapted_effects$beta <- adapted_effects$effect
+    }
+    if (is.null(adapted_effects$intercept)) {
+      adapted_effects$intercept <- 0
+    }
+    return(stats::setNames(ng_predict_gebv(check_geno_aligned, adapted_effects), ids))
+  }
+  rec <- if (is.null(check_records)) NULL else check_records[[source]]
+  if (is.null(rec)) return(stats::setNames(rep(NA_real_, length(ids)), ids))
+  v <- suppressWarnings(as.numeric(rec[ids]))
+  stats::setNames(v, ids)
+}

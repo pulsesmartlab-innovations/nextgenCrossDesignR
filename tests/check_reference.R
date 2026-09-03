@@ -36,4 +36,32 @@ badcode <- matrix(c(0, 5, 1), nrow = 1, dimnames = list("CHK_A", markers))
 err3 <- tryCatch(ng_align_check_geno(badcode, markers), error = function(e) conditionMessage(e))
 stopifnot(is.character(err3), grepl("dosage", err3))
 
+# --- Task 2: value resolution follows the run's mean source -----------------
+eff <- list(marker = markers, effect = c(m1 = 1, m2 = 0.5, m3 = -2))
+al <- ng_align_check_geno(chk, markers)   # CHK_A = (m1=2, m2=2, m3=0); CHK_B = (0, 0, 2)
+
+# GEBV source -> predicted from the check's own markers with the SAME effects
+gv <- ng_check_reference_value("GEBV", al, eff)
+stopifnot(is.numeric(gv), identical(names(gv), c("CHK_A", "CHK_B")))
+stopifnot(abs(gv[["CHK_A"]] - (2 * 1 + 2 * 0.5 + 0 * -2)) < 1e-8)
+stopifnot(abs(gv[["CHK_B"]] - (0 * 1 + 0 * 0.5 + 2 * -2)) < 1e-8)
+
+# the low-reliability / uncalibrated GEBV variants are still GEBV
+stopifnot(abs(ng_check_reference_value("GEBV_uncalibrated", al, eff)[["CHK_A"]] - gv[["CHK_A"]]) < 1e-8)
+stopifnot(abs(ng_check_reference_value("GEBV_low_reliability", al, eff)[["CHK_A"]] - gv[["CHK_A"]]) < 1e-8)
+
+# a phenotypic source reads the supplied record, NOT the markers
+bv <- ng_check_reference_value("BLUE", al, eff,
+                               check_records = list(BLUE = c(CHK_A = 11.5, CHK_B = 9.25)))
+stopifnot(abs(bv[["CHK_A"]] - 11.5) < 1e-8, abs(bv[["CHK_B"]] - 9.25) < 1e-8)
+
+# NOT-EVALUABLE: run source is BLUE, the check has no BLUE record -> NA, never a GEBV fallback
+nv <- ng_check_reference_value("BLUE", al, eff, check_records = list(BLUE = c(CHK_A = 11.5)))
+stopifnot(abs(nv[["CHK_A"]] - 11.5) < 1e-8, is.na(nv[["CHK_B"]]))
+
+# no records at all on a phenotypic source -> all NA (still not a GEBV fallback)
+allna <- ng_check_reference_value("adjusted_pheno", al, eff)
+stopifnot(all(is.na(allna)))
+
 cat("task 1 ok\n")
+cat("task 2 ok\n")
