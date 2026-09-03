@@ -268,7 +268,10 @@ ever adds columns.
 
 **Interfaces:**
 - Consumes: nothing from Tasks 1-2 at call time (values are passed in).
-- Produces: `ng_attach_check_reference(scores, spec, trait_values, check_values, k_progeny = 100L, mean_suffix = "_mean", sd_suffix = "_pmv_used")`
+- Produces: `ng_attach_check_reference(scores, spec, trait_values, check_values, k_progeny, mean_suffix = "_mean", sd_suffix = "_pmv_used")`.
+  **`k_progeny` has NO default and is required** — progeny per family is a breeding-program
+  fact the user supplies, never a number this package invents. It scales P(beat check)
+  directly, so a silent default would drive a reported probability from a made-up input.
   → the same data frame with `nrow()` unchanged, plus per trait `<t>_check_id`,
   `<t>_check_value`, `<t>_vs_check`, `<t>_check_ok`, `<t>_p_beat_check`, plus `checks_all_ok`,
   and `attr(, "check_reference_diagnostics")`.
@@ -332,7 +335,8 @@ stopifnot(abs(out$matur_p_beat_check[[1L]] - expect_d) < 1e-10)
 
 # a NOT-EVALUABLE check value yields NA columns and never a FALSE flag
 out_na <- ng_attach_check_reference(scores, spec, NULL,
-                                    list(yield = c(CHK_A = NA_real_), matur = c(CHK_B = 75)))
+                                    list(yield = c(CHK_A = NA_real_), matur = c(CHK_B = 75)),
+                                    k_progeny = 50L)
 stopifnot(all(is.na(out_na$yield_check_value)), all(is.na(out_na$yield_check_ok)))
 stopifnot(identical(out_na$checks_all_ok, c(TRUE, FALSE, TRUE)))   # driven by matur alone
 
@@ -358,7 +362,7 @@ Append to `R/51_check_reference.R`:
 # (The 0.14.0 predecessor, ng_apply_trait_checks(), dropped rows -- that is the behaviour this
 # replaces.)
 ng_attach_check_reference <- function(scores, spec, trait_values = NULL, check_values,
-                                      k_progeny = 100L,
+                                      k_progeny,
                                       mean_suffix = "_mean", sd_suffix = "_pmv_used") {
   scores <- as.data.frame(scores, stringsAsFactors = FALSE, check.names = FALSE)
   spec <- as.data.frame(spec, stringsAsFactors = FALSE)
@@ -433,7 +437,7 @@ fill `tau_lower`, decrease-traits fill `tau_upper`.
 **Interfaces:**
 - Consumes: `ng_attach_check_reference()` output.
 - Produces: `ng_check_tau_bounds(spec, check_values)` → `list(tau_lower = <named numeric>, tau_upper = <named numeric>)`, both over `spec$trait`, `-Inf`/`Inf` where that direction does not apply.
-  `ng_attach_joint_check_probability(scores, spec, check_values, k_progeny = 100L, mean_suffix = "_mean", sd_suffix = "_pmv_used", cross_trait_cov = NULL)`
+  `ng_attach_joint_check_probability(scores, spec, check_values, k_progeny, mean_suffix = "_mean", sd_suffix = "_pmv_used", cross_trait_cov = NULL)`
   → `scores` with one added column `p_beat_all_checks`.
 
 - [ ] **Step 1: Write the failing test**
@@ -493,7 +497,7 @@ ng_check_tau_bounds <- function(spec, check_values) {
 
 # P(a progeny beats EVERY check at once). Thin wrapper over the existing multi-trait threshold
 # machinery: the check values ARE the tau bounds, so no new probability model is introduced.
-ng_attach_joint_check_probability <- function(scores, spec, check_values, k_progeny = 100L,
+ng_attach_joint_check_probability <- function(scores, spec, check_values, k_progeny,
                                               mean_suffix = "_mean", sd_suffix = "_pmv_used",
                                               cross_trait_cov = NULL) {
   spec <- as.data.frame(spec, stringsAsFactors = FALSE)
@@ -658,7 +662,9 @@ longer filter candidate crosses; the reference path replaces them."
 - Consumes: `ng_align_check_geno()`, `ng_check_reference_value()`, `ng_attach_check_reference()`,
   `ng_check_tau_bounds()`, `ng_trait_check_spec()`.
 - Produces: new runner formals `check_geno = NULL`, `check_records = NULL`,
-  `check_progeny_size = 100L`. Result gains `$trait_check_reference` =
+  `check_progeny_size = NULL` (**required whenever `trait_checks` is supplied** — hard error if
+  missing or < 1; progeny per family is the breeder's figure, never a package default).
+  Result gains `$trait_check_reference` =
   `list(active = <spec df>, values = <named list by trait>, source = <named chr by trait>, progeny_size = <int>, diagnostics = <list>)`.
 - **`check_records` shape:** a list keyed by **trait**, each element a list keyed by **source**
   (`BLUP`, `BLUE`, `adjusted_pheno`), each of those a named numeric over check ids — e.g.
@@ -691,7 +697,7 @@ args <- list(geno = geno, pheno = pheno, id_col = "id",
              trait_direction = c(yield = "increase"), n_crosses = 5L)
 
 res <- do.call(ng_run_cross_prediction, c(args, list(
-  check_geno = chk,
+  check_geno = chk, check_progeny_size = 200L,
   trait_checks = data.frame(trait = "yield", check = "CHK_A", stringsAsFactors = FALSE))))
 
 ref <- res$trait_check_reference
@@ -709,16 +715,33 @@ stopifnot(!any(c(ct$parent1, ct$parent2) %in% c("CHK_A", "CHK_B")))
 err <- tryCatch(do.call(ng_run_cross_prediction, c(args, list(
   check_geno = matrix(0, nrow = 1, ncol = n_m,
                       dimnames = list("P1", colnames(geno))),
+  check_progeny_size = 200L,
   trait_checks = data.frame(trait = "yield", check = "P1", stringsAsFactors = FALSE)))),
   error = function(e) conditionMessage(e))
 stopifnot(is.character(err), grepl("also a candidate parent", err))
 
 # a check named in trait_checks but absent from check_geno is rejected
 err2 <- tryCatch(do.call(ng_run_cross_prediction, c(args, list(
-  check_geno = chk,
+  check_geno = chk, check_progeny_size = 200L,
   trait_checks = data.frame(trait = "yield", check = "NOPE", stringsAsFactors = FALSE)))),
   error = function(e) conditionMessage(e))
 stopifnot(is.character(err2), grepl("NOPE", err2))
+
+# check_progeny_size is REQUIRED with trait_checks -- never defaulted
+err3 <- tryCatch(do.call(ng_run_cross_prediction, c(args, list(
+  check_geno = chk,
+  trait_checks = data.frame(trait = "yield", check = "CHK_A", stringsAsFactors = FALSE)))),
+  error = function(e) conditionMessage(e))
+stopifnot(is.character(err3), grepl("check_progeny_size", err3))
+# and it must be a sensible count
+err4 <- tryCatch(do.call(ng_run_cross_prediction, c(args, list(
+  check_geno = chk, check_progeny_size = 0L,
+  trait_checks = data.frame(trait = "yield", check = "CHK_A", stringsAsFactors = FALSE)))),
+  error = function(e) conditionMessage(e))
+stopifnot(is.character(err4), grepl("check_progeny_size", err4))
+
+# the size the user gave is what drives the probability, and is stamped on the result
+stopifnot(identical(ref$progeny_size, 200L))
 
 cat("runner wiring ok\n")
 ```
@@ -735,7 +758,7 @@ Add to the `ng_run_cross_prediction()` signature, next to the existing `trait_ch
 ```r
                                    check_geno = NULL,
                                    check_records = NULL,
-                                   check_progeny_size = 100L,
+                                   check_progeny_size = NULL,
 ```
 
 Replace the deleted veto block (same position — after the lethal guard, before
@@ -757,6 +780,14 @@ Replace the deleted veto block (same position — after the lethal guard, before
     }
     if (!(inherits(trait_checks, "data.frame") && all(c("trait", "check") %in% names(trait_checks)))) {
       ng_stop("trait_checks must be a data.frame with trait + check columns")
+    }
+    # Progeny per family is the breeder's number, not ours. It scales P(beat check) directly,
+    # so there is no default: a made-up family size would silently drive a reported probability.
+    kp <- suppressWarnings(as.integer(check_progeny_size[[1L]] %||% NA_integer_))
+    if (!length(kp) || is.na(kp) || kp < 1L) {
+      ng_stop("check_progeny_size is required with trait_checks: give the number of progeny ",
+              "you will raise per family. It sets P(beat check) -- the chance a cross throws a ",
+              "line beating the check -- so it must be your program's figure, not a default.")
     }
     check_geno <- ng_align_check_geno(check_geno, colnames(geno), ploidy = marker_ploidy)
     clash <- intersect(rownames(check_geno), rownames(geno))
@@ -789,17 +820,17 @@ Replace the deleted veto block (same position — after the lethal guard, before
     }
     cross_table <- ng_attach_check_reference(cross_table, tc_spec, trait_values = NULL,
                                              check_values = check_values,
-                                             k_progeny = check_progeny_size)
+                                             k_progeny = kp)
     # Multi-trait only: P(a progeny beats every check at once). Skipped for a single check,
     # where p_beat_all_checks would just duplicate the per-trait column.
     if (nrow(tc_spec) > 1L) {
       cross_table <- ng_attach_joint_check_probability(
-        cross_table, tc_spec, check_values, k_progeny = check_progeny_size,
+        cross_table, tc_spec, check_values, k_progeny = kp,
         cross_trait_cov = ctc)
     }
     trait_check_reference <- list(
       active = tc_spec, values = check_values, source = check_source,
-      progeny_size = as.integer(check_progeny_size),
+      progeny_size = kp,
       diagnostics = attr(cross_table, "check_reference_diagnostics"))
     attr(cross_table, "check_reference_diagnostics") <- NULL
   }
@@ -877,7 +908,7 @@ args <- list(geno = geno, pheno = pheno, id_col = "id",
 
 without <- do.call(ng_run_cross_prediction, args)
 with_ck <- do.call(ng_run_cross_prediction, c(args, list(
-  check_geno = chk,
+  check_geno = chk, check_progeny_size = 200L,
   trait_checks = data.frame(trait = c("yield", "protein"),
                             check = c("CHK_A", "CHK_B"), stringsAsFactors = FALSE))))
 
@@ -1325,6 +1356,9 @@ Prepend to `NEWS.md`:
 ## New
 
 * `check_geno`, `check_records`, `check_progeny_size` on `ng_run_cross_prediction()`.
+  `check_progeny_size` is **required** whenever `trait_checks` is supplied and has no default:
+  progeny per family scales P(beat check) directly, so it must be the breeding program's own
+  figure rather than a number the package invents.
 * Per-trait reference columns on the candidate table: `<trait>_check_value`, `<trait>_vs_check`
   (direction-aware: positive always means better), `<trait>_check_ok`,
   `<trait>_p_beat_check`, plus `checks_all_ok` and, for multi-trait runs,
