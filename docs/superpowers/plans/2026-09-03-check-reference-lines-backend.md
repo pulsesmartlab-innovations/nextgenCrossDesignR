@@ -659,7 +659,13 @@ longer filter candidate crosses; the reference path replaces them."
 ### Task 6: Wire the runner
 
 **Files:**
-- Modify: `R/39_cross_prediction_runner.R` (signature; new block where the veto was; JSON envelope)
+- Modify: `R/39_cross_prediction_runner.R` (signature; new block where the veto was; the
+  `utils::globalVariables()` list at :1631; the `ctx$trait_check_diagnostics` plumbing at
+  :1279 / :1678 / :1719; JSON envelope)
+- Modify: `docs/frontend/contracts/config_schema.json` (document `check_progeny_size`)
+- Modify: `tests/contract_schema_drift.R` (`undocumented_ok`)
+- Modify: `README.md` (lines ~170, ~181, ~335-336)
+- Modify: `vignettes/nextgenCrossDesign.Rmd` (the `{r trait_checks}` section, ~line 793-820)
 - Test: `tests/check_reference_runner.R`
 
 **Interfaces:**
@@ -859,18 +865,92 @@ table built at `R/39_cross_prediction_runner.R:1106`. It is currently assigned *
 the multi-trait helper falls back to its `G_hat` proxy, which is the existing behaviour
 elsewhere.
 
-Finally, add `trait_check_reference = trait_check_reference` to the result list the runner
-returns, next to the other diagnostics entries.
+Finally, replace the old result field with the new one. `trait_check_diagnostics` is currently
+plumbed through the ctx at three places — `ctx$trait_check_diagnostics <- ...` (:1279),
+`trait_check_diagnostics <- ctx$trait_check_diagnostics` (:1678), and
+`trait_check_diagnostics = trait_check_diagnostics` in the returned list (:1719). Rename all
+three to `trait_check_reference`. Nothing should still reference the old name:
 
-- [ ] **Step 4: Run test to verify it passes**
+```bash
+git grep -n "trait_check_diagnostics" -- R/   # must return nothing when you are done
+```
+
+- [ ] **Step 4: Keep R CMD check and the contract test clean**
+
+The ctx fields are unpacked via `list2env()`, so `utils::globalVariables()` at
+`R/39_cross_prediction_runner.R:1631` declares them for `R CMD check`. Remove the now-deleted
+`"check_basis"` and `"exclude_threshold_violators"` entries and add the new ctx fields in
+alphabetical position: `"check_geno"`, `"check_progeny_size"`, `"check_records"`,
+`"trait_check_reference"`.
+
+`tests/contract_schema_drift.R` compares `formals(ng_run_cross_prediction)` against
+`docs/frontend/contracts/config_schema.json`. Only the *documented-but-not-a-formal* direction
+is fatal, so removing `check_basis` is safe (it was never in the schema). Two additions keep
+the NOTE honest:
+
+- `check_progeny_size` is a plain number the frontend must be able to discover — add it to
+  `config_schema.json` in the group that holds the other cross-filter parameters:
+
+```json
+{"name": "check_progeny_size", "type": "integer", "required": false,
+ "desc": "Progeny per family you will raise. Required with trait_checks; sets P(beat check). No default -- it must be your program's figure."}
+```
+
+- `check_geno` and `check_records` are in-memory matrices/lists that a JSON config cannot
+  carry, which is exactly what `undocumented_ok` in `tests/contract_schema_drift.R:36-40`
+  exists for. Add them there beside `genotype` / `marker_map`.
+
+- [ ] **Step 5: Re-document the user-facing API**
+
+The veto is gone from the code but still described in two places, and one of them executes.
+
+`vignettes/nextgenCrossDesign.Rmd` (~793-820) has a **live** `{r trait_checks}` chunk that
+calls the runner with `check_basis = "gebv"` and a check of `"P001"` — a candidate parent,
+which the new code rejects by design — and then reads `yield_check_violation`, `threshold_ok`,
+and `r$trait_check_diagnostics`. Every one of those is removed or renamed. Rewrite the prose to
+describe a reference rather than a filter, and replace the chunk with:
+
+```r
+# Check lines are benchmarks, never crossed: they come in their own genotype matrix.
+chk <- geno[1:2, , drop = FALSE]
+rownames(chk) <- c("CHECK_A", "CHECK_B")
+tc <- data.frame(trait = "yield", check = "CHECK_A", stringsAsFactors = FALSE)
+r <- ng_run_cross_prediction(phenotype = pheno, genotype = geno, marker_map = map,
+  trait_direction = direction, id_col = "NAME", use_ocs = TRUE, n_crosses = 100,
+  trait_checks = tc, check_geno = chk, check_progeny_size = 200,
+  include_trait_gebv = TRUE)
+# candidate_crosses gains per-trait reference columns -- nothing is dropped:
+head(r$candidate_crosses[, c("parent1", "parent2", "yield_check_value",
+                             "yield_vs_check", "yield_check_ok", "yield_p_beat_check")])
+r$trait_check_reference$active          # which check is active for which trait
+r$trait_check_reference$progeny_size    # the family size that produced P(beat check)
+```
+
+Note the chunk builds `chk` from rows of `geno` but renames them, so the ids do not collide
+with candidate parents — a check id that IS a parent is now a hard error.
+
+`README.md` describes `check_basis` and `exclude_threshold_violators` at ~170, ~181 and
+~335-336. Rewrite those to the reference vocabulary: checks are supplied via `check_geno`,
+require `check_progeny_size`, flag nothing out of the candidate pool, and add
+`<trait>_vs_check` / `<trait>_p_beat_check` columns.
+
+- [ ] **Step 6: Run test to verify it passes**
 
 Run: `Rscript tests/check_reference_runner.R`
 Expected: `runner wiring ok`
 
-- [ ] **Step 5: Commit**
+Then confirm the rewritten vignette chunk actually executes:
+
+Run: `Rscript -e 'devtools::load_all("."); knitr::knit("vignettes/nextgenCrossDesign.Rmd", output = tempfile())'`
+Expected: completes without error. This is the step that proves the vignette is not carrying a
+removed argument.
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add R/39_cross_prediction_runner.R tests/check_reference_runner.R
+git add R/39_cross_prediction_runner.R docs/frontend/contracts/config_schema.json \
+        tests/contract_schema_drift.R tests/check_reference_runner.R \
+        README.md vignettes/nextgenCrossDesign.Rmd
 git commit -m "feat(checks): wire check_geno through the runner as a reference layer"
 ```
 
