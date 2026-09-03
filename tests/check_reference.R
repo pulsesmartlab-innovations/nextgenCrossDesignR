@@ -37,7 +37,7 @@ err3 <- tryCatch(ng_align_check_geno(badcode, markers), error = function(e) cond
 stopifnot(is.character(err3), grepl("dosage", err3))
 
 # --- Task 2: value resolution follows the run's mean source -----------------
-eff <- list(marker = markers, effect = c(m1 = 1, m2 = 0.5, m3 = -2))
+eff <- list(beta = c(m1 = 1, m2 = 0.5, m3 = -2), intercept = 0)
 al <- ng_align_check_geno(chk, markers)   # CHK_A = (m1=2, m2=2, m3=0); CHK_B = (0, 0, 2)
 
 # GEBV source -> predicted from the check's own markers with the SAME effects

@@ -46,15 +46,7 @@ ng_check_reference_value <- function(source, check_geno_aligned, effects, check_
   source <- as.character(source)[[1L]]
   ids <- rownames(check_geno_aligned)
   if (startsWith(source, "GEBV")) {
-    # Adapt effects structure for ng_predict_gebv: rename $effect to $beta if needed
-    adapted_effects <- effects
-    if (is.null(adapted_effects$beta) && !is.null(adapted_effects$effect)) {
-      adapted_effects$beta <- adapted_effects$effect
-    }
-    if (is.null(adapted_effects$intercept)) {
-      adapted_effects$intercept <- 0
-    }
-    return(stats::setNames(ng_predict_gebv(check_geno_aligned, adapted_effects), ids))
+    return(stats::setNames(ng_predict_gebv(check_geno_aligned, effects), ids))
   }
   rec <- if (is.null(check_records)) NULL else check_records[[source]]
   if (is.null(rec)) return(stats::setNames(rep(NA_real_, length(ids)), ids))
