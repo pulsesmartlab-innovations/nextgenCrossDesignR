@@ -1495,6 +1495,14 @@ Prepend to `NEWS.md`:
 * `Checks` sheet in the cross-priority workbook.
 * A horizontal check reference line on the score-versus-kinship plot, and
   `ng_plot_check_panels()` for per-trait small multiples in multi-trait runs.
+
+## Bug fixes
+
+* `ng_p_superior_progeny()` compared the wrong threshold for zero-variance crosses when `tau`
+  varied per cross. `mu` was subset to the zero-variance rows while `tau` was not, so each such
+  cross was scored against whichever threshold sat at position 1 rather than its own — silently
+  returning a wrong probability at exactly the crosses whose answer is unambiguous. Scalar
+  `tau`, which every in-package caller passes, was unaffected.
 ```
 
 - [ ] **Step 3: Bump the version**
