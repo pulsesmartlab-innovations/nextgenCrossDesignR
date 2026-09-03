@@ -287,7 +287,12 @@ ever adds columns.
   → the same data frame with `nrow()` unchanged, plus per trait `<t>_check_id`,
   `<t>_check_value`, `<t>_vs_check`, `<t>_check_ok`, `<t>_p_beat_check`, plus `checks_all_ok`,
   and `attr(, "check_reference_diagnostics")`.
-  `spec` is the data frame from `ng_trait_check_spec()` (columns `trait`, `check`, `reject_if`).
+  `spec` is the data frame from `ng_trait_check_spec()` (columns `trait`, `check`, `reject_if`),
+  optionally with a `column_key` column. **`column_key` is what column names are built from;
+  `trait` is what gets reported.** The runner sets the key to the sanitised trait name because
+  the cross table names its columns that way (`ng_run_cp_clean_trait_name()`,
+  `R/39_cross_prediction_runner.R:545`: `make.names()` then dots to underscores). When the
+  column is absent the fallback is `trait`.
   `trait_values` is unused here — the cross's own `<t>_mean` / `<t>_pmv_used` columns are read
   from `scores`. `check_values` is a named list keyed by trait, each a named numeric over check
   ids.
@@ -356,6 +361,21 @@ d <- attr(out, "check_reference_diagnostics")
 stopifnot(is.list(d), d$n_wrong_side$yield == 1L, d$n_wrong_side$matur == 1L)
 stopifnot(d$n_not_evaluable == 0L)
 
+# A trait whose name is not a valid R name: the cross table sanitises it for column names
+# (make.names + dots to underscores) while the spec keeps what the breeder typed. Columns are
+# looked up and written by the KEY; diagnostics and reporting use the RAW name.
+scores_sp <- data.frame(parent1 = "P1", parent2 = "P2",
+                        `Days_to_flower_mean` = 70, `Days_to_flower_pmv_used` = 1,
+                        check.names = FALSE, stringsAsFactors = FALSE)
+spec_sp <- ng_trait_check_spec("Days to flower", "CHK_B",
+                               trait_direction = c(`Days to flower` = "decrease"))
+spec_sp$column_key <- "Days_to_flower"
+out_sp <- ng_attach_check_reference(scores_sp, spec_sp, NULL,
+                                    list(`Days to flower` = c(CHK_B = 75)), k_progeny = 50L)
+stopifnot("Days_to_flower_check_value" %in% names(out_sp))   # written by key
+stopifnot(out_sp$Days_to_flower_check_ok)                     # 70 < 75, decrease -> good
+stopifnot(names(attr(out_sp, "check_reference_diagnostics")$n_wrong_side) == "Days to flower")
+
 cat("task 3 ok\n")
 ```
 
@@ -383,12 +403,16 @@ ng_attach_check_reference <- function(scores, spec, trait_values = NULL, check_v
   ok_mat <- matrix(NA, nrow = n, ncol = nrow(spec), dimnames = list(NULL, spec$trait))
   n_not_evaluable <- 0L
   n_wrong <- list()
+  # The cross table names its per-trait columns with the SANITISED trait name
+  # (ng_run_cp_clean_trait_name: make.names + dots to underscores), while the spec carries the
+  # raw name the breeder typed. Look columns up by the key, report by the raw name.
+  key <- if ("column_key" %in% names(spec)) as.character(spec$column_key) else as.character(spec$trait)
   for (k in seq_len(nrow(spec))) {
-    tr <- spec$trait[[k]]; ck <- spec$check[[k]]
+    tr <- spec$trait[[k]]; ck <- spec$check[[k]]; kk <- key[[k]]
     # reject_if == "below" means the breeder wants the mid-parent ABOVE the check (increase
     # trait); sgn flips the comparison so that a positive margin always means "better".
     sgn <- if (identical(spec$reject_if[[k]], "below")) 1 else -1
-    mcol <- paste0(tr, mean_suffix); scol <- paste0(tr, sd_suffix)
+    mcol <- paste0(kk, mean_suffix); scol <- paste0(kk, sd_suffix)
     if (!(mcol %in% names(scores))) ng_stop("scores missing mean column for check trait: ", mcol)
     mu <- suppressWarnings(as.numeric(scores[[mcol]]))
     v <- if (scol %in% names(scores)) suppressWarnings(as.numeric(scores[[scol]])) else rep(NA_real_, n)
@@ -396,10 +420,10 @@ ng_attach_check_reference <- function(scores, spec, trait_values = NULL, check_v
     if (!length(tau)) tau <- NA_real_
     margin <- sgn * (mu - tau)
     ok <- margin >= 0                       # ties are not violations
-    scores[[paste0(tr, "_check_id")]] <- ck
-    scores[[paste0(tr, "_check_value")]] <- tau
-    scores[[paste0(tr, "_vs_check")]] <- margin
-    scores[[paste0(tr, "_check_ok")]] <- ok
+    scores[[paste0(kk, "_check_id")]] <- ck
+    scores[[paste0(kk, "_check_value")]] <- tau
+    scores[[paste0(kk, "_vs_check")]] <- margin
+    scores[[paste0(kk, "_check_ok")]] <- ok
     p <- rep(NA_real_, n)
     usable <- is.finite(mu) & is.finite(v) & v >= 0 & is.finite(tau)
     if (any(usable)) {
@@ -408,7 +432,7 @@ ng_attach_check_reference <- function(scores, spec, trait_values = NULL, check_v
       p[usable] <- ng_p_superior_progeny(sgn * mu[usable], sqrt(v[usable]),
                                          sgn * tau, k_progeny)
     }
-    scores[[paste0(tr, "_p_beat_check")]] <- p
+    scores[[paste0(kk, "_p_beat_check")]] <- p
     ok_mat[, k] <- ok
     n_not_evaluable <- n_not_evaluable + sum(is.na(ok))
     n_wrong[[tr]] <- sum(ok %in% FALSE)
@@ -514,10 +538,11 @@ ng_attach_joint_check_probability <- function(scores, spec, check_values, k_prog
                                               cross_trait_cov = NULL) {
   spec <- as.data.frame(spec, stringsAsFactors = FALSE)
   b <- ng_check_tau_bounds(spec, check_values)
+  key <- if ("column_key" %in% names(spec)) as.character(spec$column_key) else as.character(spec$trait)
   trait_specs <- data.frame(
     trait = spec$trait,
-    mean_col = paste0(spec$trait, mean_suffix),
-    var_col = paste0(spec$trait, sd_suffix),
+    mean_col = paste0(key, mean_suffix),
+    var_col = paste0(key, sd_suffix),
     stringsAsFactors = FALSE)
   ng_add_p_superior_progeny_multitrait(
     scores, trait_specs,
@@ -823,6 +848,9 @@ Replace the deleted veto block (same position — after the lethal guard, before
     tc_direction <- if (is.null(trait_checks$direction)) NA else trait_checks$direction
     tc_spec <- ng_trait_check_spec(trait_checks$trait, trait_checks$check,
                                    direction = tc_direction, trait_direction = tdir)
+    # cross_table columns are named with the sanitised trait name; carry it as the lookup key
+    # so a trait like "Days to flower" resolves to Days_to_flower_mean rather than erroring.
+    tc_spec$column_key <- ng_run_cp_clean_trait_name(tc_spec$trait)
     missing_chk <- setdiff(tc_spec$check, rownames(check_geno))
     if (length(missing_chk)) {
       ng_stop("trait_checks names check line(s) absent from check_geno: ",
@@ -1340,7 +1368,9 @@ ng_plot_check_panels <- function(scored, trait_check_reference, output_path = NU
                                  res = 150) {
   if (is.null(trait_check_reference)) return(invisible(NULL))
   spec <- as.data.frame(trait_check_reference$active, stringsAsFactors = FALSE)
-  traits <- spec$trait[paste0(spec$trait, "_mean") %in% names(scored)]
+  key <- if ("column_key" %in% names(spec)) as.character(spec$column_key) else as.character(spec$trait)
+  keep <- paste0(key, "_mean") %in% names(scored)
+  traits <- spec$trait[keep]; key <- key[keep]
   if (!length(traits)) return(invisible(NULL))
   if (!is.null(output_path)) {
     grDevices::png(output_path, width = width, height = height, units = "in", res = res)
@@ -1348,13 +1378,14 @@ ng_plot_check_panels <- function(scored, trait_check_reference, output_path = NU
   }
   op <- graphics::par(mfrow = c(1L, length(traits)), mar = c(4, 4, 3, 1))
   on.exit(graphics::par(op), add = TRUE)
-  for (tr in traits) {
-    y <- suppressWarnings(as.numeric(scored[[paste0(tr, "_mean")]]))
+  for (i in seq_along(traits)) {
+    tr <- traits[[i]]; kk <- key[[i]]
+    y <- suppressWarnings(as.numeric(scored[[paste0(kk, "_mean")]]))
     x <- suppressWarnings(as.numeric(scored[[kinship_col]]))
-    ok <- scored[[paste0(tr, "_check_ok")]]
+    ok <- scored[[paste0(kk, "_check_ok")]]
     graphics::plot(x, y, pch = 19, col = ifelse(ok %in% FALSE, "#BBBBBB", "#1F4E78"),
                    xlab = "Pair kinship", ylab = paste(tr, "mid-parent"), main = tr)
-    tau <- suppressWarnings(as.numeric(scored[[paste0(tr, "_check_value")]][[1L]]))
+    tau <- suppressWarnings(as.numeric(scored[[paste0(kk, "_check_value")]][[1L]]))
     if (length(tau) && is.finite(tau)) {
       graphics::abline(h = tau, lty = 2, lwd = 2, col = "#B00020")
     }
