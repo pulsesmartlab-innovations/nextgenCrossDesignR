@@ -18,3 +18,5 @@
 ^Rplots[.]pdf$
 ^.*\.Rproj$
 ^\.Rproj\.user$
+^attic($|/)
+^\.superpowers($|/)

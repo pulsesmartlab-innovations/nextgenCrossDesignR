@@ -25,3 +25,10 @@ inst/fixtures/
 
 # OS cruft
 .DS_Store
+
+# Superseded sources parked out of the compile path (src/*.cpp is globbed by
+# R CMD build, so a stray legacy kernel there breaks the build).
+attic/
+
+# Subagent-driven-development scratch: ledgers, briefs, review packages.
+.superpowers/
