@@ -65,3 +65,79 @@ stopifnot(all(is.na(allna)))
 
 cat("task 1 ok\n")
 cat("task 2 ok\n")
+
+# --- Task 3: reference columns, no row loss ---------------------------------
+scores <- data.frame(
+  parent1     = c("P1", "P1", "P2"),
+  parent2     = c("P2", "P3", "P3"),
+  yield_mean  = c(10, 4, 7),      # check at 6 -> above, below, above
+  yield_pmv_used = c(4, 4, 0),    # sd = 2, 2, 0
+  matur_mean  = c(70, 80, 75),    # check at 75, DECREASE -> below is good
+  matur_pmv_used = c(1, 1, 1),
+  stringsAsFactors = FALSE)
+
+spec <- ng_trait_check_spec(trait = c("yield", "matur"), check = c("CHK_A", "CHK_B"),
+                            trait_direction = c(yield = "increase", matur = "decrease"))
+cv <- list(yield = c(CHK_A = 6), matur = c(CHK_B = 75))
+
+out <- ng_attach_check_reference(scores, spec, trait_values = NULL, check_values = cv,
+                                 k_progeny = 50L)
+
+# ROW COUNT IS UNCHANGED -- this is the whole point
+stopifnot(nrow(out) == 3L)
+stopifnot(identical(out$parent1, scores$parent1))
+
+# check id and value carried through
+stopifnot(all(out$yield_check_id == "CHK_A"), all(out$yield_check_value == 6))
+
+# direction-aware margin: POSITIVE ALWAYS MEANS BETTER, both directions
+stopifnot(abs(out$yield_vs_check - c(4, -2, 1)) < 1e-8)      # increase: mean - check
+stopifnot(abs(out$matur_vs_check - c(5, -5, 0)) < 1e-8)      # decrease: check - mean
+
+# ok flags; a tie is NOT a violation
+stopifnot(identical(out$yield_check_ok, c(TRUE, FALSE, TRUE)))
+stopifnot(identical(out$matur_check_ok, c(TRUE, FALSE, TRUE)))   # row 3 is an exact tie
+
+# combined flag
+stopifnot(identical(out$checks_all_ok, c(TRUE, FALSE, TRUE)))
+
+# P(beat check), increase trait: 1 - pnorm((tau-mu)/sd)^k
+expect1 <- 1 - stats::pnorm((6 - 10) / 2)^50
+stopifnot(abs(out$yield_p_beat_check[[1L]] - expect1) < 1e-10)
+# a BELOW-check cross can still have a high tail probability -- the reason this column exists
+expect2 <- 1 - stats::pnorm((6 - 4) / 2)^50
+stopifnot(abs(out$yield_p_beat_check[[2L]] - expect2) < 1e-10, out$yield_p_beat_check[[2L]] > 0.5)
+# sd == 0 degenerates to the indicator
+stopifnot(out$yield_p_beat_check[[3L]] == 1)
+
+# P(beat check), DECREASE trait: mirrored, 1 - pnorm((mu-tau)/sd)^k
+expect_d <- 1 - stats::pnorm((70 - 75) / 1)^50
+stopifnot(abs(out$matur_p_beat_check[[1L]] - expect_d) < 1e-10)
+
+# a NOT-EVALUABLE check value yields NA columns and never a FALSE flag
+out_na <- ng_attach_check_reference(scores, spec, NULL,
+                                    list(yield = c(CHK_A = NA_real_), matur = c(CHK_B = 75)),
+                                    k_progeny = 50L)
+stopifnot(all(is.na(out_na$yield_check_value)), all(is.na(out_na$yield_check_ok)))
+stopifnot(identical(out_na$checks_all_ok, c(TRUE, FALSE, TRUE)))   # driven by matur alone
+
+d <- attr(out, "check_reference_diagnostics")
+stopifnot(is.list(d), d$n_wrong_side$yield == 1L, d$n_wrong_side$matur == 1L)
+stopifnot(d$n_not_evaluable == 0L)
+
+# A trait whose name is not a valid R name: the cross table sanitises it for column names
+# (make.names + dots to underscores) while the spec keeps what the breeder typed. Columns are
+# looked up and written by the KEY; diagnostics and reporting use the RAW name.
+scores_sp <- data.frame(parent1 = "P1", parent2 = "P2",
+                        `Days_to_flower_mean` = 70, `Days_to_flower_pmv_used` = 1,
+                        check.names = FALSE, stringsAsFactors = FALSE)
+spec_sp <- ng_trait_check_spec("Days to flower", "CHK_B",
+                               trait_direction = c(`Days to flower` = "decrease"))
+spec_sp$column_key <- "Days_to_flower"
+out_sp <- ng_attach_check_reference(scores_sp, spec_sp, NULL,
+                                    list(`Days to flower` = c(CHK_B = 75)), k_progeny = 50L)
+stopifnot("Days_to_flower_check_value" %in% names(out_sp))   # written by key
+stopifnot(out_sp$Days_to_flower_check_ok)                     # 70 < 75, decrease -> good
+stopifnot(names(attr(out_sp, "check_reference_diagnostics")$n_wrong_side) == "Days to flower")
+
+cat("task 3 ok\n")

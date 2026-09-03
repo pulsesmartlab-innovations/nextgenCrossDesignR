@@ -53,3 +53,60 @@ ng_check_reference_value <- function(source, check_geno_aligned, effects, check_
   v <- suppressWarnings(as.numeric(rec[ids]))
   stats::setNames(v, ids)
 }
+
+# Attach per-trait check reference columns to a scored cross table. This function NEVER changes
+# nrow(scores) and NEVER reorders it: a check informs the breeder, it does not decide for them.
+# (The 0.14.0 predecessor, ng_apply_trait_checks(), dropped rows -- that is the behaviour this
+# replaces.)
+ng_attach_check_reference <- function(scores, spec, trait_values = NULL, check_values,
+                                      k_progeny,
+                                      mean_suffix = "_mean", sd_suffix = "_pmv_used") {
+  scores <- as.data.frame(scores, stringsAsFactors = FALSE, check.names = FALSE)
+  spec <- as.data.frame(spec, stringsAsFactors = FALSE)
+  n <- nrow(scores)
+  k_progeny <- as.integer(k_progeny[[1L]])
+  ok_mat <- matrix(NA, nrow = n, ncol = nrow(spec), dimnames = list(NULL, spec$trait))
+  n_not_evaluable <- 0L
+  n_wrong <- list()
+  # The cross table names its per-trait columns with the SANITISED trait name
+  # (ng_run_cp_clean_trait_name: make.names + dots to underscores), while the spec carries the
+  # raw name the breeder typed. Look columns up by the key, report by the raw name.
+  key <- if ("column_key" %in% names(spec)) as.character(spec$column_key) else as.character(spec$trait)
+  for (k in seq_len(nrow(spec))) {
+    tr <- spec$trait[[k]]; ck <- spec$check[[k]]; kk <- key[[k]]
+    # reject_if == "below" means the breeder wants the mid-parent ABOVE the check (increase
+    # trait); sgn flips the comparison so that a positive margin always means "better".
+    sgn <- if (identical(spec$reject_if[[k]], "below")) 1 else -1
+    mcol <- paste0(kk, mean_suffix); scol <- paste0(kk, sd_suffix)
+    if (!(mcol %in% names(scores))) ng_stop("scores missing mean column for check trait: ", mcol)
+    mu <- suppressWarnings(as.numeric(scores[[mcol]]))
+    v <- if (scol %in% names(scores)) suppressWarnings(as.numeric(scores[[scol]])) else rep(NA_real_, n)
+    tau <- suppressWarnings(as.numeric(check_values[[tr]][[ck]]))
+    if (!length(tau)) tau <- NA_real_
+    margin <- sgn * (mu - tau)
+    ok <- margin >= 0                       # ties are not violations
+    scores[[paste0(kk, "_check_id")]] <- ck
+    scores[[paste0(kk, "_check_value")]] <- tau
+    scores[[paste0(kk, "_vs_check")]] <- margin
+    scores[[paste0(kk, "_check_ok")]] <- ok
+    p <- rep(NA_real_, n)
+    usable <- is.finite(mu) & is.finite(v) & v >= 0 & is.finite(tau)
+    if (any(usable)) {
+      # sgn folds the decrease case into the same closed form: negating both mu and tau turns
+      # P(at least one of k progeny >= tau) into P(at least one <= tau).
+      p[usable] <- ng_p_superior_progeny(sgn * mu[usable], sqrt(v[usable]),
+                                         sgn * tau, k_progeny)
+    }
+    scores[[paste0(kk, "_p_beat_check")]] <- p
+    ok_mat[, k] <- ok
+    n_not_evaluable <- n_not_evaluable + sum(is.na(ok))
+    n_wrong[[tr]] <- sum(ok %in% FALSE)
+  }
+  # NA never counts as a failure: an unevaluable check is reported, not held against a cross.
+  scores$checks_all_ok <- !apply(ok_mat, 1L, function(r) any(r %in% FALSE))
+  attr(scores, "check_reference_diagnostics") <- list(
+    active = spec, n_wrong_side = n_wrong,
+    n_not_evaluable = as.integer(n_not_evaluable), n_candidates = n)
+  rownames(scores) <- NULL
+  scores
+}

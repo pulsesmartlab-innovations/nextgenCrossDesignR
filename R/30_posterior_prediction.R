@@ -291,7 +291,7 @@ ng_p_superior_progeny <- function(mu, sigma, tau, k_progeny) {
   log_pnorm_below <- stats::pnorm(z, lower.tail = TRUE, log.p = TRUE)
   one_minus_p <- exp(k_progeny * log_pnorm_below)
   out <- 1 - one_minus_p
-  out[sigma <= 0] <- as.numeric(mu[sigma <= 0] >= tau)
+  out[sigma <= 0] <- as.numeric(mu[sigma <= 0] >= tau[sigma <= 0])
   pmax(pmin(out, 1), 0)
 }
 
