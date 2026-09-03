@@ -1019,7 +1019,30 @@ In `ng_cpw_make_selected()` and `ng_cpw_candidate_table()`, extend the retained-
   keep <- intersect(unique(keep), names(crosses))
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 4: Wire the sheet into real runs**
+
+`ng_run_cp_output_files()` (`R/39_cross_prediction_runner.R:609`) is the only call site of
+`ng_write_cross_priority_workbook()` (:644). Without this step the sheet exists but no run
+produces it. Add the formal:
+
+```r
+                                   include_trait_gebv = FALSE,
+                                   trait_check_reference = NULL) {
+```
+
+pass it through to the workbook call:
+
+```r
+      include_trait_gebv = isTRUE(include_trait_gebv),
+      trait_check_reference = trait_check_reference
+```
+
+thread it through `ng_write_cross_priority_workbook()` into
+`ng_build_cross_priority_workbook()`, and at the `ng_run_cp_output_files(...)` call site in the
+runner add `trait_check_reference = trait_check_reference`. The `NULL` default means a
+no-checks run is byte-identical to today.
+
+- [ ] **Step 5: Run test to verify it passes**
 
 Run: `Rscript tests/check_reference_workbook.R`
 Expected: `workbook checks sheet ok`
@@ -1027,10 +1050,10 @@ Expected: `workbook checks sheet ok`
 Run: `Rscript tests/cross_priority_workbook.R`
 Expected: still passes (no-checks runs must produce the workbook they always did).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add R/37_cross_priority_workbook.R tests/check_reference_workbook.R
+git add R/37_cross_priority_workbook.R R/39_cross_prediction_runner.R tests/check_reference_workbook.R
 git commit -m "feat(checks): Checks sheet and per-trait reference columns in the workbook"
 ```
 
@@ -1219,10 +1242,41 @@ Expected: `check plot ok`
 Run: `Rscript tests/cross_priority_plots.R`
 Expected: still passes.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Wire the line into real runs**
+
+`ng_run_cp_output_files()` (`R/39_cross_prediction_runner.R:609`, formal added in Task 8) is the
+only call site of `ng_plot_priority_score_vs_kinship()` (:630). Resolve the line there and pass
+it, and emit the per-trait panel when more than one trait has a check:
+
+```r
+    chk_line <- if (is.null(trait_check_reference)) NA_real_ else
+      ng_check_line_value(trait_check_reference, multi_trait_meta)
+    ng_plot_priority_score_vs_kinship(
+      scored = candidate_crosses,
+      selected = selected_crosses,
+      output_path = plot_path,
+      check_line = if (is.finite(chk_line)) chk_line else NULL,
+      check_label = if (is.finite(chk_line)) trait_check_reference$active$check[[1L]] else NULL
+    )
+    if (!is.null(trait_check_reference) && nrow(trait_check_reference$active) > 1L) {
+      panel_path <- file.path(output_dir, "check_panels.png")
+      ng_plot_check_panels(candidate_crosses, trait_check_reference, output_path = panel_path)
+      files$check_panels_png <- normalizePath(panel_path, winslash = "/", mustWork = TRUE)
+      figures <- rbind(figures, data.frame(figure = "check_panels",
+                                           path = files$check_panels_png,
+                                           stringsAsFactors = FALSE))
+    }
+```
+
+`multi_trait_meta` is not currently available inside `ng_run_cp_output_files()`. Add it as a
+formal (`multi_trait_meta = NULL`) and pass the runner's `ctx$multi_trait_meta` at the call
+site — it is captured at `R/39_cross_prediction_runner.R:1391` region as
+`ctx$multi_trait_meta <- attr(scored_crosses, "multi_trait")`.
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add R/38_cross_priority_plots.R tests/check_reference_plot.R
+git add R/38_cross_priority_plots.R R/39_cross_prediction_runner.R tests/check_reference_plot.R
 git commit -m "feat(checks): check reference line and per-trait check panels"
 ```
 
