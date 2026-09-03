@@ -4,6 +4,36 @@
 # cross table. It contributes a scalar per trait, on the same mean_source the cross means use.
 # See docs/design/2026-09-03-check-reference-lines-design.md.
 
+# Build a validated per-trait check spec (one check per trait). `direction` NA is filled from
+# `trait_direction`: increase -> the breeder wants the mid-parent ABOVE the check, so a cross is
+# on the wrong side when it is below. There is no `basis` argument: the check always follows the
+# run's per-trait mean_source, which is what keeps the reference on the plotted scale.
+ng_trait_check_spec <- function(trait, check, direction = NA, trait_direction = NULL) {
+  trait <- as.character(trait); check <- as.character(check)
+  n <- length(trait)
+  if (!n) ng_stop("ng_trait_check_spec needs at least one trait")
+  if (length(check) != n) ng_stop("check must be one per trait")
+  direction <- tolower(as.character(rep_len(direction, n)))
+  need <- is.na(direction) | !nzchar(direction) | direction == "na"
+  if (any(need)) {
+    if (is.null(trait_direction))
+      ng_stop("direction is NA and no trait_direction supplied to resolve it for: ",
+              paste(trait[need], collapse = ", "))
+    td <- tolower(as.character(trait_direction[trait[need]]))
+    if (anyNA(td)) ng_stop("trait_direction has no entry for: ",
+                           paste(trait[need][is.na(td)], collapse = ", "))
+    direction[need] <- ifelse(td == "increase", "below",
+                       ifelse(td == "decrease", "above", NA_character_))
+  }
+  if (any(!direction %in% c("above", "below")))
+    ng_stop("direction must resolve to 'above' or 'below'")
+  dup <- unique(trait[duplicated(trait)])
+  if (length(dup))
+    ng_stop("ng_trait_check_spec: one check per trait; duplicate trait(s): ",
+            paste(dup, collapse = ", "))
+  data.frame(trait = trait, check = check, reject_if = direction, stringsAsFactors = FALSE)
+}
+
 # Align a separate check genotype matrix to the marker set already fixed by parent QC. A check
 # matrix that silently disagrees on marker set or column order produces a wrong-but-plausible
 # reference value, so every disagreement is an error rather than an intersection.

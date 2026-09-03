@@ -1187,65 +1187,12 @@ ng_cp__stage_index <- function(ctx) {
       ploidy = marker_ploidy, drop_lethal_carrier_crosses = drop_lethal_carrier_crosses)
   }
 
-  # Per-trait check-threshold veto (Module: trait checks): flag (and optionally exclude) crosses
-  # whose per-trait mid-parent value is on the wrong side of a breeder-chosen check line. Runs
-  # after the lethal guard, on the fully-populated cross_table (parent1/parent2 + all per-trait
-  # value/mean/pmv/... columns already attached above).
+  # The 0.14.0 per-trait check-threshold veto (flag-and-optionally-exclude candidate crosses
+  # against a breeder-chosen check line) has been removed: it dropped rows before the optimizer
+  # ever saw them. `trait_check_diagnostics` stays initialized to NULL here because it is still a
+  # field the result list reports (ng_cp__assemble_result); Task 6 rewires `trait_checks` onto
+  # the reference-only replacement in R/51_check_reference.R.
   trait_check_diagnostics <- NULL
-  if (!is.null(trait_checks)) {
-    if (!identical(prediction_mode, "trait_by_trait")) {
-      ng_stop("trait_checks requires prediction_mode = 'trait_by_trait' (checks are keyed by trait)")
-    }
-    if (!(inherits(trait_checks, "data.frame") && all(c("trait", "check") %in% names(trait_checks)))) {
-      ng_stop("trait_checks must be a data.frame with trait + check columns")
-    }
-    # Resolve NA per-check directions from the breeding direction map. direction_canonical (built
-    # above from trait_direction/direction_file) carries the RAW increase/decrease strings the
-    # breeder supplied -- trait_spec$direction has already been normalized by ng_multitrait_direction
-    # to maximize/minimize, which ng_trait_check_spec does not understand, so it is NOT the source here.
-    tdir <- stats::setNames(direction_canonical$direction, direction_canonical$trait)
-    tc_direction <- if (is.null(trait_checks$direction)) NA else trait_checks$direction
-    tc_basis <- if (is.null(trait_checks$basis)) check_basis else trait_checks$basis
-    tc_spec <- ng_trait_check_spec(trait_checks$trait, trait_checks$check,
-                                   direction = tc_direction, basis = tc_basis,
-                                   trait_direction = tdir)
-    # v1 requires each check line to be a genotyped candidate parent (geno = parents); a check
-    # id that isn't among rownames(geno) would otherwise silently make every cross non-evaluable
-    # for that trait (trait_values[[tr]][[basis]][ck] resolves to NA).
-    bad <- which(!(tc_spec$check %in% rownames(geno)))
-    if (length(bad)) {
-      ng_stop(paste(sprintf(
-        "trait check for '%s': check line '%s' is not among the candidate parents (v1 requires the check to be a genotyped parent)",
-        tc_spec$trait[bad], tc_spec$check[bad]), collapse = "; "))
-    }
-    # Per-trait per-id value lookups: GEBV is always available (predicted from the fitted marker
-    # effects); phenotype is only available when the trait's raw column is on the input phenotype.
-    trait_values <- list()
-    for (tr in unique(tc_spec$trait)) {
-      col <- trait_spec$column[match(tr, trait_spec$trait)]
-      if (is.na(col) || !(tr %in% names(effects_list))) {
-        ng_stop("trait_checks references a trait not present in trait_direction/effects: ", tr)
-      }
-      gv <- stats::setNames(ng_predict_gebv(geno, effects_list[[tr]]), rownames(geno))
-      pv <- if (col %in% names(pheno)) {
-        stats::setNames(suppressWarnings(as.numeric(pheno[[col]])), rownames(pheno))
-      } else NULL
-      trait_values[[tr]] <- list(gebv = gv, phenotype = pv)
-    }
-    n_candidates_pre_trait_checks <- nrow(cross_table)
-    cross_table <- ng_apply_trait_checks(cross_table, tc_spec, trait_values,
-                                         exclude = isTRUE(exclude_threshold_violators))
-    trait_check_diagnostics <- attr(cross_table, "trait_check_diagnostics")
-    attr(cross_table, "trait_check_diagnostics") <- NULL
-    # Only attribute the zero-survivors condition to trait checks when exclusion is actually on
-    # AND there were candidates going into this block -- otherwise an already-empty cross_table
-    # (e.g. emptied upstream by the lethal guard) would be misreported as caused by trait checks.
-    if (isTRUE(exclude_threshold_violators) && n_candidates_pre_trait_checks > 0L && !nrow(cross_table)) {
-      ng_stop("trait_checks with exclude_threshold_violators = TRUE removed every candidate ",
-              "cross; relax the check threshold(s) or set exclude_threshold_violators = FALSE ",
-              "to only flag (not drop) violators.")
-    }
-  }
 
   scored_crosses <- ng_score_breeder_objective(
     cross_table,
@@ -1634,13 +1581,13 @@ utils::globalVariables(c(
   "alphamate_lambda_group", "alphamate_max_contributions", "alphamate_mode", "alphamate_n_threads",
   "alphamate_number_of_parents", "alphamate_runtime_path", "alphamate_target_degree", "alphamate_workdir",
   "assume_inbred", "parent_type", "phased_haplotypes", "bp_per_cm", "budget", "burn_in",
-  "check_basis", "committed_crosses", "constraint_diagnostics", "cost_col",
+  "committed_crosses", "constraint_diagnostics", "cost_col",
   "cross_cost", "cross_table", "direction_column_col", "direction_columns",
   "direction_direction_col", "direction_file", "direction_trait_col", "diversity_emphasis",
   "drop_lethal_carrier_crosses", "duplicate_action", "duplicate_maf_min", "duplicate_max_missing_prop",
   "duplicate_min_compared_markers", "duplicate_threshold", "effect_summary", "effects_list",
   "evol_iterations", "evol_seed", "evol_solutions", "evol_stop",
-  "exclude_threshold_violators", "geno", "genotype", "genotype_file",
+  "geno", "genotype", "genotype_file",
   "genotype_id_col_used", "grm_method", "group_permission", "group_quota",
   "id_col", "ids", "include_trait_gebv", "index_col", "phenotypic_covariance", "genetic_covariance",
   "index_direction", "lambda_cost", "lambda_group", "lambda_logistic",
@@ -1854,8 +1801,6 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
                                     lambda_logistic = 0,
                                     lethal_spec = NULL,
                                     trait_checks = NULL,
-                                    check_basis = "gebv",
-                                    exclude_threshold_violators = FALSE,
                                     include_trait_gebv = FALSE,
                                     marker_target_spec = NULL,
                                     lambda_marker = 0,

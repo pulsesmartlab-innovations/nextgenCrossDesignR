@@ -163,3 +163,28 @@ stopifnot(all(j$p_beat_all_checks <= single$yield_p_beat_check + 1e-8))
 stopifnot(all(j$p_beat_all_checks <= single$matur_p_beat_check + 1e-8))
 
 cat("task 4 ok\n")
+
+# --- Task 5: the spec builder, moved and basis-free ------------------------
+td <- c(yield = "increase", maturity = "decrease")
+s <- ng_trait_check_spec(trait = c("yield", "maturity"), check = c("CkY", "CkM"),
+                         trait_direction = td)
+stopifnot(nrow(s) == 2L, !("basis" %in% names(s)))
+stopifnot(s$reject_if[s$trait == "yield"] == "below")     # increase -> wrong side is below
+stopifnot(s$reject_if[s$trait == "maturity"] == "above")  # decrease -> wrong side is above
+s2 <- ng_trait_check_spec("protein", "CkP", direction = "above",
+                          trait_direction = c(protein = "increase"))
+stopifnot(s2$reject_if == "above")                        # explicit override wins
+err_d <- tryCatch(ng_trait_check_spec("x", "C", direction = "sideways"),
+                  error = function(e) conditionMessage(e))
+stopifnot(is.character(err_d), grepl("direction", err_d))
+err_dup <- tryCatch(ng_trait_check_spec(c("yield", "yield"), c("CkA", "CkB"),
+                                        trait_direction = c(yield = "increase")),
+                    error = function(e) conditionMessage(e))
+stopifnot(is.character(err_dup), grepl("duplicate", err_dup))
+# basis is GONE: passing it must be an unused-argument error, not silently ignored
+err_b <- tryCatch(ng_trait_check_spec("yield", "CkY", basis = "phenotype",
+                                      trait_direction = c(yield = "increase")),
+                  error = function(e) conditionMessage(e))
+stopifnot(is.character(err_b), grepl("unused argument", err_b))
+
+cat("task 5 ok\n")
