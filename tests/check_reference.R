@@ -141,3 +141,25 @@ stopifnot(out_sp$Days_to_flower_check_ok)                     # 70 < 75, decreas
 stopifnot(names(attr(out_sp, "check_reference_diagnostics")$n_wrong_side) == "Days to flower")
 
 cat("task 3 ok\n")
+
+# --- Task 4: tau bounds for the multi-trait joint probability ---------------
+b <- ng_check_tau_bounds(spec, cv)
+stopifnot(identical(names(b$tau_lower), c("yield", "matur")))
+# increase trait -> a LOWER bound at the check; decrease trait -> an UPPER bound
+stopifnot(b$tau_lower[["yield"]] == 6, is.infinite(b$tau_upper[["yield"]]), b$tau_upper[["yield"]] > 0)
+stopifnot(b$tau_upper[["matur"]] == 75, is.infinite(b$tau_lower[["matur"]]), b$tau_lower[["matur"]] < 0)
+
+# an unevaluable check widens to an unbounded side rather than excluding the trait
+b_na <- ng_check_tau_bounds(spec, list(yield = c(CHK_A = NA_real_), matur = c(CHK_B = 75)))
+stopifnot(is.infinite(b_na$tau_lower[["yield"]]), b_na$tau_lower[["yield"]] < 0)
+
+# the joint column: P(a progeny beats EVERY check at once)
+j <- ng_attach_joint_check_probability(scores, spec, cv, k_progeny = 50L)
+stopifnot("p_beat_all_checks" %in% names(j), nrow(j) == 3L)
+stopifnot(all(j$p_beat_all_checks >= 0 & j$p_beat_all_checks <= 1, na.rm = TRUE))
+# beating both checks can never be more likely than beating either one alone
+single <- ng_attach_check_reference(scores, spec, NULL, cv, k_progeny = 50L)
+stopifnot(all(j$p_beat_all_checks <= single$yield_p_beat_check + 1e-8))
+stopifnot(all(j$p_beat_all_checks <= single$matur_p_beat_check + 1e-8))
+
+cat("task 4 ok\n")

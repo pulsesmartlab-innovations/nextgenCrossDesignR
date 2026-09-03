@@ -110,3 +110,41 @@ ng_attach_check_reference <- function(scores, spec, trait_values = NULL, check_v
   rownames(scores) <- NULL
   scores
 }
+
+# Translate a check spec into the (tau_lower, tau_upper) pair that
+# ng_p_superior_progeny_multitrait() consumes: an increase trait bounds the progeny from below
+# at its check, a decrease trait bounds it from above. A check with no evaluable value leaves
+# that trait unbounded rather than dropping it, so the joint probability stays defined.
+ng_check_tau_bounds <- function(spec, check_values) {
+  spec <- as.data.frame(spec, stringsAsFactors = FALSE)
+  tr <- spec$trait
+  lo <- stats::setNames(rep(-Inf, length(tr)), tr)
+  hi <- stats::setNames(rep(Inf, length(tr)), tr)
+  for (k in seq_along(tr)) {
+    tau <- suppressWarnings(as.numeric(check_values[[tr[[k]]]][[spec$check[[k]]]]))
+    if (!length(tau) || !is.finite(tau)) next
+    if (identical(spec$reject_if[[k]], "below")) lo[[tr[[k]]]] <- tau else hi[[tr[[k]]]] <- tau
+  }
+  list(tau_lower = lo, tau_upper = hi)
+}
+
+# P(a progeny beats EVERY check at once). Thin wrapper over the existing multi-trait threshold
+# machinery: the check values ARE the tau bounds, so no new probability model is introduced.
+ng_attach_joint_check_probability <- function(scores, spec, check_values, k_progeny,
+                                              mean_suffix = "_mean", sd_suffix = "_pmv_used",
+                                              cross_trait_cov = NULL) {
+  spec <- as.data.frame(spec, stringsAsFactors = FALSE)
+  b <- ng_check_tau_bounds(spec, check_values)
+  key <- if ("column_key" %in% names(spec)) as.character(spec$column_key) else as.character(spec$trait)
+  trait_specs <- data.frame(
+    trait = spec$trait,
+    mean_col = paste0(key, mean_suffix),
+    var_col = paste0(key, sd_suffix),
+    stringsAsFactors = FALSE)
+  ng_add_p_superior_progeny_multitrait(
+    scores, trait_specs,
+    tau_lower = as.numeric(b$tau_lower[spec$trait]),
+    tau_upper = as.numeric(b$tau_upper[spec$trait]),
+    k_progeny = k_progeny, cross_trait_cov = cross_trait_cov,
+    out_col = "p_beat_all_checks")
+}
