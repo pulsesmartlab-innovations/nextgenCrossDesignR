@@ -155,7 +155,7 @@ full_envelope <- function(r) {
     plan_summary    = r$plan_summary,
     constraint_diagnostics = r$constraint_diagnostics,
     priority_risk_diagnostics = r$priority_risk_diagnostics,
-    trait_check_diagnostics = r$trait_check_diagnostics,
+    trait_check_reference = r$trait_check_reference,
     candidate_crosses = r$candidate_crosses,
     selected_crosses  = r$selected_crosses,
     ld_pruning_report = r$ld_pruning_report,

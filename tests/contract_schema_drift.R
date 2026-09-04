@@ -37,7 +37,10 @@ undocumented_ok <- c(
   # In-memory alternatives to the *_file keys: a JSON config cannot carry a
   # matrix or data frame, so the contract deliberately exposes paths only.
   "genotype", "marker_map", "phenotype", "trait_direction",
-  "training_genotype", "training_phenotype"
+  "training_genotype", "training_phenotype",
+  # check_geno / check_records are also in-memory matrices/lists (a check genotype matrix
+  # and per-source check phenotypic records); check_progeny_size IS documented in the schema.
+  "check_geno", "check_records"
 )
 
 not_a_formal <- setdiff(declared, formals_names)

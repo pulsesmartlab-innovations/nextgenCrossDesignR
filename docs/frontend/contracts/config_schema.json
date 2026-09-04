@@ -146,7 +146,9 @@
         {"name": "lambda_marker", "type": "number", "default": 0},
         {"name": "marker_ploidy", "type": "integer", "default": 2},
         {"name": "lethal_spec", "type": "object", "default": null, "desc": "Deleterious recessive locus (ng_lethal_recessive_spec)"},
-        {"name": "drop_lethal_carrier_crosses", "type": "boolean", "default": true}
+        {"name": "drop_lethal_carrier_crosses", "type": "boolean", "default": true},
+        {"name": "check_progeny_size", "type": "integer", "required": false,
+         "desc": "Progeny per family you will raise. Required with trait_checks; sets P(beat check). No default -- it must be your program's figure."}
       ]
     },
     {
