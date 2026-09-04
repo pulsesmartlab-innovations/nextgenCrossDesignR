@@ -1451,6 +1451,42 @@ git commit -m "feat(checks): check reference line and per-trait check panels"
 
 ---
 
+#### Task 9 addendum — the line's orientation is a parameter, not a constant
+
+Added after the user clarified the rule (2026-09-04). Deliver as a follow-up round on Task 9,
+after its current review closes.
+
+A check has a value on the mean axis and none on any other, so it is a line **perpendicular to
+whichever axis carries the mean**:
+
+| Plot shape | Mean axis | Draw |
+|---|---|---|
+| score / mean on **y**, diversity on **x** | y | horizontal, spanning x |
+| diversity on **y**, mean GEBV / phenotype on **x** | x | **vertical**, spanning y |
+| neither axis carries a mean | none | **nothing** |
+
+The current implementation hard-codes `graphics::abline(h = ...)`, which is correct only for the
+first row. Required changes:
+
+- Give the reference-line drawing an explicit `mean_axis = c("y", "x")` argument. `"y"` draws
+  `abline(h = value)`, `"x"` draws `abline(v = value)`. There is no default that guesses — a
+  caller states which axis its mean is on, or passes `NULL` and gets no line.
+- `ng_plot_priority_score_vs_kinship()` passes `mean_axis = "y"`; `ng_plot_check_panels()` passes
+  `mean_axis = "y"`. Both are unchanged in behaviour.
+- The label placement follows the orientation: `side = 4` for a horizontal line (as now),
+  `side = 3` for a vertical one, so it does not collide with the axis it sits on.
+- Test both orientations: assert a vertical call writes a file whose bytes DIFFER from the same
+  plot drawn without a line, and likewise for horizontal. Byte-identity is what caught the
+  off-axis bug; reuse it here rather than only asserting the file exists.
+- Document in the function's comment that a plot with no mean-bearing axis must pass `NULL`,
+  and why: a reference line on a rank-vs-rank or kinship-vs-kinship plot is meaningless.
+
+This is preparation as much as a fix — the frontend's gain-diversity frontier puts mean gain on
+y, but a diversity-versus-mean scatter (mean on x) is a natural next plot, and the helper must
+already support it rather than being retrofitted.
+
+---
+
 ### Task 10: `check_pheno` — supply check values the way you supply phenotypes
 
 A standard run's mean source is **`adjusted_pheno`**, not GEBV (`reliability_is_calibrated` is
