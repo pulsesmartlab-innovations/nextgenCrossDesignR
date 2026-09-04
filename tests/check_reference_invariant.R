@@ -60,8 +60,26 @@ for (nm in names(a)) {
   n_compared <- n_compared + 1L
 }
 
-# the plan is identical too -- allocation must not shift
-stopifnot(isTRUE(all.equal(without$crossing_plan, with_ck$crossing_plan, tolerance = 0)))
+# the allocation is identical too -- checks must not shift which crosses are selected or how
+# much of the budget each gets. The runner returns no "crossing_plan" field (that name does not
+# exist on ng_run_cross_prediction()'s output); the real allocation outputs are
+# selected_crosses (a data.frame) and plan_summary (a diagnostics list).
+sa <- without$selected_crosses
+sb <- with_ck$selected_crosses
+stopifnot(nrow(sa) == nrow(sb))
+n_selected_compared <- 0L
+for (nm in names(sa)) {
+  # selected_crosses also gains the 12 check columns (it is derived from the same
+  # check-annotated scored table as candidate_crosses), so this must be column-wise, not a
+  # whole-object all.equal() -- a whole-object comparison would fail spuriously on the added
+  # columns even when the allocation itself is untouched.
+  stopifnot(nm %in% names(sb))
+  stopifnot(isTRUE(all.equal(sa[[nm]], sb[[nm]], tolerance = 0)))
+  n_selected_compared <- n_selected_compared + 1L
+}
+
+# plan_summary carries no per-cross check columns, so it CAN be compared whole-object.
+stopifnot(isTRUE(all.equal(without$plan_summary, with_ck$plan_summary, tolerance = 0)))
 
 # and the only difference is ADDED columns -- exactly the check-reference columns the
 # interface promises: per trait, <key>_check_id / _check_value / _vs_check / _check_ok /
@@ -77,5 +95,6 @@ is_allowed <- vapply(added, function(nm) {
 }, logical(1))
 stopifnot(all(is_allowed))
 
-cat(sprintf("invariant ok: %d pre-existing columns identical, checks add columns and change nothing else\n",
-           n_compared))
+cat(sprintf(
+  "invariant ok: %d candidate_crosses columns + %d selected_crosses columns + plan_summary identical, checks add columns and change nothing else\n",
+  n_compared, n_selected_compared))
