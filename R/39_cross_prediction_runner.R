@@ -1147,6 +1147,14 @@ ng_cp__stage_predict <- function(ctx) {
 ng_cp__stage_index <- function(ctx) {
   list2env(ctx, environment())
   direction_canonical <- ctx$direction_canonical
+  # ctc (exact within-family cross-trait covariance, R/39 stage_predict) is deliberately assigned
+  # NULL rather than omitted when it cannot be computed (single-trait runs, or an empty candidate
+  # pool) -- ng_attach_joint_check_probability() below is written to treat NULL as "fall back to
+  # the G_hat proxy". But `ctx$ctc <- ctc` upstream silently DROPS the key when ctc is NULL
+  # (assigning NULL into a list element deletes it), so list2env() above never binds a bare `ctc`
+  # in that case. Read it explicitly via `ctx$` (returns NULL for an absent key) so the multi-trait
+  # check-reference path below never hits "object 'ctc' not found".
+  ctc <- ctx$ctc
   # Per-cross COST / LOGISTICS: candidate crosses are generated internally, so a breeder who
   # wants cost/budget/logistic-aware allocation supplies cross_cost -- a data frame with
   # parent1/parent2 + one numeric column per factor (e.g. cost, distance). Joined onto the
@@ -1642,7 +1650,7 @@ ng_cp__stage_rank <- function(ctx) {
     write_figures = write_figures,
     n_crosses = n_crosses,
     include_trait_gebv = include_trait_gebv,
-    trait_check_reference = trait_check_reference
+    trait_check_reference = ctx$trait_check_reference
   )
   ctx$selected <- selected
   ctx$scored_crosses <- scored_crosses
