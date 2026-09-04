@@ -1045,8 +1045,17 @@ for (nm in names(a)) {
   stopifnot(nm %in% names(b))
   stopifnot(isTRUE(all.equal(a[[nm]], b[[nm]], tolerance = 0)))
 }
-# the plan is identical too -- allocation must not shift
-stopifnot(isTRUE(all.equal(without$crossing_plan, with_ck$crossing_plan, tolerance = 0)))
+# the ALLOCATION is identical too. NOTE: the runner returns no `crossing_plan` field -- the
+# allocation outputs are `selected_crosses` (a data.frame, which also gains the check columns,
+# so compare it column-wise) and `plan_summary` (a list carrying no per-cross columns, so a
+# whole-object comparison is valid there).
+stopifnot(nrow(without$selected_crosses) == nrow(with_ck$selected_crosses))
+for (nm in names(without$selected_crosses)) {
+  stopifnot(nm %in% names(with_ck$selected_crosses))
+  stopifnot(isTRUE(all.equal(without$selected_crosses[[nm]], with_ck$selected_crosses[[nm]],
+                             tolerance = 0)))
+}
+stopifnot(isTRUE(all.equal(without$plan_summary, with_ck$plan_summary, tolerance = 0)))
 
 # and the only difference is ADDED columns
 added <- setdiff(names(b), names(a))
