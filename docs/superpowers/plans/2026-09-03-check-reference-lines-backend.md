@@ -1603,7 +1603,153 @@ git commit -m "feat(checks): supply check values as a phenotype table, not a nes
 
 ---
 
-### Task 11: Docs, exports, version bump, full check
+### Task 11: Harden the ctx pipeline against NULL-deleted keys
+
+**This fixes a pre-existing class of latent crash, found twice during this plan.**
+
+`ng_run_cross_prediction()` passes state between stages in a `ctx` list, and each stage does
+`list2env(ctx, environment())` and then reads fields by **bare name**. But in R, assigning `NULL`
+into a list **deletes the key** rather than storing a `NULL` value:
+
+```r
+a <- list(x = 1); a$y <- NULL;          names(a)   # "x"      -- key GONE
+b <- list(x = 1); b["y"] <- list(NULL); names(b)   # "x" "y"  -- key kept, value NULL
+```
+
+So any ctx field that can legitimately be `NULL` disappears from the list, `list2env()` never
+creates the binding, and a later bare-name read is an **unbound-variable error** — thrown far
+from its cause, in a function that never mentions the assignment.
+
+Two live instances were found during this plan, both only in combination across tasks:
+
+- `trait_check_reference` — crashed every run with `write_outputs = TRUE` and no `trait_checks`
+- `ctc` (exact within-family cross-trait covariance) — reachable on single-trait / empty-pool runs
+
+Both are already fixed at their read sites. **This task removes the hazard rather than the
+instances**, so a future field that becomes NULL-able cannot reintroduce it.
+
+**Files:**
+- Modify: `R/39_cross_prediction_runner.R` (stage-boundary ctx writes)
+- Test: `tests/ctx_null_fields.R`
+
+**Interfaces:**
+- Produces: `ng_ctx_put(ctx, ...)` — a NULL-preserving multi-field ctx setter.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `tests/ctx_null_fields.R`:
+
+```r
+ng_test_use_cpp <- FALSE
+helper <- c(file.path("tests", "helper_load.R"), "helper_load.R",
+            file.path("nextgen_cross_design", "tests", "helper_load.R"),
+            file.path("..", "tests", "helper_load.R"))
+source(helper[file.exists(helper)][[1L]])
+
+# --- the setter preserves NULL where $<- would delete the key ---------------
+ctx <- list(a = 1)
+ctx <- ng_ctx_put(ctx, b = NULL, c = 3)
+stopifnot(all(c("a", "b", "c") %in% names(ctx)))
+stopifnot(is.null(ctx$b), ctx$c == 3)
+# and the binding survives the list2env round trip a stage performs
+f <- function(ctx) { list2env(ctx, environment()); is.null(b) }
+stopifnot(isTRUE(f(ctx)))
+# overwriting an existing key with NULL keeps it, too
+ctx <- ng_ctx_put(ctx, c = NULL)
+stopifnot("c" %in% names(ctx), is.null(ctx$c))
+
+cat("ctx setter ok\n")
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `Rscript tests/ctx_null_fields.R`
+Expected: FAIL with `could not find function "ng_ctx_put"`.
+
+- [ ] **Step 3: Add the setter**
+
+In `R/00_utils.R` (beside the other small helpers):
+
+```r
+# Set ctx fields WITHOUT losing NULLs. `ctx$key <- NULL` deletes the key, so a stage that later
+# does list2env(ctx, environment()) and reads `key` by bare name gets an unbound-variable error
+# instead of NULL. Bracket assignment with a length-1 list stores the NULL and keeps the key.
+ng_ctx_put <- function(ctx, ...) {
+  vals <- list(...)
+  nms <- names(vals)
+  if (is.null(nms) || any(!nzchar(nms))) ng_stop("ng_ctx_put requires named values")
+  for (nm in nms) ctx[nm] <- list(vals[[nm]])
+  ctx
+}
+```
+
+- [ ] **Step 4: Convert every stage-boundary ctx write**
+
+Convert the ctx write blocks at the stage boundaries in `R/39_cross_prediction_runner.R` — around
+lines 794-829, 1125-1143, 1300-1317, 1416, and 1655-1659 — from repeated `ctx$X <- X` into one
+`ctx <- ng_ctx_put(ctx, X = X, Y = Y, ...)` call per block.
+
+**Convert them all, not only the ones you judge NULL-able.** Per-field judgement is exactly what
+let two instances through; uniform conversion removes the hazard class and costs nothing for
+non-NULL values. Leave the parameter-normalisation block (~684-721) alone — those are `match.arg`
+results that cannot be NULL and are read back through `ctx$` in the same function.
+
+Do NOT change any read site. The two already-fixed reads (`ctx$trait_check_reference`,
+`ctx$ctc`) stay as they are — reading through `$` is correct and remains correct.
+
+- [ ] **Step 5: Prove the hazard is gone end to end**
+
+Append to `tests/ctx_null_fields.R` a run that maximises NULL-valued ctx fields — single trait,
+no training set, no posterior, no checks, no LD pruning, no lethal spec — with
+`write_outputs = TRUE`, which is the combination that exposed both live instances:
+
+```r
+set.seed(404)
+n_p <- 10L; n_m <- 30L
+geno <- matrix(rbinom(n_p * n_m, 1, 0.4) * 2L, nrow = n_p,
+               dimnames = list(paste0("P", seq_len(n_p)), paste0("m", seq_len(n_m))))
+pheno <- data.frame(NAME = rownames(geno), yield = rnorm(n_p, 10, 2), stringsAsFactors = FALSE)
+map <- data.frame(marker = colnames(geno), chr = 1L,
+                  bp = seq_len(n_m) * 1e5, stringsAsFactors = FALSE)
+dir_df <- data.frame(trait = "yield", column = "yield", direction = "increase",
+                     stringsAsFactors = FALSE)
+out_dir <- file.path(tempdir(), "ctx-null-run")
+res <- ng_run_cross_prediction(
+  genotype = geno, phenotype = pheno, marker_map = map, trait_direction = dir_df,
+  id_col = "NAME", bp_per_cm = 1e6, n_crosses = 3L,
+  write_outputs = TRUE, write_figures = FALSE, output_dir = out_dir, seed = 7L)
+stopifnot(is.list(res), nrow(res$candidate_crosses) > 0L)
+stopifnot(length(list.files(out_dir, pattern = "[.]xlsx$")) >= 1L)
+
+cat("ctx null-field end-to-end ok\n")
+```
+
+Adjust the fixture only as far as the real signatures require (earlier tasks needed
+`marker_map` columns and `bp_per_cm`); report any adjustment.
+
+- [ ] **Step 6: Run the test and the full suite**
+
+```bash
+Rscript tests/ctx_null_fields.R
+for f in tests/*.R; do echo "-- $f"; Rscript "$f" || echo "FAILED: $f"; done
+```
+Expected: the new test passes; no previously-passing test regresses.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add R/00_utils.R R/39_cross_prediction_runner.R tests/ctx_null_fields.R
+git commit -m "fix(runner): preserve NULL ctx fields so bare-name stage reads cannot fail
+
+ctx\$key <- NULL deletes the key, so list2env() never binds it and a
+stage reading it by bare name throws an unbound-variable error. Two live
+instances surfaced during the check-reference work. ng_ctx_put() keeps
+the key with a NULL value, removing the hazard class."
+```
+
+---
+
+### Task 12: Docs, exports, version bump, full check
 
 **Files:**
 - Modify: `NAMESPACE`, `man/nextgenCrossDesign-api.Rd`, `NEWS.md`, `DESCRIPTION`
@@ -1619,6 +1765,7 @@ export(ng_attach_check_reference)
 export(ng_attach_joint_check_probability)
 export(ng_check_line_value)
 export(ng_check_records_from_pheno)
+export(ng_ctx_put)
 export(ng_check_reference_value)
 export(ng_check_tau_bounds)
 export(ng_plot_check_panels)
@@ -1668,6 +1815,11 @@ Prepend to `NEWS.md`:
 
 ## Bug fixes
 
+* Stage state passed through the runner's `ctx` list no longer loses `NULL` fields. `ctx$key <-
+  NULL` deletes the key in R, so a stage that reads that field by bare name after
+  `list2env()` raised an unbound-variable error rather than seeing `NULL`. Two paths were
+  affected: any run with `write_outputs = TRUE` and no `trait_checks`, and single-trait runs
+  reading the exact cross-trait covariance.
 * `ng_p_superior_progeny()` compared the wrong threshold for zero-variance crosses when `tau`
   varied per cross. `mu` was subset to the zero-variance rows while `tau` was not, so each such
   cross was scored against whichever threshold sat at position 1 rather than its own — silently
