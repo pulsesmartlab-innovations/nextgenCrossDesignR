@@ -154,9 +154,26 @@ P(at least one <= tau). No new math.
 
 ## 8. Plots
 
-A check has a value on the mean axis and **no diversity coordinate**. It is therefore a
-**horizontal reference line spanning the full x-range**, never a marker. Giving it an x
-position would invent a diversity value it does not have.
+A check has a value on the mean axis and **no coordinate on any other axis**. It is therefore a
+**reference line**, never a marker -- giving it a diversity position would invent a value it
+does not have.
+
+**Its orientation follows the mean-bearing axis, and is not fixed:**
+
+| Plot shape | Mean axis | Check is drawn as |
+|---|---|---|
+| score / mean on **y**, diversity on **x** | y | a **horizontal** line spanning the x-range |
+| diversity on **y**, mean GEBV / phenotype on **x** | x | a **vertical** line spanning the y-range |
+| neither axis carries a mean (rank vs rank, kinship vs kinship) | none | **no line** |
+
+The rule: the check line is **perpendicular to the mean-bearing axis**. A plotting helper must
+therefore be told which axis that is rather than assuming `h =` -- hard-coding a horizontal line
+silently produces a wrong-orientation reference on any plot that puts the mean on x.
+
+**Not every plot is an appropriate host.** The line belongs only where a reader would naturally
+ask "is this above or below my check", which requires the axis to carry the trait mean or a
+monotone transform of it. Elsewhere it is visual noise at best, and an invitation to misread at
+worst.
 
 Target plots:
 
@@ -167,7 +184,7 @@ Target plots:
 
 Rendering:
 
-- One horizontal line per active check, labelled with the check id.
+- One line per active check, oriented per the table above and labelled with the check id.
 - Points on the wrong side get de-emphasised styling (the flag).
 - **P(beat check) encoded as marker opacity or size**, so a below-the-line cross with a
   superior tail is visibly distinct from a genuinely dead one. Without this, every point under
