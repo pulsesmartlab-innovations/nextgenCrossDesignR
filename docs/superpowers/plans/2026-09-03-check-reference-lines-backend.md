@@ -1451,7 +1451,159 @@ git commit -m "feat(checks): check reference line and per-trait check panels"
 
 ---
 
-### Task 10: Docs, exports, version bump, full check
+### Task 10: `check_pheno` — supply check values the way you supply phenotypes
+
+A standard run's mean source is **`adjusted_pheno`**, not GEBV (`reliability_is_calibrated` is
+hard-set `FALSE` at `R/02_effects.R:117-119` — a deliberate refusal to present phenotype
+predictive diagnostics as breeding-value reliability). So in practice `ng_check_reference_value()`
+reads `check_records[[source]]`, and a user who supplies only `check_geno` gets `NA` in every
+check column. The nested `check_records` list is an awkward shape to ask a breeder for; the
+approved design (`docs/design/2026-09-03-check-reference-lines-design.md` §10) specified a
+`check_pheno` **data frame**. This task closes that drift.
+
+The principle, from the user: the check must be apples-to-apples with whatever the **parents'**
+mean used, and it must not be stone cast. `check_geno` serves the GEBV route, `check_pheno`
+serves the phenotypic route, and **the run decides which is consulted** — neither input dictates
+the comparison.
+
+**Files:**
+- Modify: `R/51_check_reference.R` (new converter)
+- Modify: `R/39_cross_prediction_runner.R` (new formal + wiring + `globalVariables`)
+- Modify: `docs/frontend/contracts/config_schema.json`, `tests/contract_schema_drift.R`
+- Test: `tests/check_reference.R` (converter), `tests/check_reference_runner.R` (end to end)
+
+**Interfaces:**
+- Consumes: `ng_check_reference_value()` (Task 2), the runner block (Task 6).
+- Produces: `ng_check_records_from_pheno(check_pheno, id_col, trait_columns, source)` →
+  the `check_records` shape: `list(<trait> = list(<source> = <named numeric over check ids>))`.
+  New runner formal `check_pheno = NULL`. **Explicit `check_records` wins** where both are given.
+
+- [ ] **Step 1: Write the failing test**
+
+Append to `tests/check_reference.R`:
+
+```r
+# --- Task 10: check_pheno -> check_records ----------------------------------
+cp <- data.frame(NAME = c("CHK_A", "CHK_B"),
+                 yield = c(11.0, 9.5), matur = c(74, 71),
+                 stringsAsFactors = FALSE)
+rec <- ng_check_records_from_pheno(cp, id_col = "NAME",
+                                   trait_columns = c(yield = "yield", matur = "matur"),
+                                   source = "adjusted_pheno")
+stopifnot(is.list(rec), setequal(names(rec), c("yield", "matur")))
+stopifnot(names(rec$yield) == "adjusted_pheno")
+stopifnot(abs(rec$yield$adjusted_pheno[["CHK_A"]] - 11.0) < 1e-8)
+stopifnot(abs(rec$matur$adjusted_pheno[["CHK_B"]] - 71) < 1e-8)
+
+# the source key follows the RUN, not the input's name
+rec_blue <- ng_check_records_from_pheno(cp, "NAME", c(yield = "yield"), source = "BLUE")
+stopifnot(names(rec_blue$yield) == "BLUE")
+
+# a trait column absent from check_pheno yields NA, never a silent drop
+rec_miss <- ng_check_records_from_pheno(cp, "NAME", c(protein = "protein"),
+                                        source = "adjusted_pheno")
+stopifnot(all(is.na(rec_miss$protein$adjusted_pheno)))
+
+# a GEBV source consults markers, so check_pheno is not used: converter returns NULL
+stopifnot(is.null(ng_check_records_from_pheno(cp, "NAME", c(yield = "yield"), source = "GEBV")))
+
+cat("task 10 ok\n")
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `Rscript tests/check_reference.R`
+Expected: FAIL with `could not find function "ng_check_records_from_pheno"`.
+
+- [ ] **Step 3: Write the implementation**
+
+Append to `R/51_check_reference.R`:
+
+```r
+# Convert a check phenotype table -- the same shape as the phenotype file a breeder already
+# supplies -- into the check_records structure ng_check_reference_value() consumes. The SOURCE
+# KEY is the run's own resolved mean source, not anything named in the input: the check is
+# apples-to-apples with the parents' mean by construction. Returns NULL when the run resolved to
+# a GEBV source, because the value is then predicted from the check's markers instead.
+ng_check_records_from_pheno <- function(check_pheno, id_col, trait_columns, source) {
+  source <- as.character(source)[[1L]]
+  if (startsWith(source, "GEBV")) return(NULL)
+  check_pheno <- as.data.frame(check_pheno, stringsAsFactors = FALSE, check.names = FALSE)
+  if (!(id_col %in% names(check_pheno))) {
+    ng_stop("check_pheno is missing its id column: ", id_col)
+  }
+  ids <- as.character(check_pheno[[id_col]])
+  out <- list()
+  for (tr in names(trait_columns)) {
+    col <- trait_columns[[tr]]
+    v <- if (col %in% names(check_pheno)) {
+      suppressWarnings(as.numeric(check_pheno[[col]]))
+    } else {
+      rep(NA_real_, length(ids))
+    }
+    out[[tr]] <- stats::setNames(list(stats::setNames(v, ids)), source)
+  }
+  out
+}
+```
+
+- [ ] **Step 4: Wire it into the runner**
+
+Add `check_pheno = NULL` to the `ng_run_cross_prediction()` signature beside `check_records`, and
+add `"check_pheno"` to the `utils::globalVariables()` list. In the check block, build the records
+per trait from `check_pheno` when the caller did not supply `check_records` explicitly:
+
+```r
+      src <- as.character(trait_mean_source[[tr]])
+      check_source[[tr]] <- src
+      recs <- check_records[[tr]]
+      if (is.null(recs) && !is.null(check_pheno)) {
+        col <- trait_spec$column[match(tr, trait_spec$trait)]
+        conv <- ng_check_records_from_pheno(check_pheno, id_col,
+                                            stats::setNames(list(col), tr), src)
+        recs <- if (is.null(conv)) NULL else conv[[tr]]
+      }
+      check_values[[tr]] <- ng_check_reference_value(src, check_geno, effects_list[[tr]],
+                                                     check_records = recs)
+```
+
+Document `check_pheno` in `config_schema.json` beside `check_progeny_size`, and add it to
+`undocumented_ok` in `tests/contract_schema_drift.R` only if it cannot be expressed as a path.
+
+- [ ] **Step 5: End-to-end test**
+
+Append to `tests/check_reference_runner.R`, mirroring that file's existing setup:
+
+```r
+# check_pheno makes the check values REAL rather than NA on a phenotype-source run
+cp <- data.frame(NAME = c("CHK_A", "CHK_B"), yield = c(12.5, 8.0), stringsAsFactors = FALSE)
+res_cp <- do.call(ng_run_cross_prediction, c(args, list(
+  check_geno = chk, check_progeny_size = 200L, check_pheno = cp,
+  trait_checks = data.frame(trait = "yield", check = "CHK_A", stringsAsFactors = FALSE))))
+stopifnot(identical(res_cp$trait_check_reference$source[["yield"]], "adjusted_pheno"))
+stopifnot(abs(res_cp$trait_check_reference$values$yield[["CHK_A"]] - 12.5) < 1e-8)
+ct_cp <- res_cp$candidate_crosses
+stopifnot(all(is.finite(ct_cp$yield_check_value)))
+stopifnot(any(is.finite(ct_cp$yield_p_beat_check)))
+```
+
+- [ ] **Step 6: Run both tests**
+
+Run: `Rscript tests/check_reference.R` → `task 10 ok`
+Run: `Rscript tests/check_reference_runner.R` → passes, check values finite
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add R/51_check_reference.R R/39_cross_prediction_runner.R \
+        docs/frontend/contracts/config_schema.json tests/contract_schema_drift.R \
+        tests/check_reference.R tests/check_reference_runner.R
+git commit -m "feat(checks): supply check values as a phenotype table, not a nested list"
+```
+
+---
+
+### Task 11: Docs, exports, version bump, full check
 
 **Files:**
 - Modify: `NAMESPACE`, `man/nextgenCrossDesign-api.Rd`, `NEWS.md`, `DESCRIPTION`
@@ -1466,6 +1618,7 @@ export(ng_align_check_geno)
 export(ng_attach_check_reference)
 export(ng_attach_joint_check_probability)
 export(ng_check_line_value)
+export(ng_check_records_from_pheno)
 export(ng_check_reference_value)
 export(ng_check_tau_bounds)
 export(ng_plot_check_panels)
@@ -1493,7 +1646,12 @@ Prepend to `NEWS.md`:
 
 ## New
 
-* `check_geno`, `check_records`, `check_progeny_size` on `ng_run_cross_prediction()`.
+* `check_geno`, `check_pheno`, `check_records`, `check_progeny_size` on
+  `ng_run_cross_prediction()`. Supply check values the same way you supply phenotypes:
+  `check_pheno` is a data frame shaped like the phenotype file. Which input is consulted is
+  decided by the **run's own mean source**, not by the caller — `check_geno` serves a GEBV
+  source, `check_pheno` a phenotypic one — so the check is always on the same scale as the
+  parent means it is compared against.
   `check_progeny_size` is **required** whenever `trait_checks` is supplied and has no default:
   progeny per family scales P(beat check) directly, so it must be the breeding program's own
   figure rather than a number the package invents.
@@ -1502,6 +1660,9 @@ Prepend to `NEWS.md`:
   `<trait>_p_beat_check`, plus `checks_all_ok` and, for multi-trait runs,
   `p_beat_all_checks` — the probability that a progeny beats every check at once.
 * `Checks` sheet in the cross-priority workbook.
+* Documented: the check's **mean** follows the run's `mean_source`, while **P(beat check)**
+  always uses the genuine within-family variance (`<trait>_pmv_used`) and never
+  `parent_distance`, which is a relationship distance rather than a variance in trait units.
 * A horizontal check reference line on the score-versus-kinship plot, and
   `ng_plot_check_panels()` for per-trait small multiples in multi-trait runs.
 
