@@ -19,6 +19,49 @@ ng_priority_plot_tier_colors <- function(labels = c("highly_priority", "priority
   cols[labels]
 }
 
+
+# Look up the ok/P(beat check) pair that a scored table carries for its ACTIVE check(s), without
+# requiring the caller to pass trait_check_reference through: the joint columns
+# (checks_all_ok / p_beat_all_checks) win when present (multi-trait), and a single unambiguous
+# per-trait pair (<trait>_check_ok / <trait>_p_beat_check) is used otherwise. Returns NULL when
+# neither is resolvable so callers can fall back to unstyled markers -- this is what keeps a
+# no-checks run's plot byte-for-byte the same as before this feature existed.
+ng_priority_plot_check_style <- function(df) {
+  ok <- df[["checks_all_ok"]]
+  p <- df[["p_beat_all_checks"]]
+  if (is.null(ok) || is.null(p)) {
+    ok_cols <- grep("_check_ok$", names(df), value = TRUE)
+    p_cols <- grep("_p_beat_check$", names(df), value = TRUE)
+    if (length(ok_cols) != 1L || length(p_cols) != 1L) return(NULL)
+    ok <- df[[ok_cols]]
+    p <- df[[p_cols]]
+  }
+  list(ok = as.logical(ok), p = suppressWarnings(as.numeric(p)))
+}
+
+# Per-point alpha blend. grDevices::adjustcolor()'s alpha.f is a SCALAR -- it builds one
+# 4x4 transform matrix via diag(), so passing a vector errors ("d == c(4L, 4L) are not all
+# TRUE"). Opacity-by-P(beat check) needs one alpha per point, so blend manually via
+# col2rgb()/rgb() instead, which are properly vectorized over both col and alpha.
+ng_priority_plot_alpha_col <- function(col, alpha) {
+  alpha <- pmax(0, pmin(1, alpha))
+  rgb_mat <- grDevices::col2rgb(col)
+  grDevices::rgb(rgb_mat[1L, ] / 255, rgb_mat[2L, ] / 255, rgb_mat[3L, ] / 255, alpha = alpha)
+}
+
+# Apply the check-reference marker styling: a point on the wrong side of its check is
+# de-emphasised (flagged grey) rather than recolored to look like a normal tier point, and
+# P(beat check) is encoded as opacity so a high-variance cross sitting below the line -- one
+# that can still throw a superior tail -- stays visibly distinct from one that genuinely cannot.
+# `style` is the (possibly NULL) result of ng_priority_plot_check_style(); base_col is the
+# color each point would use with no check active.
+ng_priority_plot_apply_check_style <- function(base_col, style) {
+  if (is.null(style)) return(base_col)
+  col <- ifelse(style$ok %in% FALSE, "#9AA0A6", base_col)
+  alpha <- ifelse(is.finite(style$p), pmax(0.15, pmin(1, style$p)), 1)
+  ng_priority_plot_alpha_col(col, alpha)
+}
+
 ng_plot_priority_score_vs_kinship <- function(scored,
                                               selected = NULL,
                                               output_path = NULL,
@@ -30,7 +73,9 @@ ng_plot_priority_score_vs_kinship <- function(scored,
                                               title = "Selected priority tiers versus all candidate crosses",
                                               width = 8,
                                               height = 5,
-                                              res = 150) {
+                                              res = 150,
+                                              check_line = NULL,
+                                              check_label = NULL) {
   scored <- as.data.frame(scored, stringsAsFactors = FALSE)
   required <- c(parent1_col, parent2_col, score_col, kinship_col)
   miss <- setdiff(required, names(scored))
@@ -73,6 +118,11 @@ ng_plot_priority_score_vs_kinship <- function(scored,
     ylab = "Multi-trait score",
     main = title
   )
+  if (!is.null(check_line) && is.finite(check_line)) {
+    graphics::abline(h = check_line, lty = 2, lwd = 2, col = "#B00020")
+    graphics::mtext(sprintf("check: %s", if (is.null(check_label)) "reference" else check_label),
+                    side = 4, at = check_line, las = 1, cex = 0.7, col = "#B00020")
+  }
 
   selected <- selected[selected_ok, , drop = FALSE]
   selected_score <- selected_score[selected_ok]
@@ -87,12 +137,14 @@ ng_plot_priority_score_vs_kinship <- function(scored,
   tier_levels <- if (is.factor(selected[[tier_col]])) levels(selected[[tier_col]]) else unique(tiers)
   tier_levels <- tier_levels[tier_levels %in% tiers]
   tier_cols <- ng_priority_plot_tier_colors(tier_levels)
+  point_col <- ng_priority_plot_apply_check_style(tier_cols[tiers],
+                                                  ng_priority_plot_check_style(selected))
   graphics::points(
     selected_kinship,
     selected_score,
     pch = 16,
     cex = 0.9,
-    col = tier_cols[tiers]
+    col = point_col
   )
   graphics::legend(
     "topright",
@@ -108,5 +160,84 @@ ng_plot_priority_score_vs_kinship <- function(scored,
     invisible(normalizePath(output_path, winslash = "/", mustWork = TRUE))
   } else {
     invisible(NULL)
+  }
+}
+
+# The y value at which to draw the check reference line. Single-trait runs plot the trait mean
+# itself, so the check's value is the line. A LINEAR index (weighted / economic) is a fixed
+# combination of trait values, so the check's index value is exact. A RANK-based index is a
+# function of the candidate distribution, and a check has no rank because it is not a cross --
+# there is no honest line, so we return NA and the caller says so rather than drawing a number
+# that looks authoritative and is not.
+ng_check_line_value <- function(trait_check_reference, multi_trait_meta = NULL, trait = NULL) {
+  spec <- as.data.frame(trait_check_reference$active, stringsAsFactors = FALSE)
+  if (!nrow(spec)) return(NA_real_)
+  val <- function(tr) {
+    ck <- spec$check[[match(tr, spec$trait)]]
+    suppressWarnings(as.numeric(trait_check_reference$values[[tr]][[ck]]))
+  }
+  if (!is.null(trait) || nrow(spec) == 1L) {
+    tr <- if (is.null(trait)) spec$trait[[1L]] else trait
+    if (!(tr %in% spec$trait)) return(NA_real_)
+    v <- val(tr)
+    return(if (length(v) && is.finite(v)) v else NA_real_)
+  }
+  method <- as.character(if (is.null(multi_trait_meta$method)) "" else multi_trait_meta$method)
+  if (!(method %in% c("weighted", "economic_index", "desired_gain"))) return(NA_real_)
+  w <- multi_trait_meta$weights
+  if (is.null(w) || !length(w)) return(NA_real_)
+  tr <- intersect(spec$trait, names(w))
+  if (!length(tr)) return(NA_real_)
+  v <- vapply(tr, val, numeric(1))
+  if (any(!is.finite(v))) return(NA_real_)
+  sum(v * as.numeric(w[tr]))
+}
+
+# Per-trait check panels: one facet per trait that has a check, y = that trait's mid-parent
+# mean, x = pair kinship, with the trait's own check line. This is where multi-trait checks
+# live, because a single index axis cannot carry several check lines on different scales.
+# Each panel also encodes P(beat check) as marker opacity when that trait's <key>_p_beat_check
+# column is present, for the same reason the main scatter does: a point below the line with a
+# high P(beat check) can still throw a superior progeny and must stay visually distinct from
+# one that genuinely cannot.
+ng_plot_check_panels <- function(scored, trait_check_reference, output_path = NULL,
+                                 kinship_col = "pair_kinship", width = 10, height = 4,
+                                 res = 150) {
+  if (is.null(trait_check_reference)) return(invisible(NULL))
+  spec <- as.data.frame(trait_check_reference$active, stringsAsFactors = FALSE)
+  key <- if ("column_key" %in% names(spec)) as.character(spec$column_key) else as.character(spec$trait)
+  keep <- paste0(key, "_mean") %in% names(scored)
+  traits <- spec$trait[keep]; key <- key[keep]
+  if (!length(traits)) return(invisible(NULL))
+  owns_device <- !is.null(output_path)
+  dev_no <- NULL
+  if (isTRUE(owns_device)) {
+    output_path <- as.character(output_path[[1L]])
+    dev_no <- ng_plot_open_device(output_path, width = width, height = height, res = res)
+    on.exit(ng_plot_close_device(dev_no), add = TRUE)
+  }
+  op <- graphics::par(mfrow = c(1L, length(traits)), mar = c(4, 4, 3, 1))
+  on.exit(graphics::par(op), add = TRUE)
+  for (i in seq_along(traits)) {
+    tr <- traits[[i]]; kk <- key[[i]]
+    y <- suppressWarnings(as.numeric(scored[[paste0(kk, "_mean")]]))
+    x <- suppressWarnings(as.numeric(scored[[kinship_col]]))
+    ok <- scored[[paste0(kk, "_check_ok")]]
+    base_col <- ifelse(ok %in% FALSE, "#BBBBBB", "#1F4E78")
+    p_col <- paste0(kk, "_p_beat_check")
+    p <- if (p_col %in% names(scored)) suppressWarnings(as.numeric(scored[[p_col]])) else NA_real_
+    alpha <- ifelse(is.finite(p), pmax(0.15, pmin(1, p)), 1)
+    graphics::plot(x, y, pch = 19, col = ng_priority_plot_alpha_col(base_col, alpha),
+                   xlab = "Pair kinship", ylab = paste(tr, "mid-parent"), main = tr)
+    tau <- suppressWarnings(as.numeric(scored[[paste0(kk, "_check_value")]][[1L]]))
+    if (length(tau) && is.finite(tau)) {
+      graphics::abline(h = tau, lty = 2, lwd = 2, col = "#B00020")
+    }
+  }
+  if (isTRUE(owns_device)) {
+    ng_plot_close_device(dev_no)
+    invisible(normalizePath(output_path, winslash = "/", mustWork = TRUE))
+  } else {
+    invisible(output_path)
   }
 }

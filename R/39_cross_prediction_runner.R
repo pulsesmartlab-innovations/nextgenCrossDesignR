@@ -617,7 +617,8 @@ ng_run_cp_output_files <- function(output_dir,
                                    write_figures,
                                    n_crosses,
                                    include_trait_gebv = FALSE,
-                                   trait_check_reference = NULL) {
+                                   trait_check_reference = NULL,
+                                   multi_trait_meta = NULL) {
   files <- list()
   if (!isTRUE(write_outputs) && !isTRUE(write_figures)) return(files)
   if (is.null(output_dir) || !nzchar(as.character(output_dir[[1L]]))) {
@@ -627,11 +628,15 @@ ng_run_cp_output_files <- function(output_dir,
   dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
   figures <- NULL
   if (isTRUE(write_figures)) {
+    chk_line <- if (is.null(trait_check_reference)) NA_real_ else
+      ng_check_line_value(trait_check_reference, multi_trait_meta)
     plot_path <- file.path(output_dir, "priority_score_vs_kinship.png")
     ng_plot_priority_score_vs_kinship(
       scored = candidate_crosses,
       selected = selected_crosses,
-      output_path = plot_path
+      output_path = plot_path,
+      check_line = if (is.finite(chk_line)) chk_line else NULL,
+      check_label = if (is.finite(chk_line)) trait_check_reference$active$check[[1L]] else NULL
     )
     files$priority_score_vs_kinship_png <- normalizePath(plot_path, winslash = "/", mustWork = TRUE)
     figures <- data.frame(
@@ -639,6 +644,14 @@ ng_run_cp_output_files <- function(output_dir,
       path = files$priority_score_vs_kinship_png,
       stringsAsFactors = FALSE
     )
+    if (!is.null(trait_check_reference) && nrow(trait_check_reference$active) > 1L) {
+      panel_path <- file.path(output_dir, "check_panels.png")
+      ng_plot_check_panels(candidate_crosses, trait_check_reference, output_path = panel_path)
+      files$check_panels_png <- normalizePath(panel_path, winslash = "/", mustWork = TRUE)
+      figures <- rbind(figures, data.frame(figure = "check_panels",
+                                           path = files$check_panels_png,
+                                           stringsAsFactors = FALSE))
+    }
   }
   if (isTRUE(write_outputs)) {
     workbook_path <- file.path(output_dir, if (is.null(output_file)) "crossing_plan.xlsx" else as.character(output_file[[1L]]))
@@ -1650,7 +1663,8 @@ ng_cp__stage_rank <- function(ctx) {
     write_figures = write_figures,
     n_crosses = n_crosses,
     include_trait_gebv = include_trait_gebv,
-    trait_check_reference = ctx$trait_check_reference
+    trait_check_reference = ctx$trait_check_reference,
+    multi_trait_meta = ctx$multi_trait_meta
   )
   ctx$selected <- selected
   ctx$scored_crosses <- scored_crosses
