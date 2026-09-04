@@ -556,7 +556,13 @@ ng_add_multitrait_score <- function(scores,
 
   z <- matrix(0, nrow = nrow(scores), ncol = nrow(traits))
   value_z <- matrix(0, nrow = nrow(scores), ncol = nrow(traits))
-  value_scales <- rep(1, nrow(traits))
+  value_scales <- stats::setNames(rep(1, nrow(traits)), traits$trait)
+  # Retained alongside value_scales so a check-reference value (which never appears as a row in
+  # `scores`, so it has no rank of its own) can be placed on this SAME affine axis after the
+  # fact: oriented <- sign * tau; z <- (oriented - center) / scale. See ng_check_line_value()
+  # (R/38_cross_priority_plots.R), which is the sole consumer of these three vectors.
+  value_centers <- stats::setNames(rep(0, nrow(traits)), traits$trait)
+  value_signs <- stats::setNames(rep(1, nrow(traits)), traits$trait)
   violation <- matrix(0, nrow = nrow(scores), ncol = nrow(traits))
   colnames(z) <- colnames(value_z) <- colnames(violation) <- traits$trait
   for (i in seq_len(nrow(traits))) {
@@ -570,9 +576,12 @@ ng_add_multitrait_score <- function(scores,
     }
     scale <- ng_multitrait_value_scale(x)
     value_scales[[i]] <- scale
+    sign_i <- if (identical(traits$direction[[i]], "maximize")) 1 else -1
+    value_signs[[i]] <- sign_i
     oriented <- if (identical(traits$direction[[i]], "maximize")) x else -x
     finite_oriented <- oriented[is.finite(oriented)]
     center <- if (length(finite_oriented)) stats::median(finite_oriented, na.rm = TRUE) else 0
+    value_centers[[i]] <- center
     value_z[, i] <- (oriented - center) / scale
     bad_value <- !is.finite(value_z[, i])
     if (any(bad_value)) {
@@ -655,7 +664,10 @@ ng_add_multitrait_score <- function(scores,
     effective_threshold_penalty = effective_penalty,
     cov_source_phenotypic = if (is.null(phenotypic_covariance)) NA_character_ else "user_supplied",
     cov_source_genetic = if (is.null(genetic_covariance)) NA_character_ else "user_supplied",
-    source = source
+    source = source,
+    value_centers = value_centers,
+    value_scales = value_scales,
+    value_signs = value_signs
   )
   if (!is.null(desired_gain)) {
     attr(scores, "multi_trait")$desired_gain_coefficients <- desired_gain$coefficients

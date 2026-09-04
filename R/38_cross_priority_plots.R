@@ -169,6 +169,19 @@ ng_plot_priority_score_vs_kinship <- function(scored,
 # function of the candidate distribution, and a check has no rank because it is not a cross --
 # there is no honest line, so we return NA and the caller says so rather than drawing a number
 # that looks authoritative and is not.
+#
+# THE AXIS IS NEVER RAW TRAIT UNITS. ng_score_breeder_objective() -> ng_add_multitrait_score()
+# (R/19_multi_trait_selection.R) z-normalises multi_trait_score for EVERY method, including a
+# single-trait run (one trait still goes through the same standardization loop). A check has no
+# row in that computation and therefore no z of its own, so the only honest way to place it on
+# this axis is to push its raw value through the SAME affine transform the candidates went
+# through: oriented <- sign * tau; z <- (oriented - center) / scale. ng_add_multitrait_score()
+# retains those per-trait parameters in multi_trait_meta$value_centers / $value_scales /
+# $value_signs (named by trait) for exactly this purpose. Without them (an older result, or a
+# multi_trait_meta the caller built by hand without these fields) there is no honest line, so we
+# return NA -- the same discipline already applied to the rank-based-index case, now applied to
+# every case, because drawing a raw-units number on a z-normalised axis is not "conservative
+# single-trait math", it is simply wrong (it was invisible off the plotted range in real runs).
 ng_check_line_value <- function(trait_check_reference, multi_trait_meta = NULL, trait = NULL) {
   spec <- as.data.frame(trait_check_reference$active, stringsAsFactors = FALSE)
   if (!nrow(spec)) return(NA_real_)
@@ -176,11 +189,31 @@ ng_check_line_value <- function(trait_check_reference, multi_trait_meta = NULL, 
     ck <- spec$check[[match(tr, spec$trait)]]
     suppressWarnings(as.numeric(trait_check_reference$values[[tr]][[ck]]))
   }
+  centers <- multi_trait_meta$value_centers
+  scales <- multi_trait_meta$value_scales
+  signs <- multi_trait_meta$value_signs
+  has_transform <- !is.null(centers) && !is.null(scales) && !is.null(signs)
+  # The check's raw value, mapped onto the SAME standardized axis the candidates were scored on.
+  z_of <- function(tr) {
+    tau <- val(tr)
+    if (!length(tau) || !is.finite(tau)) return(NA_real_)
+    if (!has_transform || !(tr %in% names(centers)) || !(tr %in% names(scales)) ||
+        !(tr %in% names(signs))) {
+      return(NA_real_)
+    }
+    sign_i <- suppressWarnings(as.numeric(signs[[tr]]))
+    center_i <- suppressWarnings(as.numeric(centers[[tr]]))
+    scale_i <- suppressWarnings(as.numeric(scales[[tr]]))
+    if (!is.finite(sign_i) || !is.finite(center_i) || !is.finite(scale_i) || scale_i <= 0) {
+      return(NA_real_)
+    }
+    oriented <- if (sign_i > 0) tau else -tau
+    (oriented - center_i) / scale_i
+  }
   if (!is.null(trait) || nrow(spec) == 1L) {
     tr <- if (is.null(trait)) spec$trait[[1L]] else trait
     if (!(tr %in% spec$trait)) return(NA_real_)
-    v <- val(tr)
-    return(if (length(v) && is.finite(v)) v else NA_real_)
+    return(z_of(tr))
   }
   method <- as.character(if (is.null(multi_trait_meta$method)) "" else multi_trait_meta$method)
   if (!(method %in% c("weighted", "economic_index", "desired_gain"))) return(NA_real_)
@@ -188,9 +221,21 @@ ng_check_line_value <- function(trait_check_reference, multi_trait_meta = NULL, 
   if (is.null(w) || !length(w)) return(NA_real_)
   tr <- intersect(spec$trait, names(w))
   if (!length(tr)) return(NA_real_)
-  v <- vapply(tr, val, numeric(1))
+  v <- vapply(tr, z_of, numeric(1))
   if (any(!is.finite(v))) return(NA_real_)
   sum(v * as.numeric(w[tr]))
+}
+
+# Label for the check reference line. `active$check[[1L]]` alone is only correct when every
+# active trait shares the same check genotype -- the common case, but not the only one a linear
+# index can legitimately combine. When the traits contributing to the line use DIFFERENT checks,
+# naming just the first would misrepresent the line as a single check's value rather than the
+# blend it actually is.
+ng_check_line_label <- function(active) {
+  active <- as.data.frame(active, stringsAsFactors = FALSE)
+  cks <- unique(as.character(active$check))
+  if (length(cks) <= 1L) return(if (length(cks)) cks[[1L]] else NA_character_)
+  paste0("blended (", paste(cks, collapse = " + "), ")")
 }
 
 # Per-trait check panels: one facet per trait that has a check, y = that trait's mid-parent

@@ -636,7 +636,7 @@ ng_run_cp_output_files <- function(output_dir,
       selected = selected_crosses,
       output_path = plot_path,
       check_line = if (is.finite(chk_line)) chk_line else NULL,
-      check_label = if (is.finite(chk_line)) trait_check_reference$active$check[[1L]] else NULL
+      check_label = if (is.finite(chk_line)) ng_check_line_label(trait_check_reference$active) else NULL
     )
     files$priority_score_vs_kinship_png <- normalizePath(plot_path, winslash = "/", mustWork = TRUE)
     figures <- data.frame(
