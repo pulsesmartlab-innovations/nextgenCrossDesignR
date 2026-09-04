@@ -616,7 +616,8 @@ ng_run_cp_output_files <- function(output_dir,
                                    write_outputs,
                                    write_figures,
                                    n_crosses,
-                                   include_trait_gebv = FALSE) {
+                                   include_trait_gebv = FALSE,
+                                   trait_check_reference = NULL) {
   files <- list()
   if (!isTRUE(write_outputs) && !isTRUE(write_figures)) return(files)
   if (is.null(output_dir) || !nzchar(as.character(output_dir[[1L]]))) {
@@ -650,7 +651,8 @@ ng_run_cp_output_files <- function(output_dir,
       duplicate_pairs = if (!is.null(qc$putative_duplicates)) qc$putative_duplicates$pairs else NULL,
       figures = figures,
       n_crosses_requested = n_crosses,
-      include_trait_gebv = isTRUE(include_trait_gebv)
+      include_trait_gebv = isTRUE(include_trait_gebv),
+      trait_check_reference = trait_check_reference
     )
   }
   files
@@ -1639,7 +1641,8 @@ ng_cp__stage_rank <- function(ctx) {
     write_outputs = write_outputs,
     write_figures = write_figures,
     n_crosses = n_crosses,
-    include_trait_gebv = include_trait_gebv
+    include_trait_gebv = include_trait_gebv,
+    trait_check_reference = trait_check_reference
   )
   ctx$selected <- selected
   ctx$scored_crosses <- scored_crosses
