@@ -178,9 +178,17 @@ Rendering:
 
 The check's value is per-trait; the scatter's y is an index. Validity depends on the index:
 
-- **Single-trait run** -- y is that trait's mean. Line = `check_value`. Exact.
-- **Multi-trait, linear index** (weighted, economic / Smith-Hazel) -- apply the same
-  coefficients to the check's per-trait values. Exact, one line.
+- **Single-trait run** -- the scatter's y is `multi_trait_score`, which is **z-normalised**
+  by `ng_score_breeder_objective()` even for one trait (`R/19_multi_trait_selection.R:576`:
+  `value_z <- (oriented - center) / scale`, with a robust per-trait `center`/`scale` taken
+  from the candidate distribution). The check must therefore be mapped through that same
+  affine transform before it is drawn -- plotting `check_value` in raw trait units puts the
+  line entirely off-axis. The transform is deterministic, so this places the check where it
+  genuinely falls; it is not an approximation. When the transform is unavailable, draw no
+  line (see the rank-based case).
+- **Multi-trait, linear index** (weighted, economic / Smith-Hazel) -- map each trait's check
+  through its own `center`/`scale`, then apply the index coefficients to the resulting z values.
+  Applying raw coefficients to raw trait values is wrong for the same reason as above.
 - **Multi-trait, rank-based** (`rank_threshold`, the `auto` default, `R/19:7`) -- the score is a
   function of the candidate distribution, not of trait values alone. A check has no rank
   because it is not a cross. **No line is drawn**, and the UI says so explicitly rather than
