@@ -49,6 +49,13 @@ with_ck <- do.call(ng_run_cross_prediction, c(args, list(
   check_geno = chk, check_progeny_size = 200L, check_records = chk_records,
   trait_checks = trait_checks)))
 
+# I4: the joint p_beat_all_checks caveat (Monte Carlo draw count/error, diagonal PEV
+# approximation, clipped to the marginal minimum) must actually reach the run's returned
+# trait_check_reference, not live only in an attribute nothing downstream reads.
+note <- with_ck$trait_check_reference$p_beat_all_checks_note
+stopifnot(is.character(note), length(note) == 1L, nzchar(note))
+stopifnot(is.null(without$trait_check_reference))
+
 # every column the run produced WITHOUT checks must be untouched BY checks
 a <- without$candidate_crosses
 b <- with_ck$candidate_crosses

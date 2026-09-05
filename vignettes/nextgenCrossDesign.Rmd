@@ -844,7 +844,11 @@ check's value is not evaluable on the run's source (a phenotypic source with no 
 silently treated as passing or filled from a GEBV fallback. Checks require trait-by-trait
 prediction (they are keyed by trait); one check per trait.
 With more than one active check, `p_beat_all_checks` reports the joint probability of a progeny
-beating every check at once.
+beating every check at once. Where posterior effect variance is available for a checked trait,
+this is a fixed-seed, 150-draw Monte Carlo estimate (error up to about 0.03) computed under a
+diagonal approximation to the cross-trait posterior effect covariance, and clipped to the
+row-wise minimum of the per-trait marginals — the same caveat is attached to a completed run as
+`trait_check_reference$p_beat_all_checks_note`.
 
 ## Cost, budget, and logistics
 

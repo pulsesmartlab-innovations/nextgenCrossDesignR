@@ -271,7 +271,14 @@ always means better), \code{<trait>_check_ok}, and
 \code{<trait>_p_beat_check} columns plus \code{checks_all_ok}, without
 changing \code{nrow(scores)} or its order. \code{ng_attach_joint_check_probability()}
 (built on \code{ng_check_tau_bounds()}) adds \code{p_beat_all_checks}, the
-probability a progeny beats every check at once. A completed run reports the
+probability a progeny beats every check at once. Where any checked trait's
+posterior effect variance (PEV) is available, this is a fixed, seeded
+150-draw Monte Carlo estimate (typical error up to about 0.03), computed
+under a diagonal (independent-across-traits) approximation to the
+cross-trait posterior effect covariance, and clipped to the row-wise
+minimum of the per-trait marginals -- see \code{trait_check_reference$
+p_beat_all_checks_note} on a completed run's return value for this same
+caveat attached to the specific run. A completed run reports the
 check in a \code{Checks} workbook sheet and, on the score-versus-kinship plot,
 as a reference line on whichever axis carries the mean; use
 \code{ng_plot_check_panels()} for per-trait small multiples in multi-trait

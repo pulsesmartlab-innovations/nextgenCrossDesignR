@@ -1382,7 +1382,12 @@ ng_cp__stage_index <- function(ctx) {
     trait_check_reference <- list(
       active = tc_spec, values = check_values, source = check_source,
       progeny_size = kp,
-      diagnostics = attr(cross_table, "check_reference_diagnostics"))
+      diagnostics = attr(cross_table, "check_reference_diagnostics"),
+      # I4: the joint p_beat_all_checks caveat (Monte Carlo draw count + error, diagonal PEV
+      # approximation, clipped to the marginal minimum -- see ng_attach_joint_check_probability(),
+      # R/51) previously lived only in that attribute, which nothing downstream ever read. NULL
+      # for a single-check run, where p_beat_all_checks does not exist.
+      p_beat_all_checks_note = attr(cross_table, "p_beat_all_checks_note"))
     attr(cross_table, "check_reference_diagnostics") <- NULL
   }
 
