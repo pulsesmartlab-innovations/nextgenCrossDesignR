@@ -316,6 +316,16 @@ ng_add_p_superior_progeny_multitrait <- function(scores, trait_specs,
   } else NULL
   out <- numeric(nrow(scores))
   for (i in seq_len(nrow(scores))) {
+    # D6: <trait>_mean is a mid-parent of phenotypes; a parent missing a phenotype for even one
+    # checked trait produces a non-finite mean for this row. The single-trait path
+    # (ng_attach_check_reference(), R/51) already guards this and returns NA per trait; without an
+    # equivalent guard here, ng_p_superior_progeny_multitrait() hard-errors on the very first
+    # non-finite mu (R/33:39-41) and aborts the whole run. NA_real_ for this row only, matching
+    # the per-trait behaviour, never a hard stop.
+    if (any(!is.finite(mean_mat[i, ]))) {
+      out[[i]] <- NA_real_
+      next
+    }
     Sigma_i <- if (!is.null(exact_sigma)) exact_sigma[[i]] else
       ng_build_cross_trait_covariance(per_trait_var = var_mat[i, ], G_hat = G_hat)
     out[[i]] <- ng_p_superior_progeny_multitrait(

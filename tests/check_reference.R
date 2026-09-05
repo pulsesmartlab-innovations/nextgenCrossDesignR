@@ -67,13 +67,20 @@ cat("task 1 ok\n")
 cat("task 2 ok\n")
 
 # --- Task 3: reference columns, no row loss ---------------------------------
+# yield_vpm / matur_vpm are set EQUAL to their _pmv_used siblings, i.e. PEV = PMV - VPM = 0 for
+# every row of this fixture. After the D1 fix, ng_p_superior_progeny_pev() collapses EXACTLY
+# (not approximately) to the historical closed form whenever PEV = 0, so every hand-computed
+# expectation below (1 - pnorm((tau-mu)/sd)^k) is unchanged. Task 11 below builds a fixture with a
+# genuine nonzero PEV to exercise the actual Gauss-Hermite integration.
 scores <- data.frame(
   parent1     = c("P1", "P1", "P2"),
   parent2     = c("P2", "P3", "P3"),
   yield_mean  = c(10, 4, 7),      # check at 6 -> above, below, above
-  yield_pmv_used = c(4, 4, 0),    # sd = 2, 2, 0
+  yield_vpm      = c(4, 4, 0),    # sd = 2, 2, 0
+  yield_pmv_used = c(4, 4, 0),    # PEV = 0 -> exact match to the pre-D1 closed form
   matur_mean  = c(70, 80, 75),    # check at 75, DECREASE -> below is good
-  matur_pmv_used = c(1, 1, 1),
+  matur_vpm      = c(1, 1, 1),
+  matur_pmv_used = c(1, 1, 1),    # PEV = 0
   stringsAsFactors = FALSE)
 
 spec <- ng_trait_check_spec(trait = c("yield", "matur"), check = c("CHK_A", "CHK_B"),
@@ -102,6 +109,11 @@ stopifnot(identical(out$matur_check_ok, c(TRUE, FALSE, TRUE)))   # row 3 is an e
 stopifnot(identical(out$checks_all_ok, c(TRUE, FALSE, TRUE)))
 stopifnot(identical(class(out$checks_all_ok), "logical"))
 
+# INTEGRATION: check_violation is a dimensionless COUNT (never trait-scale), NA-aware.
+# row1: yield ok, matur ok -> 0. row2: yield FAIL, matur FAIL -> 2. row3: both ok (tie) -> 0.
+stopifnot(identical(out$check_violation, c(0L, 2L, 0L)))
+stopifnot(is.integer(out$check_violation))
+
 # P(beat check), increase trait: 1 - pnorm((tau-mu)/sd)^k
 expect1 <- 1 - stats::pnorm((6 - 10) / 2)^50
 stopifnot(abs(out$yield_p_beat_check[[1L]] - expect1) < 1e-10)
@@ -127,12 +139,18 @@ stopifnot(all(is.na(out_na$yield_check_value)), all(is.na(out_na$yield_check_ok)
 # stops an unevaluated check from producing a false affirmative pass (the C2 bug: the previous
 # `!any(r %in% FALSE)` gave TRUE here because `NA %in% FALSE` is FALSE).
 stopifnot(identical(out_na$checks_all_ok, c(NA, FALSE, NA)))
+# check_violation: yield is NA (unevaluable) for every row of out_na, so it contributes 0 to the
+# count everywhere; matur is fully evaluable, so the count reduces to matur's own violations.
+stopifnot(identical(out_na$check_violation, c(0L, 1L, 0L)))
 
 d <- attr(out, "check_reference_diagnostics")
 stopifnot(is.list(d), d$n_wrong_side$yield == 1L, d$n_wrong_side$matur == 1L)
 # n_not_evaluable is PER TRAIT (mirroring n_wrong_side), not summed across traits: every check in
 # `out` was evaluable for every cross, so both are 0.
 stopifnot(is.list(d$n_not_evaluable), d$n_not_evaluable$yield == 0L, d$n_not_evaluable$matur == 0L)
+# n_pev_unavailable (D1): both traits carry a real _vpm column in this fixture and every row is
+# usable, so nothing fell back to "PEV unavailable" -- 0 for both.
+stopifnot(is.list(d$n_pev_unavailable), d$n_pev_unavailable$yield == 0L, d$n_pev_unavailable$matur == 0L)
 
 # out_na's yield check is NA for every cross (the check's own tau is NA) while matur is
 # evaluable for every cross: the per-trait counts must not be conflated into one aggregate.
@@ -177,6 +195,91 @@ stopifnot(all(j$p_beat_all_checks <= single$yield_p_beat_check + 1e-8))
 stopifnot(all(j$p_beat_all_checks <= single$matur_p_beat_check + 1e-8))
 
 cat("task 4 ok\n")
+
+# --- D3: p_beat_all_checks must be NA when not EVERY checked trait is evaluable -------------
+# One trait unevaluable (its check tau is NA): ng_check_tau_bounds() leaves that trait unbounded
+# on BOTH sides, so pmvnorm would otherwise integrate that trait's whole real line -- the joint
+# must refuse rather than silently report a number that covers less than "all checks".
+cv_na_one <- list(yield = c(CHK_A = NA_real_), matur = c(CHK_B = 75))
+j_na_one <- ng_attach_joint_check_probability(scores, spec, cv_na_one, k_progeny = 50L)
+stopifnot("p_beat_all_checks" %in% names(j_na_one), nrow(j_na_one) == 3L)
+stopifnot(all(is.na(j_na_one$p_beat_all_checks)))
+# NEITHER trait evaluable: this is the exact bug -- pmvnorm over the fully unbounded rectangle
+# returned 1.0 (a false affirmative "beats every check", the joint's analogue of the
+# checks_all_ok bug this feature already fixed once).
+cv_na_all <- list(yield = c(CHK_A = NA_real_), matur = c(CHK_B = NA_real_))
+j_na_all <- ng_attach_joint_check_probability(scores, spec, cv_na_all, k_progeny = 50L)
+stopifnot(all(is.na(j_na_all$p_beat_all_checks)))
+cat("task D3 ok (p_beat_all_checks is NA, never 1.0, when a check cannot be evaluated)\n")
+
+# --- D6: a non-finite mid-parent mean must NOT abort the joint -------------------------------
+# <trait>_mean is a mid-parent of phenotypes; a parent missing a phenotype produces NA there. The
+# per-trait path already returns NA for that row (D1/pre-existing); before the D6 fix the JOINT
+# hard-errored on the very first non-finite mu and killed the whole run.
+scores_na_mu <- scores
+scores_na_mu$yield_mean[[2L]] <- NA_real_
+j_na_mu <- ng_attach_joint_check_probability(scores_na_mu, spec, cv, k_progeny = 50L)
+stopifnot(is.na(j_na_mu$p_beat_all_checks[[2L]]))
+stopifnot(all(is.finite(j_na_mu$p_beat_all_checks[-2L])))
+cat("task D6 ok (a non-finite mid-parent mean yields NA for that row only, never an error)\n")
+
+# --- Task 11: D2 - joint vs marginal on the REAL runner path (exact cross_trait_cov), not just
+# the NULL-covariance diagonal fallback Task 4 exercises. Before the D2 fix, the marginals were
+# scaled by PMV (via var_suffix = "_pmv_used") while ng_multitrait_exact_sigma_list()'s diagonal
+# is ALWAYS a'Ra = VPM regardless -- two different variances describing the same row, and the
+# joint could exceed the marginal (the design doc's worked example: 0.974 > 0.921).
+set.seed(909)
+n11 <- 6L; m11 <- 30L; nchr11 <- 3L
+ids11 <- sprintf("Q%02d", seq_len(n11)); mk11 <- sprintf("M%03d", seq_len(m11))
+geno11 <- matrix(2L * rbinom(n11 * m11, 1, 0.5), n11, m11, dimnames = list(ids11, mk11))
+storage.mode(geno11) <- "double"
+map11 <- data.frame(marker = mk11, chr = rep(seq_len(nchr11), each = m11 / nchr11),
+                    pos_cm = rep(seq(0, 100, length.out = m11 / nchr11), nchr11),
+                    stringsAsFactors = FALSE)
+b_yield11 <- rnorm(m11); b_matur11 <- 0.4 * b_yield11 + rnorm(m11)
+betas11 <- cbind(yield = b_yield11, matur = b_matur11); rownames(betas11) <- mk11
+
+pairs11 <- as.data.frame(t(utils::combn(ids11, 2)), stringsAsFactors = FALSE)
+names(pairs11) <- c("parent1", "parent2")
+ctc11 <- ng_cross_trait_within_family_cov(geno11, betas11, map11, pairs = pairs11, target = "DH")
+
+gebv_yield11 <- as.numeric(geno11 %*% b_yield11); names(gebv_yield11) <- ids11
+gebv_matur11 <- as.numeric(geno11 %*% b_matur11); names(gebv_matur11) <- ids11
+p1_11 <- pairs11$parent1; p2_11 <- pairs11$parent2
+
+# PEV is GENUINELY nonzero here (unlike Task 3's PEV = 0 fixture), so the D1-corrected marginals
+# actually exercise Gauss-Hermite, not merely its PEV = 0 collapse.
+pev_yield11 <- 0.3 * ctc11$wf_var_yield + 0.05
+pev_matur11 <- 0.3 * ctc11$wf_var_matur + 0.05
+
+scores11 <- data.frame(
+  parent1 = p1_11, parent2 = p2_11,
+  yield_mean = 0.5 * (gebv_yield11[p1_11] + gebv_yield11[p2_11]),
+  yield_vpm = ctc11$wf_var_yield,
+  yield_pmv_used = ctc11$wf_var_yield + pev_yield11,
+  matur_mean = 0.5 * (gebv_matur11[p1_11] + gebv_matur11[p2_11]),
+  matur_vpm = ctc11$wf_var_matur,
+  matur_pmv_used = ctc11$wf_var_matur + pev_matur11,
+  stringsAsFactors = FALSE, row.names = NULL)
+
+spec11 <- ng_trait_check_spec(trait = c("yield", "matur"), check = c("CHK_A", "CHK_B"),
+                              trait_direction = c(yield = "increase", matur = "decrease"))
+# Percentile checks (not the median) and a modest k_progeny keep every probability well inside
+# (0, 1) -- near either boundary, mvtnorm::pmvnorm's own randomized quadrature error (its default
+# abseps is 1e-3) can make a strict "joint <= marginal + 1e-8" comparison noisy for reasons
+# that have nothing to do with the D2 fix being tested here.
+cv11 <- list(yield = c(CHK_A = unname(stats::quantile(scores11$yield_mean, 0.85))),
+            matur = c(CHK_B = unname(stats::quantile(scores11$matur_mean, 0.15))))
+
+single11 <- ng_attach_check_reference(scores11, spec11, NULL, cv11, k_progeny = 15L)
+joint11  <- ng_attach_joint_check_probability(scores11, spec11, cv11, k_progeny = 15L,
+                                              cross_trait_cov = ctc11)
+stopifnot(all(is.finite(joint11$p_beat_all_checks)))
+# THE INVARIANT: on the REAL runner path (exact cross_trait_cov supplied, same as
+# R/39_cross_prediction_runner.R:1368-1371), the joint can never exceed either marginal.
+stopifnot(all(joint11$p_beat_all_checks <= single11$yield_p_beat_check + 1e-3))
+stopifnot(all(joint11$p_beat_all_checks <= single11$matur_p_beat_check + 1e-3))
+cat("task 11 ok (D2: joint <= marginal on the real cross_trait_cov path)\n")
 
 # --- Task 5: the spec builder, moved and basis-free ------------------------
 td <- c(yield = "increase", maturity = "decrease")

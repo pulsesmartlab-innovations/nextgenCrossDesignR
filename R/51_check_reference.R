@@ -109,9 +109,24 @@ ng_check_reference_value <- function(source, check_geno_aligned, effects, check_
 # nrow(scores) and NEVER reorders it: a check informs the breeder, it does not decide for them.
 # (The 0.14.0 predecessor, ng_apply_trait_checks(), dropped rows -- that is the behaviour this
 # replaces.)
+#
+# D1 fix: `var_suffix` (default "_pmv_used") is PMV = VPM + posterior marker-effect uncertainty
+# (R/03_metrics.R), and that uncertainty component is SHARED across a family's k progeny (same
+# beta-hat scores every progeny), not an independent per-progeny draw. Raising PMV to the k-th
+# power -- the previous behaviour here -- is invalid and anti-conservative (see
+# ng_p_superior_progeny_pev(), R/30_posterior_prediction.R, for the derivation and the
+# closed-form-vs-truth numbers). `vpm_suffix` (default "_vpm") recovers the independent-across-
+# progeny variance; PEV per row is v - vpm. When `<key>_vpm` is entirely absent from `scores`,
+# vpm is aliased to v for every row of this trait, which makes PEV exactly 0 and reproduces the
+# historical closed form exactly (not an approximation) -- this keeps callers that never attached
+# a `_vpm` column (e.g. a hand-built `scores` fixture) working unchanged. Where `_vpm` IS present
+# but a given row's value is non-finite or negative, that row alone is left not-evaluable (its p
+# is NA, like any other not-evaluable row) rather than guessing a variance; counted in
+# `n_pev_unavailable`.
 ng_attach_check_reference <- function(scores, spec, trait_values = NULL, check_values,
                                       k_progeny,
-                                      mean_suffix = "_mean", var_suffix = "_pmv_used") {
+                                      mean_suffix = "_mean", var_suffix = "_pmv_used",
+                                      vpm_suffix = "_vpm") {
   scores <- as.data.frame(scores, stringsAsFactors = FALSE, check.names = FALSE)
   spec <- as.data.frame(spec, stringsAsFactors = FALSE)
   n <- nrow(scores)
@@ -119,6 +134,7 @@ ng_attach_check_reference <- function(scores, spec, trait_values = NULL, check_v
   ok_mat <- matrix(NA, nrow = n, ncol = nrow(spec), dimnames = list(NULL, spec$trait))
   n_not_evaluable <- list()
   n_wrong <- list()
+  n_pev_unavailable <- list()
   # The cross table names its per-trait columns with the SANITISED trait name
   # (ng_run_cp_clean_trait_name: make.names + dots to underscores), while the spec carries the
   # raw name the breeder typed. Look columns up by the key, report by the raw name.
@@ -128,10 +144,12 @@ ng_attach_check_reference <- function(scores, spec, trait_values = NULL, check_v
     # reject_if == "below" means the breeder wants the mid-parent ABOVE the check (increase
     # trait); sgn flips the comparison so that a positive margin always means "better".
     sgn <- if (identical(spec$reject_if[[k]], "below")) 1 else -1
-    mcol <- paste0(kk, mean_suffix); scol <- paste0(kk, var_suffix)
+    mcol <- paste0(kk, mean_suffix); scol <- paste0(kk, var_suffix); vcol <- paste0(kk, vpm_suffix)
     if (!(mcol %in% names(scores))) ng_stop("scores missing mean column for check trait: ", mcol)
     mu <- suppressWarnings(as.numeric(scores[[mcol]]))
     v <- if (scol %in% names(scores)) suppressWarnings(as.numeric(scores[[scol]])) else rep(NA_real_, n)
+    vpm_present <- vcol %in% names(scores)
+    vpm <- if (vpm_present) suppressWarnings(as.numeric(scores[[vcol]])) else v
     cv <- check_values[[tr]]
     tau <- suppressWarnings(as.numeric(if (!is.null(cv) && ck %in% names(cv)) cv[[ck]] else NA_real_))
     if (!length(tau)) tau <- NA_real_
@@ -142,12 +160,22 @@ ng_attach_check_reference <- function(scores, spec, trait_values = NULL, check_v
     scores[[paste0(kk, "_vs_check")]] <- margin
     scores[[paste0(kk, "_check_ok")]] <- ok
     p <- rep(NA_real_, n)
-    usable <- is.finite(mu) & is.finite(v) & v >= 0 & is.finite(tau)
+    # mu/tau evaluability is independent of the variance source; vpm_ok is the D1 requirement
+    # that the independent-across-progeny variance be recoverable at all (v itself, when the
+    # _vpm column is absent, per the fallback above).
+    core_ok <- is.finite(mu) & is.finite(tau)
+    vpm_ok <- is.finite(vpm) & vpm >= 0
+    usable <- core_ok & vpm_ok
+    pev_ok <- vpm_ok & is.finite(v) & (v >= vpm - 1e-8)
+    pev <- rep(0, n)
+    pev[usable] <- ifelse(pev_ok[usable], pmax(v[usable] - vpm[usable], 0), 0)
     if (any(usable)) {
       # sgn folds the decrease case into the same closed form: negating both mu and tau turns
-      # P(at least one of k progeny >= tau) into P(at least one <= tau).
-      p[usable] <- ng_p_superior_progeny(sgn * mu[usable], sqrt(v[usable]),
-                                         sgn * tau, k_progeny)
+      # P(at least one of k progeny >= tau) into P(at least one <= tau); delta ~ N(0, PEV) is
+      # symmetric about 0, so integrating it over the sgn-flipped axis answers the same mirrored
+      # question unmodified (see ng_p_superior_progeny_pev()'s docstring).
+      p[usable] <- ng_p_superior_progeny_pev(sgn * mu[usable], vpm[usable], pev[usable],
+                                             sgn * tau, k_progeny)
     }
     scores[[paste0(kk, "_p_beat_check")]] <- p
     ok_mat[, k] <- ok
@@ -159,6 +187,11 @@ ng_attach_check_reference <- function(scores, spec, trait_values = NULL, check_v
     # any single trait.
     n_not_evaluable[[tr]] <- sum(is.na(ok))
     n_wrong[[tr]] <- sum(ok %in% FALSE)
+    # Rows where mu/tau were otherwise fine (core_ok) but VPM could not be recovered as a valid
+    # non-negative number -- these rows are left NA in _p_beat_check rather than guessing a
+    # variance; distinct from n_not_evaluable, which is driven by the check/ok flag (mean/tau),
+    # not by the variance source.
+    n_pev_unavailable[[tr]] <- sum(core_ok & !vpm_ok)
   }
   # Three-valued logic via base R's own Kleene `all()`: FALSE wins outright (a real failure),
   # NA propagates when nothing resolves the row (all-NA, or a mix of NA and TRUE with no FALSE --
@@ -168,9 +201,23 @@ ng_attach_check_reference <- function(scores, spec, trait_values = NULL, check_v
   # -- the bug the previous `!any(r %in% FALSE)` had (NA %in% FALSE is FALSE, so a row of all-NA
   # silently reported checks_all_ok = TRUE).
   scores$checks_all_ok <- apply(ok_mat, 1L, all)
+  # INTEGRATION: a dimensionless per-cross violation COUNT (never a trait-unit quantity, which is
+  # exactly why it may combine across traits) -- how many active checks this cross falls on the
+  # wrong side of. NA-aware: an unevaluable check (NA in ok_mat) counts as neither pass nor fail,
+  # i.e. contributes 0 to the sum; a row where NOTHING was evaluable is NA (unknown), never a
+  # false-affirmative 0. Feeds ng_rank_cross_priority()'s optional check_weight component.
+  evaluated <- !is.na(ok_mat)
+  viol <- matrix(0, nrow(ok_mat), ncol(ok_mat))
+  viol[evaluated] <- as.numeric(ok_mat[evaluated] %in% FALSE)
+  any_evaluated <- rowSums(evaluated) > 0
+  check_violation <- rep(NA_real_, n)
+  if (any(any_evaluated)) {
+    check_violation[any_evaluated] <- rowSums(viol, na.rm = TRUE)[any_evaluated]
+  }
+  scores$check_violation <- as.integer(check_violation)
   attr(scores, "check_reference_diagnostics") <- list(
     active = spec, n_wrong_side = n_wrong,
-    n_not_evaluable = n_not_evaluable, n_candidates = n)
+    n_not_evaluable = n_not_evaluable, n_pev_unavailable = n_pev_unavailable, n_candidates = n)
   rownames(scores) <- NULL
   scores
 }
@@ -196,23 +243,57 @@ ng_check_tau_bounds <- function(spec, check_values) {
 
 # P(a progeny beats EVERY check at once). Thin wrapper over the existing multi-trait threshold
 # machinery: the check values ARE the tau bounds, so no new probability model is introduced.
+#
+# D2 fix: `var_suffix` now defaults to "_vpm", not "_pmv_used". PMV mixes in the SHARED posterior
+# marker-effect uncertainty that ng_p_superior_progeny_pev() (R/30_posterior_prediction.R, D1)
+# integrates out of the per-trait marginals; using it as the joint's diagonal made the joint
+# incommensurable with the (corrected) marginals -- empirically able to EXCEED them, which is
+# impossible for a true joint-vs-marginal pair. VPM is the SAME diagonal
+# ng_cross_trait_within_family_cov() (the exact within-family cross-trait covariance, a'Ra)
+# already puts on the diagonal when `cross_trait_cov` is supplied, so both the exact-covariance
+# branch and this fallback (population G_hat / independence) branch of
+# ng_add_p_superior_progeny_multitrait() now agree with each other AND with the marginals'
+# variance. What the joint does NOT do (integrating the multivariate case over posterior effect
+# uncertainty is not attempted here) is documented, not silently different: the joint is
+# CONDITIONAL on the point-estimated marker effects (delta = 0), while the D1-corrected marginals
+# integrate delta ~ N(0, PEV). This is recorded in the returned attribute so a caller inspecting
+# the result is told, not left to infer it.
+#
+# D3 fix: ng_check_tau_bounds() leaves an unevaluable trait's tau_lower/tau_upper at (-Inf, Inf)
+# -- unbounded, not excluded. With NOTHING evaluable, pmvnorm over the whole space returns 1, the
+# same false affirmative checks_all_ok was fixed to avoid. p_beat_all_checks promises the progeny
+# beats EVERY active check; when even one active check cannot be evaluated that promise cannot be
+# honestly reported under this name, so the column is NA_real_ rather than silently covering only
+# the evaluable subset.
 ng_attach_joint_check_probability <- function(scores, spec, check_values, k_progeny,
-                                              mean_suffix = "_mean", var_suffix = "_pmv_used",
+                                              mean_suffix = "_mean", var_suffix = "_vpm",
                                               cross_trait_cov = NULL) {
   spec <- as.data.frame(spec, stringsAsFactors = FALSE)
   b <- ng_check_tau_bounds(spec, check_values)
+  evaluable_trait <- is.finite(as.numeric(b$tau_lower[spec$trait])) |
+    is.finite(as.numeric(b$tau_upper[spec$trait]))
+  if (!length(evaluable_trait) || !all(evaluable_trait)) {
+    scores <- as.data.frame(scores, stringsAsFactors = FALSE, check.names = FALSE)
+    scores$p_beat_all_checks <- NA_real_
+    return(scores)
+  }
   key <- if ("column_key" %in% names(spec)) as.character(spec$column_key) else as.character(spec$trait)
   trait_specs <- data.frame(
     trait = spec$trait,
     mean_col = paste0(key, mean_suffix),
     var_col = paste0(key, var_suffix),
     stringsAsFactors = FALSE)
-  ng_add_p_superior_progeny_multitrait(
+  out <- ng_add_p_superior_progeny_multitrait(
     scores, trait_specs,
     tau_lower = as.numeric(b$tau_lower[spec$trait]),
     tau_upper = as.numeric(b$tau_upper[spec$trait]),
     k_progeny = k_progeny, cross_trait_cov = cross_trait_cov,
     out_col = "p_beat_all_checks")
+  attr(out, "p_beat_all_checks_note") <- paste(
+    "p_beat_all_checks is conditional on the point-estimated marker effects (VPM diagonal);",
+    "unlike <trait>_p_beat_check (D1), it does not integrate posterior marker-effect",
+    "uncertainty (PEV) because that integral is not tractable in the multivariate case.")
+  out
 }
 
 # Convert a check phenotype table -- the same shape as the phenotype file a breeder already
