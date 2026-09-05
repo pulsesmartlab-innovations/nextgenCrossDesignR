@@ -366,7 +366,9 @@ ng_plot_check_panels <- function(scored, trait_check_reference, output_path = NU
   spec <- as.data.frame(trait_check_reference$active, stringsAsFactors = FALSE)
   key <- if ("column_key" %in% names(spec)) as.character(spec$column_key) else as.character(spec$trait)
   keep <- paste0(key, "_mean") %in% names(scored)
-  traits <- spec$trait[keep]; key <- key[keep]
+  # traits, key AND checks must all be filtered by `keep` together -- indexing the
+  # unfiltered spec inside the loop mislabels every panel after a dropped trait.
+  traits <- spec$trait[keep]; key <- key[keep]; checks <- as.character(spec$check)[keep]
   if (!length(traits)) return(invisible(NULL))
   owns_device <- !is.null(output_path)
   dev_no <- NULL
@@ -390,7 +392,7 @@ ng_plot_check_panels <- function(scored, trait_check_reference, output_path = NU
                    xlab = "Pair kinship", ylab = paste(tr, "mid-parent"), main = tr)
     tau <- suppressWarnings(as.numeric(scored[[paste0(kk, "_check_value")]][[1L]]))
     ng_plot_check_reference_line(if (length(tau)) tau[[1L]] else NA_real_,
-                                 label = spec$check[[i]], mean_axis = "y")
+                                 label = checks[[i]], mean_axis = "y")
   }
   if (isTRUE(owns_device)) {
     ng_plot_close_device(dev_no)

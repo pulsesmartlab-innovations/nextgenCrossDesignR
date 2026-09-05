@@ -314,3 +314,36 @@ frac_ok <- mean(rp_res$candidate_crosses$yield_check_ok)
 stopifnot(identical(rp_cl > 0, frac_ok < 0.5))
 
 cat("check plot ok\n")
+
+# --- panel labels stay aligned when a checked trait is dropped ---------------
+# ng_plot_check_panels() filters traits to those whose <key>_mean column exists in `scored`.
+# traits, key and the check ids must be filtered together: indexing the UNFILTERED spec inside
+# the loop mislabels every panel after a dropped trait. Unreachable through the runner (the
+# attach step errors first on a missing mean column) but ng_plot_check_panels is exported, so a
+# direct caller with a partial `scored` hits it.
+spec_drop <- data.frame(trait = c("yield", "protein", "disease"),
+                        check = c("CHK_Y", "CHK_P", "CHK_D"),
+                        reject_if = "below",
+                        column_key = c("yield", "protein", "disease"),
+                        stringsAsFactors = FALSE)
+scored_drop <- data.frame(
+  pair_kinship = c(0.1, 0.2),
+  yield_mean = c(9, 4), yield_check_value = 6, yield_check_ok = c(TRUE, FALSE),
+  disease_mean = c(3, 5), disease_check_value = 4, disease_check_ok = c(TRUE, FALSE),
+  stringsAsFactors = FALSE)                       # protein_mean deliberately absent
+
+drop_seen <- character(0)
+drop_env <- environment(ng_plot_check_panels)
+drop_orig <- get("ng_plot_check_reference_line", envir = drop_env)
+assign("ng_plot_check_reference_line",
+       function(value, label = NULL, mean_axis = NULL, ...) {
+         drop_seen <<- c(drop_seen, if (is.null(label)) NA_character_ else label)
+         invisible(NULL)
+       }, envir = drop_env)
+ng_plot_check_panels(scored_drop, list(active = spec_drop),
+                     output_path = file.path(tempdir(), "chk-drop.png"))
+assign("ng_plot_check_reference_line", drop_orig, envir = drop_env)
+# the middle trait is dropped, so the surviving panels must be labelled with THEIR OWN checks
+stopifnot(identical(drop_seen, c("CHK_Y", "CHK_D")))
+
+cat("check panel labels stay aligned across dropped traits\n")
