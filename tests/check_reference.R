@@ -188,3 +188,29 @@ err_b <- tryCatch(ng_trait_check_spec("yield", "CkY", basis = "phenotype",
 stopifnot(is.character(err_b), grepl("unused argument", err_b))
 
 cat("task 5 ok\n")
+
+# --- Task 10: check_pheno -> check_records ----------------------------------
+cp <- data.frame(NAME = c("CHK_A", "CHK_B"),
+                 yield = c(11.0, 9.5), matur = c(74, 71),
+                 stringsAsFactors = FALSE)
+rec <- ng_check_records_from_pheno(cp, id_col = "NAME",
+                                   trait_columns = c(yield = "yield", matur = "matur"),
+                                   source = "adjusted_pheno")
+stopifnot(is.list(rec), setequal(names(rec), c("yield", "matur")))
+stopifnot(names(rec$yield) == "adjusted_pheno")
+stopifnot(abs(rec$yield$adjusted_pheno[["CHK_A"]] - 11.0) < 1e-8)
+stopifnot(abs(rec$matur$adjusted_pheno[["CHK_B"]] - 71) < 1e-8)
+
+# the source key follows the RUN, not the input's name
+rec_blue <- ng_check_records_from_pheno(cp, "NAME", c(yield = "yield"), source = "BLUE")
+stopifnot(names(rec_blue$yield) == "BLUE")
+
+# a trait column absent from check_pheno yields NA, never a silent drop
+rec_miss <- ng_check_records_from_pheno(cp, "NAME", c(protein = "protein"),
+                                        source = "adjusted_pheno")
+stopifnot(all(is.na(rec_miss$protein$adjusted_pheno)))
+
+# a GEBV source consults markers, so check_pheno is not used: converter returns NULL
+stopifnot(is.null(ng_check_records_from_pheno(cp, "NAME", c(yield = "yield"), source = "GEBV")))
+
+cat("task 10 ok\n")

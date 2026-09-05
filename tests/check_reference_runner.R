@@ -84,3 +84,27 @@ stopifnot(is.character(err4), grepl("check_progeny_size", err4))
 stopifnot(identical(ref$progeny_size, 200L))
 
 cat("runner wiring ok\n")
+
+# --- Task 10: check_pheno -> real check values on a phenotype-source run ----
+# check_pheno makes the check values REAL rather than NA on a phenotype-source run.
+# check_pheno's id column must be the run's own id_col ("id" in `args`, above) --
+# it is read the same way the phenotype table itself is, not by a separate id keyword.
+cp <- data.frame(id = c("CHK_A", "CHK_B"), yield = c(12.5, 8.0), stringsAsFactors = FALSE)
+res_cp <- do.call(ng_run_cross_prediction, c(args, list(
+  check_geno = chk, check_progeny_size = 200L, check_pheno = cp,
+  trait_checks = data.frame(trait = "yield", check = "CHK_A", stringsAsFactors = FALSE))))
+stopifnot(identical(res_cp$trait_check_reference$source[["yield"]], "adjusted_pheno"))
+stopifnot(abs(res_cp$trait_check_reference$values$yield[["CHK_A"]] - 12.5) < 1e-8)
+ct_cp <- res_cp$candidate_crosses
+stopifnot(all(is.finite(ct_cp$yield_check_value)))
+stopifnot(any(is.finite(ct_cp$yield_p_beat_check)))
+
+# precedence: an explicit check_records value WINS over check_pheno for the same trait, even
+# when both are supplied for it
+res_prec <- do.call(ng_run_cross_prediction, c(args, list(
+  check_geno = chk, check_progeny_size = 200L, check_pheno = cp,
+  check_records = list(yield = list(adjusted_pheno = c(CHK_A = 99))),
+  trait_checks = data.frame(trait = "yield", check = "CHK_A", stringsAsFactors = FALSE))))
+stopifnot(abs(res_prec$trait_check_reference$values$yield[["CHK_A"]] - 99) < 1e-8)
+
+cat("task 10 runner ok\n")

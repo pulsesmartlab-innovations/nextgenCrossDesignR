@@ -178,3 +178,29 @@ ng_attach_joint_check_probability <- function(scores, spec, check_values, k_prog
     k_progeny = k_progeny, cross_trait_cov = cross_trait_cov,
     out_col = "p_beat_all_checks")
 }
+
+# Convert a check phenotype table -- the same shape as the phenotype file a breeder already
+# supplies -- into the check_records structure ng_check_reference_value() consumes. The SOURCE
+# KEY is the run's own resolved mean source, not anything named in the input: the check is
+# apples-to-apples with the parents' mean by construction. Returns NULL when the run resolved to
+# a GEBV source, because the value is then predicted from the check's markers instead.
+ng_check_records_from_pheno <- function(check_pheno, id_col, trait_columns, source) {
+  source <- as.character(source)[[1L]]
+  if (startsWith(source, "GEBV")) return(NULL)
+  check_pheno <- as.data.frame(check_pheno, stringsAsFactors = FALSE, check.names = FALSE)
+  if (!(id_col %in% names(check_pheno))) {
+    ng_stop("check_pheno is missing its id column: ", id_col)
+  }
+  ids <- as.character(check_pheno[[id_col]])
+  out <- list()
+  for (tr in names(trait_columns)) {
+    col <- trait_columns[[tr]]
+    v <- if (col %in% names(check_pheno)) {
+      suppressWarnings(as.numeric(check_pheno[[col]]))
+    } else {
+      rep(NA_real_, length(ids))
+    }
+    out[[tr]] <- stats::setNames(list(stats::setNames(v, ids)), source)
+  }
+  out
+}

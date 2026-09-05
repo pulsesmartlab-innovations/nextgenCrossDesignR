@@ -1169,6 +1169,11 @@ ng_cp__stage_index <- function(ctx) {
   # in that case. Read it explicitly via `ctx$` (returns NULL for an absent key) so the multi-trait
   # check-reference path below never hits "object 'ctc' not found".
   ctc <- ctx$ctc
+  # check_pheno is NULL on almost every run and is never reassigned on ctx by any earlier
+  # stage, so list2env() above already binds it correctly -- but it is read via `ctx$` anyway,
+  # the same defensive pattern as `ctc` just above, since this is exactly the shape of field
+  # ("usually NULL") that has silently gone unbound here before.
+  check_pheno <- ctx$check_pheno
   # Per-cross COST / LOGISTICS: candidate crosses are generated internally, so a breeder who
   # wants cost/budget/logistic-aware allocation supplies cross_cost -- a data frame with
   # parent1/parent2 + one numeric column per factor (e.g. cost, distance). Joined onto the
@@ -1277,8 +1282,19 @@ ng_cp__stage_index <- function(ctx) {
       # would sit on a different scale from the axis it is drawn on.
       src <- as.character(trait_mean_source[[tr]])
       check_source[[tr]] <- src
+      # Explicit check_records wins where both are supplied: check_pheno only fills in the
+      # per-trait records the caller did NOT already give via check_records. A GEBV source is
+      # never filled from check_pheno -- ng_check_records_from_pheno() itself returns NULL for
+      # a GEBV source, since the value must then come from the check's own markers.
+      recs <- check_records[[tr]]
+      if (is.null(recs) && !is.null(check_pheno)) {
+        col <- trait_spec$column[match(tr, trait_spec$trait)]
+        conv <- ng_check_records_from_pheno(check_pheno, id_col,
+                                            stats::setNames(list(col), tr), src)
+        recs <- if (is.null(conv)) NULL else conv[[tr]]
+      }
       check_values[[tr]] <- ng_check_reference_value(src, check_geno, effects_list[[tr]],
-                                                     check_records = check_records[[tr]])
+                                                     check_records = recs)
     }
     cross_table <- ng_attach_check_reference(cross_table, tc_spec, trait_values = NULL,
                                              check_values = check_values,
@@ -1686,7 +1702,7 @@ utils::globalVariables(c(
   "alphamate_lambda_group", "alphamate_max_contributions", "alphamate_mode", "alphamate_n_threads",
   "alphamate_number_of_parents", "alphamate_runtime_path", "alphamate_target_degree", "alphamate_workdir",
   "assume_inbred", "parent_type", "phased_haplotypes", "bp_per_cm", "budget", "burn_in",
-  "check_geno", "check_progeny_size", "check_records",
+  "check_geno", "check_pheno", "check_progeny_size", "check_records",
   "committed_crosses", "constraint_diagnostics", "cost_col",
   "cross_cost", "cross_table", "ctc", "direction_column_col", "direction_columns",
   "direction_direction_col", "direction_file", "direction_trait_col", "diversity_emphasis",
@@ -1910,6 +1926,7 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
                                     trait_checks = NULL,
                                     check_geno = NULL,
                                     check_records = NULL,
+                                    check_pheno = NULL,
                                     check_progeny_size = NULL,
                                     include_trait_gebv = FALSE,
                                     marker_target_spec = NULL,

@@ -148,7 +148,9 @@
         {"name": "lethal_spec", "type": "object", "default": null, "desc": "Deleterious recessive locus (ng_lethal_recessive_spec)"},
         {"name": "drop_lethal_carrier_crosses", "type": "boolean", "default": true},
         {"name": "check_progeny_size", "type": "integer", "required": false,
-         "desc": "Progeny per family you will raise. Required with trait_checks; sets P(beat check). No default -- it must be your program's figure."}
+         "desc": "Progeny per family you will raise. Required with trait_checks; sets P(beat check). No default -- it must be your program's figure."},
+        {"name": "check_pheno", "type": "object", "default": null,
+         "desc": "Check phenotype table (rows keyed by id_col, one column per trait) supplying check values on the phenotypic route -- the same shape as the phenotype table itself. Ignored when a trait's resolved mean source is a GEBV variant (the check value then comes from check_geno instead). check_records, if also supplied, wins per trait."}
       ]
     },
     {
