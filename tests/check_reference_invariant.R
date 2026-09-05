@@ -101,3 +101,76 @@ stopifnot(all(is_allowed))
 cat(sprintf(
   "invariant ok: %d candidate_crosses columns + %d selected_crosses columns + plan_summary identical, checks add columns and change nothing else\n",
   n_compared, n_selected_compared))
+
+# --- I1: the SAME invariant at >= 3 checked traits, where mvtnorm::pmvnorm() (used by the joint
+# p_beat_all_checks path, R/33/R/51) switches from a deterministic closed form (2 traits) to the
+# randomised GenzBretz lattice rule -- which both draws from and advances the ambient
+# .Random.seed. Left unguarded, a with-checks run's check-probability computation shifts the
+# global RNG stream before optimizer = "evolution" (the capability registry's recommended
+# option, R/25) runs with its default evol_seed = NULL (R/40_evolutionary_optimizer.R), i.e. off
+# whatever the ambient stream happens to be -- so a with-checks run and a without-checks run can
+# select DIFFERENT crossing plans even though checks are supposed to be a reference only. The
+# 2-trait case above cannot see this bug (pmvnorm is deterministic at 2 dimensions), which is
+# exactly why this second, 3-trait scenario exists. A large-enough, genuinely combinatorial
+# allocation problem (20 parents, 15 crosses, max_crosses_per_parent constraint) is needed for
+# the evolutionary optimizer's outcome to be sensitive to the ambient RNG stream at all -- a
+# tiny problem's memetic warm-start + elitism converges to the same optimum regardless.
+set.seed(303)
+n_p3 <- 20L; n_m3 <- 50L
+ids3 <- paste0("Q", seq_len(n_p3))
+markers3 <- paste0("m", seq_len(n_m3))
+gm3 <- matrix(2L * rbinom(n_p3 * n_m3, 1, 0.35), nrow = n_p3, dimnames = list(ids3, markers3))
+genotype3 <- data.frame(id = ids3, gm3, check.names = FALSE, stringsAsFactors = FALSE)
+marker_map3 <- data.frame(marker = markers3, chr = rep(1:4, length.out = n_m3),
+                          bp = rep(seq(0, 100, length.out = ceiling(n_m3 / 4)), 4)[seq_len(n_m3)] * 1e6,
+                          stringsAsFactors = FALSE)
+pheno3 <- data.frame(id = ids3, yield = rnorm(n_p3, 10, 2), protein = rnorm(n_p3, 12, 1),
+                     oil = rnorm(n_p3, 5, 0.5), stringsAsFactors = FALSE)
+direction3 <- data.frame(trait = c("yield", "protein", "oil"),
+                         column = c("yield", "protein", "oil"),
+                         direction = c("increase", "increase", "increase"),
+                         stringsAsFactors = FALSE)
+chk3 <- matrix(2L * rbinom(2 * n_m3, 1, 0.35), nrow = 2,
+              dimnames = list(c("CHK_A", "CHK_B"), markers3))
+chk_records3 <- list(
+  yield = list(adjusted_pheno = c(CHK_A = 11.0, CHK_B = 9.5)),
+  protein = list(adjusted_pheno = c(CHK_A = 12.5, CHK_B = 11.8)),
+  oil = list(adjusted_pheno = c(CHK_A = 5.2, CHK_B = 4.8))
+)
+trait_checks3 <- data.frame(trait = c("yield", "protein", "oil"),
+                            check = c("CHK_A", "CHK_B", "CHK_A"),
+                            stringsAsFactors = FALSE)
+
+args3 <- list(genotype = genotype3, phenotype = pheno3, marker_map = marker_map3,
+             map_marker_col = "marker", map_chr_col = "chr", map_pos_col = "bp",
+             bp_per_cm = 1e6, id_col = "id",
+             trait_direction = direction3, n_crosses = 15L,
+             max_crosses_per_parent = 3L,
+             write_outputs = FALSE, write_figures = FALSE, seed = 5L,
+             optimizer = "evolution", evol_solutions = 30L, evol_iterations = 40L,
+             evol_stop = 10L)   # evol_seed left at its default NULL -- the failure scenario
+
+without3 <- do.call(ng_run_cross_prediction, args3)
+with_ck3 <- do.call(ng_run_cross_prediction, c(args3, list(
+  check_geno = chk3, check_progeny_size = 200L, check_records = chk_records3,
+  trait_checks = trait_checks3)))
+
+sa3 <- without3$selected_crosses
+sb3 <- with_ck3$selected_crosses
+stopifnot(nrow(sa3) == nrow(sb3))
+key_a3 <- paste(sa3$parent1, sa3$parent2)
+key_b3 <- paste(sb3$parent1, sb3$parent2)
+# the SAME set of crosses, in the SAME order -- checks must not perturb which plan the
+# evolutionary optimizer converges to, even at >= 3 checked traits.
+stopifnot(identical(key_a3, key_b3))
+common3 <- intersect(names(sa3), names(sb3))
+n3_compared <- 0L
+for (nm in common3) {
+  stopifnot(isTRUE(all.equal(sa3[[nm]], sb3[[nm]], tolerance = 0)))
+  n3_compared <- n3_compared + 1L
+}
+stopifnot(isTRUE(all.equal(without3$plan_summary, with_ck3$plan_summary, tolerance = 0)))
+
+cat(sprintf(
+  "I1 3-trait invariant ok: %d shared selected_crosses columns identical under optimizer = 'evolution' with evol_seed = NULL, at 3 checked traits (pmvnorm dimension >= 3)\n",
+  n3_compared))

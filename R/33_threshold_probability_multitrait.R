@@ -113,13 +113,23 @@ ng_p_superior_progeny_multitrait <- function(mu, Sigma_c, tau_lower, tau_upper,
 #
 # Multivariate Gauss-Hermite is impractical beyond a couple of traits (tensor-product nodes scale
 # as n_nodes^t_n), so this integrates by MONTE CARLO instead, with a FIXED, SEEDED number of
-# draws so the result is reproducible run to run (never a function of the ambient RNG state):
-# ng_fixed_seed_normal_matrix() saves/restores .Random.seed around a single seeded draw, so this
-# never perturbs any caller's random stream -- required so a with-checks run stays numerically
-# identical elsewhere to a without-checks run (tests/check_reference_invariant.R). The same
-# n_draws x t_n standard-normal matrix `z` is reused across every row of a call (common random
-# numbers), scaled per row by that row's own sqrt(pev); this is both cheap (one seeded draw per
-# call, not per row) and keeps cross-row comparisons free of independent MC noise.
+# draws so the result is reproducible run to run: ng_fixed_seed_normal_matrix() saves/restores
+# .Random.seed around a single seeded draw for the delta vector `z` itself. That alone is NOT
+# sufficient: ng_p_superior_progeny_multitrait() below calls mvtnorm::pmvnorm(), which at
+# dimension >= 2 traits is a deterministic closed form but at dimension >= 3 switches to the
+# randomised GenzBretz lattice rule -- it both draws from AND advances the ambient .Random.seed,
+# once per pmvnorm() call (so up to n_draws times per row here). Left unguarded, that would make
+# this function (a) a function of whatever the ambient RNG state happens to be when it is called,
+# so its own result is not reproducible run to run at >= 3 traits, and (b) a consumer of the
+# caller's random stream, breaking a with-checks run's numerical identity to a without-checks run
+# on everything downstream that also draws from the ambient stream (tests/check_reference_invariant.R's
+# 3-trait case; see I1 in the fix report). ng_add_p_superior_progeny_multitrait() (below) closes
+# both gaps by wrapping its ENTIRE body -- not just the `z` draw -- in ng_with_rng_seed(mc_seed, ...),
+# so every pmvnorm() call in a given invocation draws from the same fixed, seeded stream and the
+# caller's ambient .Random.seed is restored on exit. The same n_draws x t_n standard-normal matrix
+# `z` is reused across every row of a call (common random numbers), scaled per row by that row's
+# own sqrt(pev); this is both cheap (one seeded draw per call, not per row) and keeps cross-row
+# comparisons free of independent MC noise.
 #
 # EXACT collapse: wherever pev is non-positive/non-finite for every trait, every draw's delta is
 # exactly 0 (scaling standard normal by sd = 0 gives exactly 0, not approximately), so this
@@ -393,6 +403,19 @@ ng_add_p_superior_progeny_multitrait <- function(scores, trait_specs,
                                                   n_mc_draws = NG_JOINT_PEV_MC_DRAWS,
                                                   mc_seed = NG_JOINT_PEV_MC_SEED,
                                                   out_col = "p_superior_progeny_mt") {
+  # I1 fix: at dimension >= 3, mvtnorm::pmvnorm() (called by every ng_p_superior_progeny_multitrait()
+  # invocation below, directly or per-draw via ng_p_superior_progeny_multitrait_pev()) switches to
+  # the randomised GenzBretz lattice rule, which both DRAWS FROM and ADVANCES .Random.seed -- unlike
+  # the dimension-2 case (bivariate normal CDF), which is a deterministic closed form. Wrapping the
+  # whole body in ng_with_rng_seed(mc_seed, ...) (R/00_utils.R) makes every pmvnorm call in this
+  # function draw from the SAME fixed, seeded stream every time (reproducible run to run) and
+  # restores the caller's ambient .Random.seed on exit (never perturbs it) -- the same guarantee
+  # ng_fixed_seed_normal_matrix() already gives its own single seeded draw, now extended to cover
+  # pmvnorm's internal randomness too. This is what keeps a with-checks run's non-check columns
+  # (including anything downstream that consumes the ambient RNG, e.g. optimizer = "evolution" with
+  # evol_seed = NULL) numerically identical to a without-checks run -- see
+  # tests/check_reference_invariant.R's 3-trait case.
+  ng_with_rng_seed(mc_seed, {
   scores <- as.data.frame(scores, stringsAsFactors = FALSE)
   trait_specs <- as.data.frame(trait_specs, stringsAsFactors = FALSE)
   required <- c("trait", "mean_col", "var_col")
@@ -467,4 +490,5 @@ ng_add_p_superior_progeny_multitrait <- function(scores, trait_specs,
     out_col = out_col
   )
   scores
+  })
 }
