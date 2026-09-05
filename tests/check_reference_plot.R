@@ -49,6 +49,11 @@ stopifnot(is.na(ng_check_rank_axis_z(c(1, NA), bigger_is_better = TRUE, tau_raw 
 stopifnot(is.na(ng_check_rank_axis_z(cand_x, bigger_is_better = TRUE, tau_raw = NA_real_)))
 
 # --- ng_check_line_value(): LINEAR families (economic_index / desired_gain) ---
+# value_z's center/scale are computed from `_value` (mean +/- i*sigma under the default
+# trait_value_metric = "usefulness"), which is NOT an affine function of the mean in general, so
+# remapping the check's (mean-scale) tau through value_z is only exact when trait_value_metric ==
+# "mean". Every call below therefore passes trait_value_metric = "mean" explicitly to exercise
+# the linear-family math; the refusal-otherwise behaviour has its own tests further down.
 ref <- list(active = data.frame(trait = "yield", check = "CHK_A", reject_if = "below",
                                 stringsAsFactors = FALSE),
             values = list(yield = c(CHK_A = 6)), source = c(yield = "GEBV"))
@@ -56,7 +61,8 @@ meta_econ_single <- list(family = "economic_index",
                         economic_index_coefficients = c(yield = 1),
                         value_centers = c(yield = 5), value_scales = c(yield = 2),
                         value_signs = c(yield = 1))
-stopifnot(abs(ng_check_line_value(ref, meta_econ_single, trait = "yield") - 0.5) < 1e-8)
+stopifnot(abs(ng_check_line_value(ref, meta_econ_single, trait = "yield",
+                                  trait_value_metric = "mean") - 0.5) < 1e-8)
 
 ref2 <- list(active = data.frame(trait = c("yield", "protein"), check = c("CHK_A", "CHK_A"),
                                  reject_if = "below", stringsAsFactors = FALSE),
@@ -70,30 +76,67 @@ meta_econ_multi <- list(family = "economic_index",
                         value_centers = c(yield = 0, protein = 0),
                         value_scales = c(yield = 1, protein = 1),
                         value_signs = c(yield = 1, protein = 1))
-stopifnot(abs(ng_check_line_value(ref2, meta_econ_multi) - (6 * 0.7 + 10 * 0.3)) < 1e-8)
+stopifnot(abs(ng_check_line_value(ref2, meta_econ_multi, trait_value_metric = "mean") -
+             (6 * 0.7 + 10 * 0.3)) < 1e-8)
 
 meta_desired <- list(family = "desired_gain",
                      desired_gain_coefficients = c(yield = 0.4, protein = 0.6),
                      value_centers = c(yield = 0, protein = 0),
                      value_scales = c(yield = 1, protein = 1),
                      value_signs = c(yield = 1, protein = 1))
-stopifnot(abs(ng_check_line_value(ref2, meta_desired) - (6 * 0.4 + 10 * 0.6)) < 1e-8)
+stopifnot(abs(ng_check_line_value(ref2, meta_desired, trait_value_metric = "mean") -
+             (6 * 0.4 + 10 * 0.6)) < 1e-8)
 
 # Linear family but the solved coefficients are missing from the metadata -> NA.
 meta_econ_no_coef <- list(family = "economic_index",
                           value_centers = c(yield = 0), value_scales = c(yield = 1),
                           value_signs = c(yield = 1))
-stopifnot(is.na(ng_check_line_value(ref, meta_econ_no_coef, trait = "yield")))
+stopifnot(is.na(ng_check_line_value(ref, meta_econ_no_coef, trait = "yield",
+                                    trait_value_metric = "mean")))
+
+# Linear family, coefficients present, BUT trait_value_metric is not "mean" (the default,
+# "usefulness", included) -> NA. value_z is not an affine function of the mean under any other
+# metric, so there is no exact remap and the function must refuse rather than draw a
+# plausible-but-wrong line.
+stopifnot(is.na(ng_check_line_value(ref, meta_econ_single, trait = "yield")))                       # metric omitted
+stopifnot(is.na(ng_check_line_value(ref, meta_econ_single, trait = "yield",
+                                    trait_value_metric = "usefulness")))
+stopifnot(is.na(ng_check_line_value(ref, meta_econ_single, trait = "yield",
+                                    trait_value_metric = "pmv")))
+
+# Linear family, trait_value_metric = "mean", coefficients cover a 3-trait index, but only ONE
+# trait is checked -> NA. Silently summing only the checked term is mathematically identical to
+# imputing the other two traits' value_z at exactly their population median (value_z's own
+# center), i.e. a plausible-looking substitute for a position the check does not actually have.
+meta_econ_3trait <- list(family = "economic_index",
+                        economic_index_coefficients = c(yield = 0.5, protein = 0.3, disease = 0.2),
+                        value_centers = c(yield = 0, protein = 0, disease = 0),
+                        value_scales = c(yield = 1, protein = 1, disease = 1),
+                        value_signs = c(yield = 1, protein = 1, disease = 1))
+stopifnot(is.na(ng_check_line_value(ref, meta_econ_3trait, trait = "yield",
+                                    trait_value_metric = "mean")))
+# ...but a check on EVERY index trait is fine (no traits omitted from the sum).
+ref_3chk <- list(active = data.frame(trait = c("yield", "protein", "disease"),
+                                     check = c("CHK_A", "CHK_A", "CHK_A"),
+                                     reject_if = "below", stringsAsFactors = FALSE),
+                 values = list(yield = c(CHK_A = 6), protein = c(CHK_A = 10), disease = c(CHK_A = 2)),
+                 source = c(yield = "GEBV", protein = "GEBV", disease = "GEBV"))
+stopifnot(abs(ng_check_line_value(ref_3chk, meta_econ_3trait, trait_value_metric = "mean") -
+             (6 * 0.5 + 10 * 0.3 + 2 * 0.2)) < 1e-8)
 
 # --- ng_check_line_value(): RANK families (auto / threshold / weighted) ---
-# Small synthetic candidate table: one trait "yield", column "yield_value".
-rank_scores <- data.frame(yield_value = c(8, 9, 10, 11, 12, 20, 21))
+# Small synthetic candidate table: one trait "yield". The check's tau is on the MEAN scale
+# (ng_check_reference_value() resolves it onto whatever source produced the cross MEANS), so the
+# rank placement must compare it against the candidates' "_mean" column, never "_value"
+# (mean +/- i*sigma under the default metric) -- see the REAL PIPELINE section below for the
+# worked example of what ranking against the wrong column actually does to the result.
+rank_scores <- data.frame(yield_mean = c(8, 9, 10, 11, 12, 20, 21))
 rank_traits <- data.frame(trait = "yield", column = "yield_value", direction = "maximize",
                           stringsAsFactors = FALSE)
 meta_rank <- list(family = "rank_threshold", weights = c(yield = 1),
                   value_signs = c(yield = 1), traits = rank_traits)
 cl_rank <- ng_check_line_value(ref, meta_rank, candidate_scores = rank_scores)
-manual_rank <- ng_check_rank_axis_z(rank_scores$yield_value, bigger_is_better = TRUE, tau_raw = 6)
+manual_rank <- ng_check_rank_axis_z(rank_scores$yield_mean, bigger_is_better = TRUE, tau_raw = 6)
 stopifnot(abs(cl_rank - manual_rank) < 1e-10)
 
 # Rank family but no candidate_scores supplied -> NA (this is exactly what a caller building
@@ -113,7 +156,8 @@ stopifnot(is.na(ng_check_line_value(ref, list())))
 
 # an unevaluable check yields no line rather than a misplaced one
 ref3 <- ref; ref3$values$yield <- c(CHK_A = NA_real_)
-stopifnot(is.na(ng_check_line_value(ref3, meta_econ_single, trait = "yield")))
+stopifnot(is.na(ng_check_line_value(ref3, meta_econ_single, trait = "yield",
+                                    trait_value_metric = "mean")))
 stopifnot(is.na(ng_check_line_value(ref3, meta_rank, candidate_scores = rank_scores)))
 
 # ---------------------------------------------------------------------------
@@ -244,8 +288,13 @@ stopifnot(is.finite(rp_cl))
 
 # Independent recomputation -- hand-rolled rank/qnorm arithmetic, NOT a call to the package's
 # ng_check_rank_axis_z() helper, so this genuinely cross-checks the implementation rather than
-# restating it.
-rp_x <- rp_res$candidate_crosses$yield_value
+# restating it. Ranks against yield_MEAN, not yield_value: the check's tau (11.5) is on the mean
+# scale (ng_check_reference_value() resolves it onto whatever produced the cross means), while
+# yield_value is mean + i*sigma under the run's default trait_value_metric = "usefulness" -- a
+# DIFFERENT quantity. Ranking against yield_value was the C1 bug: it silently compared the check
+# to the wrong column, which is exactly what this independent recomputation would have caught had
+# it not itself restated the same wrong column (this is the fix to that self-check).
+rp_x <- rp_res$candidate_crosses$yield_mean
 rp_r <- rank(rp_x, ties.method = "average")
 rp_p <- (rp_r - 0.5) / length(rp_r)
 rp_out <- stats::qnorm(rp_p)
@@ -256,5 +305,12 @@ stopifnot(abs(rp_cl - rp_indep) < 1e-8)
 
 rp_rng <- range(rp_res$candidate_crosses$multi_trait_score, na.rm = TRUE)
 stopifnot(rp_cl >= rp_rng[1] - diff(rp_rng), rp_cl <= rp_rng[2] + diff(rp_rng))
+
+# The check line's position must agree with the Checks-sheet/column truth (yield_check_ok,
+# R/51_check_reference.R), which compares the SAME yield_mean column to the SAME tau. rp_cl > 0
+# means the check sits ABOVE the median of the candidates' rank-normal axis (few candidates
+# reach that high), which must correspond to a MINORITY of candidates clearing the check.
+frac_ok <- mean(rp_res$candidate_crosses$yield_check_ok)
+stopifnot(identical(rp_cl > 0, frac_ok < 0.5))
 
 cat("check plot ok\n")

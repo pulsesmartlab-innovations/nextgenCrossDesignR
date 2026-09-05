@@ -237,7 +237,7 @@ ng_check_rank_axis_z <- function(x, bigger_is_better, tau_raw) {
 #   - anything else, or any case whose required parameters are missing: NA_real_. No plausible-
 #     looking number is drawn for a case that cannot be placed exactly.
 ng_check_line_value <- function(trait_check_reference, multi_trait_meta = NULL, trait = NULL,
-                                candidate_scores = NULL) {
+                                candidate_scores = NULL, trait_value_metric = NULL) {
   spec <- as.data.frame(trait_check_reference$active, stringsAsFactors = FALSE)
   if (!nrow(spec)) return(NA_real_)
   val <- function(tr) {
@@ -272,6 +272,17 @@ ng_check_line_value <- function(trait_check_reference, multi_trait_meta = NULL, 
   }
 
   # Quantile placement onto the candidates' rank-normalized axis, for the RANK families only.
+  # The check's tau is on the MEAN scale (ng_check_reference_value() resolves it onto whatever
+  # source produced the cross MEANS -- R/51:69-85), never on `traits_df$column` (typically
+  # `<trait>_value`, i.e. mean +/- i*sigma under the default trait_value_metric = "usefulness",
+  # a pure variance for pmv/vpm, or a relationship distance for parent_distance). Ranking the
+  # check against `_value` compares it to a different quantity than the one it actually is,
+  # which silently shifts which side of the check a cross appears to fall on. The fix ranks
+  # against the trait's `_mean` column instead: the rank-normal z's mu/sd depend only on n and
+  # tie structure, not on which variable was ranked, so this is an exact placement, not an
+  # approximation. `spec$column_key` is the sanitised lookup key ng_attach_check_reference() (and
+  # the cross table itself) already use; a hand-built trait_check_reference without a
+  # `column_key` column falls back to the raw trait name, exactly like R/51's own `key` fallback.
   traits_df <- multi_trait_meta$traits
   z_of_rank <- function(tr) {
     tau <- val(tr)
@@ -282,7 +293,8 @@ ng_check_line_value <- function(trait_check_reference, multi_trait_meta = NULL, 
     }
     idx <- match(tr, traits_df$trait)
     if (is.na(idx)) return(NA_real_)
-    col <- traits_df$column[[idx]]
+    key <- if ("column_key" %in% names(spec)) spec$column_key[[match(tr, spec$trait)]] else tr
+    col <- paste0(key, "_mean")
     if (is.null(col) || !(col %in% names(candidate_scores))) return(NA_real_)
     sign_i <- suppressWarnings(as.numeric(signs[[tr]]))
     if (!is.finite(sign_i)) return(NA_real_)
@@ -291,11 +303,27 @@ ng_check_line_value <- function(trait_check_reference, multi_trait_meta = NULL, 
   }
 
   if (family %in% c("economic_index", "desired_gain")) {
+    # value_z's center/scale (R/19:577-585) are computed from `traits$column`, i.e. `_value`
+    # under the run's trait_value_metric. `_value = mean_value` ONLY when trait_value_metric ==
+    # "mean" (R/39_cross_prediction_runner.R ng_run_cp_trait_value(): every other metric adds a
+    # sign*i*sqrt(variance) term, or is a variance/distance in its own right, none of which is an
+    # affine function of the mean). The check's tau is always mean-scale, so remapping it through
+    # value_z's center/scale is only exact when trait_value_metric == "mean"; there is no
+    # approximate substitute, so every other metric refuses rather than drawing a plausible-but-
+    # wrong line.
+    metric <- tolower(as.character(if (is.null(trait_value_metric)) "" else trait_value_metric[[1L]]))
+    if (!identical(metric, "mean")) return(NA_real_)
     coef_vec <- if (identical(family, "economic_index")) multi_trait_meta$economic_index_coefficients
                 else multi_trait_meta$desired_gain_coefficients
     if (is.null(coef_vec) || !length(coef_vec)) return(NA_real_)
     tr <- intersect(tr_list, names(coef_vec))
     if (!length(tr)) return(NA_real_)
+    # A check on only SOME of the index's traits cannot be plotted: the omitted traits' terms
+    # would be silently dropped from the sum, which is mathematically identical to imputing each
+    # missing trait's value_z at exactly the population median (value_z's own center) -- a
+    # plausible-looking substitute presented as if it were the check's real position. Refuse
+    # unless every index trait is represented among the checked (+ requested) traits.
+    if (length(tr) < length(coef_vec)) return(NA_real_)
     v <- vapply(tr, z_of_value_z, numeric(1))
     if (any(!is.finite(v))) return(NA_real_)
     return(sum(v * as.numeric(coef_vec[tr])))

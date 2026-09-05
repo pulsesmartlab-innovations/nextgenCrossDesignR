@@ -618,7 +618,8 @@ ng_run_cp_output_files <- function(output_dir,
                                    n_crosses,
                                    include_trait_gebv = FALSE,
                                    trait_check_reference = NULL,
-                                   multi_trait_meta = NULL) {
+                                   multi_trait_meta = NULL,
+                                   trait_value_metric = NULL) {
   files <- list()
   if (!isTRUE(write_outputs) && !isTRUE(write_figures)) return(files)
   if (is.null(output_dir) || !nzchar(as.character(output_dir[[1L]]))) {
@@ -630,7 +631,8 @@ ng_run_cp_output_files <- function(output_dir,
   if (isTRUE(write_figures)) {
     chk_line <- if (is.null(trait_check_reference)) NA_real_ else
       ng_check_line_value(trait_check_reference, multi_trait_meta,
-                          candidate_scores = candidate_crosses)
+                          candidate_scores = candidate_crosses,
+                          trait_value_metric = trait_value_metric)
     plot_path <- file.path(output_dir, "priority_score_vs_kinship.png")
     ng_plot_priority_score_vs_kinship(
       scored = candidate_crosses,
@@ -1712,7 +1714,8 @@ ng_cp__stage_rank <- function(ctx) {
     n_crosses = n_crosses,
     include_trait_gebv = include_trait_gebv,
     trait_check_reference = ctx$trait_check_reference,
-    multi_trait_meta = ctx$multi_trait_meta
+    multi_trait_meta = ctx$multi_trait_meta,
+    trait_value_metric = ctx$trait_value_metric
   )
   ctx <- ng_ctx_put(
     ctx,
