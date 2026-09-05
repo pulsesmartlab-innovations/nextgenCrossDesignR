@@ -187,3 +187,63 @@ stopifnot(identical(res_gebv$trait_check_reference$source[["yield"]], "GEBV_unca
 stopifnot(is.finite(res_gebv$trait_check_reference$values$yield[["CHK_A"]]))
 
 cat("I3 gebv check_pheno gate ok\n")
+
+# --- I2: priority_check_weight was plumbed onto ng_run_cross_prediction() but never threaded to
+# the ng_rank_cross_priority() call inside ng_cp__stage_rank() -- so a run could never let
+# check_violation influence which tier a cross lands in, even though ng_rank_cross_priority()
+# itself supports check_weight (tests/cross_priority.R). Prove the fix moves an ACTUAL cross's
+# tier THROUGH THE RUNNER, not only via the exported function.
+#
+# Phase 1: a plain run (no synthetic override, `args` has no trait_checks/check_geno so
+# cross_table carries no check_violation column at all) identifies which cross is the pool's
+# best-ranked by score/kinship/threshold alone.
+res_i2_base <- do.call(ng_run_cross_prediction, c(args, list(priority_check_weight = 0)))
+sel_base <- res_i2_base$selected_crosses
+stopifnot(!("check_violation" %in% names(sel_base)))
+top_idx <- which.min(sel_base$priority_rank)
+top_p1 <- sel_base$parent1[[top_idx]]; top_p2 <- sel_base$parent2[[top_idx]]
+stopifnot(identical(as.character(sel_base$priority_tier[[top_idx]]), "highly_priority"))
+
+# Phase 2: monkey-patch the index stage to attach a synthetic check_violation column that is 0
+# everywhere except an EXTREME value on that exact SAME cross -- deterministic regardless of the
+# biological objective's internal tie-breaking, and it does not affect scored_crosses$multi_trait_
+# score, so the allocator selects the identical set of crosses either way (checks never
+# veto/reselect).
+orig_index_stage3 <- ng_cp_pipeline$index
+ng_cp_pipeline$index <- function(ctx) {
+  ctx <- orig_index_stage3(ctx)
+  ct <- ctx$cross_table
+  is_top <- ct$parent1 == top_p1 & ct$parent2 == top_p2
+  stopifnot(sum(is_top) == 1L)
+  ct$check_violation <- 0L
+  ct$check_violation[is_top] <- 1000L
+  ctx$cross_table <- ct
+  ctx
+}
+res_i2_a <- tryCatch(do.call(ng_run_cross_prediction, c(args, list(priority_check_weight = 0))),
+                     error = function(e) e)
+res_i2_b <- tryCatch(do.call(ng_run_cross_prediction, c(args, list(priority_check_weight = 1e6))),
+                     error = function(e) e)
+ng_cp_pipeline$index <- orig_index_stage3   # restore before any stopifnot can abort the script
+
+stopifnot(!inherits(res_i2_a, "error"), !inherits(res_i2_b, "error"))
+sel_a <- res_i2_a$selected_crosses
+sel_b <- res_i2_b$selected_crosses
+stopifnot(nrow(sel_a) == nrow(sel_b))
+# same crosses selected regardless of priority_check_weight -- checks never veto or reselect
+key_a <- paste(sel_a$parent1, sel_a$parent2)
+key_b <- paste(sel_b$parent1, sel_b$parent2)
+stopifnot(setequal(key_a, key_b))
+
+top_key <- paste(top_p1, top_p2)
+tier_a <- as.character(sel_a$priority_tier[key_a == top_key])
+tier_b <- as.character(sel_b$priority_tier[key_b == top_key])
+# priority_check_weight = 0 (even with the synthetic column present) reproduces the no-check
+# ranking exactly -- the top cross is still "highly_priority". At a check_weight overwhelming
+# every other component, that SAME cross's (synthetic) maximal violation count swamps its top
+# score and drops it to the worst tier -- proof the weight reaches ranking through the runner.
+stopifnot(identical(tier_a, "highly_priority"))
+stopifnot(!identical(tier_a, tier_b))
+stopifnot(identical(tier_b, "low_priority"))
+cat(sprintf("I2 ok: priority_check_weight reaches the runner -- top cross moved %s -> %s\n",
+            tier_a, tier_b))

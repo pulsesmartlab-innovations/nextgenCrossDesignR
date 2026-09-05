@@ -194,7 +194,8 @@
         {"name": "priority_labels", "type": "string[]", "default": ["highly_priority", "priority", "medium_priority", "low_priority"]},
         {"name": "priority_score_weight", "type": "number", "default": 1.0},
         {"name": "priority_kinship_weight", "type": "number", "default": 0.15},
-        {"name": "priority_threshold_weight", "type": "number", "default": 1.0}
+        {"name": "priority_threshold_weight", "type": "number", "default": 1.0},
+        {"name": "priority_check_weight", "type": "number", "default": 0, "desc": "Weight on check_violation (wrong-side-of-check count) in the blended priority index. 0 (default) leaves an existing run's tiers unchanged; positive values let a check-failing cross be deprioritised without excluding it."}
       ]
     },
     {
