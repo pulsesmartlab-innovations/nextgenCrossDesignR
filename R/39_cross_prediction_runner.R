@@ -805,7 +805,7 @@ ng_cp__stage_qc <- function(ctx) {
   # blocker, exactly as before. The one-shot driver (ng_run_cross_prediction)
   # re-introduces the throw, with this exact message, immediately after this
   # stage returns -- see the stage loop below.
-  ctx$qc <- qc
+  ctx <- ng_ctx_put(ctx, qc = qc)
   if (any(qc$issues$severity == "blocker")) {
     return(ctx)
   }
@@ -831,16 +831,19 @@ ng_cp__stage_qc <- function(ctx) {
     )
   }
   marker_map_std <- ng_run_cp_align_marker_map(geno, cleaned$marker_map)
-  ctx$phenotype_id_col_used <- phenotype_id_col_used
-  ctx$genotype_id_col_used <- genotype_id_col_used
-  ctx$trait_spec <- trait_spec
-  ctx$direction_columns <- direction_columns
-  ctx$direction_canonical <- direction_canonical
-  ctx$marker_map_std <- marker_map_std
-  ctx$qc <- qc
-  ctx$geno <- geno
-  ctx$pheno <- pheno
-  ctx$ids <- ids
+  ctx <- ng_ctx_put(
+    ctx,
+    phenotype_id_col_used = phenotype_id_col_used,
+    genotype_id_col_used = genotype_id_col_used,
+    trait_spec = trait_spec,
+    direction_columns = direction_columns,
+    direction_canonical = direction_canonical,
+    marker_map_std = marker_map_std,
+    qc = qc,
+    geno = geno,
+    pheno = pheno,
+    ids = ids
+  )
   ctx
 }
 
@@ -1136,25 +1139,28 @@ ng_cp__stage_predict <- function(ctx) {
     for (cc in setdiff(names(ctc), c("parent1", "parent2"))) cross_table[[cc]] <- ctc[[cc]]
   }
 
-  ctx$ld_pruning_report <- ld_pruning_report
-  ctx$geno <- geno
-  ctx$marker_map_std <- marker_map_std
-  ctx$ids <- ids
-  ctx$training_only_count <- training_only_count
-  ctx$training_ids <- training_ids
-  ctx$effects_list <- effects_list
-  ctx$trait_scores <- trait_scores
-  ctx$posterior_effects_list <- posterior_effects_list
-  ctx$posterior_predictions_list <- posterior_predictions_list
-  ctx$cross_table <- cross_table
   # Carried into ng_cp__stage_index for the check-reference block: the per-trait mean_source
   # (so a check resolves onto the same scale as the cross means it is compared against) and the
   # exact within-family cross-trait covariance (for the multi-check joint probability).
-  ctx$trait_mean_source <- trait_mean_source
-  ctx$ctc <- ctc
-  ctx$parallel_backend <- parallel_backend
-  ctx$parallel_cores_used <- parallel_cores_used
-  ctx$effect_summary <- effect_summary
+  ctx <- ng_ctx_put(
+    ctx,
+    ld_pruning_report = ld_pruning_report,
+    geno = geno,
+    marker_map_std = marker_map_std,
+    ids = ids,
+    training_only_count = training_only_count,
+    training_ids = training_ids,
+    effects_list = effects_list,
+    trait_scores = trait_scores,
+    posterior_effects_list = posterior_effects_list,
+    posterior_predictions_list = posterior_predictions_list,
+    cross_table = cross_table,
+    trait_mean_source = trait_mean_source,
+    ctc = ctc,
+    parallel_backend = parallel_backend,
+    parallel_cores_used = parallel_cores_used,
+    effect_summary = effect_summary
+  )
   ctx
 }
 
@@ -1164,10 +1170,12 @@ ng_cp__stage_index <- function(ctx) {
   # ctc (exact within-family cross-trait covariance, R/39 stage_predict) is deliberately assigned
   # NULL rather than omitted when it cannot be computed (single-trait runs, or an empty candidate
   # pool) -- ng_attach_joint_check_probability() below is written to treat NULL as "fall back to
-  # the G_hat proxy". But `ctx$ctc <- ctc` upstream silently DROPS the key when ctc is NULL
-  # (assigning NULL into a list element deletes it), so list2env() above never binds a bare `ctc`
-  # in that case. Read it explicitly via `ctx$` (returns NULL for an absent key) so the multi-trait
-  # check-reference path below never hits "object 'ctc' not found".
+  # the G_hat proxy". Plain `ctx$ctc <- ctc` would silently DROP the key when ctc is NULL
+  # (assigning NULL into a list element deletes it), so list2env() above would never bind a bare
+  # `ctc` in that case; the upstream write now goes through ng_ctx_put() (R/00_utils.R), which
+  # keeps the key. Read it explicitly via `ctx$` anyway (returns NULL for an absent key, and costs
+  # nothing when the key is present) so this path never regresses to "object 'ctc' not found" if a
+  # future write here is ever done the plain way again.
   ctc <- ctx$ctc
   # check_pheno is NULL on almost every run and is never reassigned on ctx by any earlier
   # stage, so list2env() above already binds it correctly -- but it is read via `ctx$` anyway,
@@ -1347,7 +1355,7 @@ ng_cp__stage_index <- function(ctx) {
   # The index metadata (method + resolved weights / solved coefficients) is what the multi-trait
   # portfolio axes are built from; capture it here because `attr` does not survive the row
   # subsetting the allocator performs on the way to the plan.
-  ctx$multi_trait_meta <- attr(scored_crosses, "multi_trait")
+  ctx <- ng_ctx_put(ctx, multi_trait_meta = attr(scored_crosses, "multi_trait"))
   allocation_criterion_col <- "multi_trait_score"
   if (!is.null(marker_target_spec)) {
     scored_crosses <- ng_apply_marker_management(
@@ -1359,12 +1367,15 @@ ng_cp__stage_index <- function(ctx) {
       allocation_criterion_col <- "marker_adjusted_gain"
     }
   }
-  ctx$cross_table <- cross_table
-  ctx$objective <- objective
-  ctx$n_candidates_pre_lethal <- n_candidates_pre_lethal
-  ctx$trait_check_reference <- trait_check_reference
-  ctx$scored_crosses <- scored_crosses
-  ctx$allocation_criterion_col <- allocation_criterion_col
+  ctx <- ng_ctx_put(
+    ctx,
+    cross_table = cross_table,
+    objective = objective,
+    n_candidates_pre_lethal = n_candidates_pre_lethal,
+    trait_check_reference = trait_check_reference,
+    scored_crosses = scored_crosses,
+    allocation_criterion_col = allocation_criterion_col
+  )
   ctx
 }
 
@@ -1463,7 +1474,7 @@ ng_cp__stage_allocate <- function(ctx) {
   plan_summary <- attr(plan, "summary")
   plan_summary$allocation_method <- allocation_method
   attr(plan, "summary") <- plan_summary
-  ctx$plan <- plan
+  ctx <- ng_ctx_put(ctx, plan = plan)
   ctx
 }
 
@@ -1703,11 +1714,14 @@ ng_cp__stage_rank <- function(ctx) {
     trait_check_reference = ctx$trait_check_reference,
     multi_trait_meta = ctx$multi_trait_meta
   )
-  ctx$selected <- selected
-  ctx$scored_crosses <- scored_crosses
-  ctx$priority_risk_diagnostics <- priority_risk_diagnostics
-  ctx$constraint_diagnostics <- constraint_diagnostics
-  ctx$output_files <- output_files
+  ctx <- ng_ctx_put(
+    ctx,
+    selected = selected,
+    scored_crosses = scored_crosses,
+    priority_risk_diagnostics = priority_risk_diagnostics,
+    constraint_diagnostics = constraint_diagnostics,
+    output_files = output_files
+  )
   ctx
 }
 

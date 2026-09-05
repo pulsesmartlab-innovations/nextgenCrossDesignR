@@ -166,3 +166,22 @@ ng_has_optional_pkg <- function(pkg) {
 ng_optional_pkg_fun <- function(pkg, fun) {
   get(fun, envir = asNamespace(pkg), mode = "function")
 }
+
+# Set ctx fields WITHOUT losing NULLs. `ctx$key <- NULL` deletes the key, so a stage that later
+# does list2env(ctx, environment()) and reads `key` by bare name gets an unbound-variable error
+# instead of NULL. Bracket assignment with a length-1 list stores the NULL and keeps the key.
+#
+# The first formal is named `.ctx` (not `ctx`) even though every call site passes it
+# positionally as `ng_ctx_put(ctx, ...)`. A bare `ctx` formal placed before `...` is a real
+# partial-matching trap here: R matches named `...` args against un-consumed formals BEFORE
+# positional matching, so a value literally named `c` (a one-letter prefix of "ctx") would bind
+# to the `ctx` formal instead of falling into `...`, silently displacing the real ctx list. The
+# leading dot makes that collision impossible for any plausible field name.
+ng_ctx_put <- function(.ctx, ...) {
+  vals <- list(...)
+  nms <- names(vals)
+  if (is.null(nms) || any(!nzchar(nms))) ng_stop("ng_ctx_put requires named values")
+  ctx <- .ctx
+  for (nm in nms) ctx[nm] <- list(vals[[nm]])
+  ctx
+}
