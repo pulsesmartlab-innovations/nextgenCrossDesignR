@@ -57,3 +57,36 @@ stopifnot(all(c("yield_check_id", "yield_check_value", "yield_vs_check",
                 "yield_check_ok", "yield_p_beat_check", "checks_all_ok") %in% names(selected_b)))
 
 cat("check reference output-files wiring ok\n")
+
+# (c) C2: check_geno supplied with NEITHER check_pheno NOR check_records (the vignette's
+# original example, and the design's headline workflow) -- this fixture's ridge fit never
+# calibrates reliability (R/02_effects.R), so mean_source resolves to the phenotypic
+# "adjusted_pheno" for "yield", and with no phenotypic record supplied for the check, its value
+# is NA for every cross. This must: (1) emit a diagnostic warning naming the trait and source,
+# (2) NEVER report checks_all_ok = TRUE for a cross whose only check was never evaluated (it must
+# be NA, not an affirmative pass), and (3) render "not evaluable" in the workbook, never "0 / N".
+out_dir_c <- tempfile("check_ref_outputs_c_")
+warned <- character(0)
+res_c <- withCallingHandlers(
+  do.call(ng_run_cross_prediction, c(args, list(
+    output_dir = out_dir_c,
+    check_geno = chk, check_progeny_size = 200L,
+    trait_checks = data.frame(trait = "yield", check = "CHK_A", stringsAsFactors = FALSE)))),
+  warning = function(w) {
+    warned <<- c(warned, conditionMessage(w))
+    invokeRestart("muffleWarning")
+  })
+stopifnot(any(grepl("yield", warned) & grepl("not evaluable", warned)))
+stopifnot(any(grepl("check_pheno", warned)))
+
+ct_c <- res_c$candidate_crosses
+stopifnot(all(is.na(ct_c$yield_check_value)))
+stopifnot(all(is.na(ct_c$checks_all_ok)))   # never an affirmative TRUE for an unevaluated check
+
+sheets_c <- openxlsx::getSheetNames(res_c$output_files$workbook)
+stopifnot("Checks" %in% sheets_c)
+checks_sheet_c <- openxlsx::readWorkbook(res_c$output_files$workbook, sheet = "Checks", startRow = 3L)
+stopifnot(is.na(checks_sheet_c$value[[1L]]))
+stopifnot(identical(checks_sheet_c$n_crosses_on_wrong_side[[1L]], "not evaluable"))
+
+cat("check reference not-evaluable diagnostic + workbook wiring ok\n")

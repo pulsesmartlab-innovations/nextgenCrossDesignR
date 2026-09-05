@@ -100,6 +100,7 @@ stopifnot(identical(out$matur_check_ok, c(TRUE, FALSE, TRUE)))   # row 3 is an e
 
 # combined flag
 stopifnot(identical(out$checks_all_ok, c(TRUE, FALSE, TRUE)))
+stopifnot(identical(class(out$checks_all_ok), "logical"))
 
 # P(beat check), increase trait: 1 - pnorm((tau-mu)/sd)^k
 expect1 <- 1 - stats::pnorm((6 - 10) / 2)^50
@@ -114,16 +115,29 @@ stopifnot(out$yield_p_beat_check[[3L]] == 1)
 expect_d <- 1 - stats::pnorm((70 - 75) / 1)^50
 stopifnot(abs(out$matur_p_beat_check[[1L]] - expect_d) < 1e-10)
 
-# a NOT-EVALUABLE check value yields NA columns and never a FALSE flag
+# a NOT-EVALUABLE check value yields NA columns and never a FALSE flag by itself
 out_na <- ng_attach_check_reference(scores, spec, NULL,
                                     list(yield = c(CHK_A = NA_real_), matur = c(CHK_B = 75)),
                                     k_progeny = 50L)
 stopifnot(all(is.na(out_na$yield_check_value)), all(is.na(out_na$yield_check_ok)))
-stopifnot(identical(out_na$checks_all_ok, c(TRUE, FALSE, TRUE)))   # driven by matur alone
+# Three-valued logic (Kleene AND via apply(ok_mat, 1L, all)): row 2's real matur FAILURE wins
+# outright regardless of yield being NA. Rows 1 and 3 have yield = NA and matur = TRUE, which is
+# NOT the same as "TRUE" -- a row is only affirmatively "all ok" when every evaluated check
+# passed AND none were unevaluated. `all(c(NA, TRUE))` is NA, never TRUE, which is exactly what
+# stops an unevaluated check from producing a false affirmative pass (the C2 bug: the previous
+# `!any(r %in% FALSE)` gave TRUE here because `NA %in% FALSE` is FALSE).
+stopifnot(identical(out_na$checks_all_ok, c(NA, FALSE, NA)))
 
 d <- attr(out, "check_reference_diagnostics")
 stopifnot(is.list(d), d$n_wrong_side$yield == 1L, d$n_wrong_side$matur == 1L)
-stopifnot(d$n_not_evaluable == 0L)
+# n_not_evaluable is PER TRAIT (mirroring n_wrong_side), not summed across traits: every check in
+# `out` was evaluable for every cross, so both are 0.
+stopifnot(is.list(d$n_not_evaluable), d$n_not_evaluable$yield == 0L, d$n_not_evaluable$matur == 0L)
+
+# out_na's yield check is NA for every cross (the check's own tau is NA) while matur is
+# evaluable for every cross: the per-trait counts must not be conflated into one aggregate.
+d_na <- attr(out_na, "check_reference_diagnostics")
+stopifnot(d_na$n_not_evaluable$yield == 3L, d_na$n_not_evaluable$matur == 0L)
 
 # A trait whose name is not a valid R name: the cross table sanitises it for column names
 # (make.names + dots to underscores) while the spec keeps what the breeder typed. Columns are

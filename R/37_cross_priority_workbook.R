@@ -173,17 +173,34 @@ ng_cpw_checks_sheet <- function(trait_check_reference, crosses) {
   n_total <- trait_check_reference$diagnostics$n_candidates
   if (is.null(n_total)) n_total <- nrow(crosses)
   wrong <- trait_check_reference$diagnostics$n_wrong_side
+  not_eval <- trait_check_reference$diagnostics$n_not_evaluable
+  value <- vapply(seq_len(nrow(spec)), function(k) {
+    suppressWarnings(as.numeric(trait_check_reference$values[[spec$trait[[k]]]][[spec$check[[k]]]]))
+  }, numeric(1))
   data.frame(
     trait = spec$trait,
     check_id = spec$check,
     direction = ifelse(spec$reject_if == "below", "want above", "want below"),
-    value = vapply(seq_len(nrow(spec)), function(k) {
-      suppressWarnings(as.numeric(trait_check_reference$values[[spec$trait[[k]]]][[spec$check[[k]]]]))
-    }, numeric(1)),
+    value = value,
     source = as.character(trait_check_reference$source[spec$trait]),
-    n_crosses_on_wrong_side = vapply(spec$trait, function(tr) {
+    # A check whose own `value` never resolved (NA) was never comparable to ANY cross for this
+    # trait: rendering "0 / N" here would be an affirmative false claim ("0 crosses on the wrong
+    # side") when in truth zero crosses were ever evaluated. "not evaluable" is the only honest
+    # string for that case -- "0 / 66" must be unreachable for a check that was never compared.
+    # When the check itself DID resolve but some individual crosses' own mean/variance did not
+    # (diagnostics$n_not_evaluable > 0 for this trait), that partial gap is surfaced alongside the
+    # wrong/total ratio rather than silently folded into either count.
+    n_crosses_on_wrong_side = vapply(seq_len(nrow(spec)), function(k) {
+      tr <- spec$trait[[k]]
+      if (!is.finite(value[[k]])) return("not evaluable")
       w <- wrong[[tr]]
-      sprintf("%d / %d", if (is.null(w)) NA_integer_ else as.integer(w), n_total)
+      ne <- not_eval[[tr]]
+      base <- sprintf("%d / %d", if (is.null(w)) NA_integer_ else as.integer(w), n_total)
+      if (!is.null(ne) && length(ne) == 1L && is.finite(ne) && ne > 0) {
+        paste0(base, sprintf(" (%d not evaluable)", as.integer(ne)))
+      } else {
+        base
+      }
     }, character(1)),
     stringsAsFactors = FALSE, row.names = NULL)
 }

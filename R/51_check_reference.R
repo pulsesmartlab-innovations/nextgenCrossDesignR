@@ -90,13 +90,13 @@ ng_check_reference_value <- function(source, check_geno_aligned, effects, check_
 # replaces.)
 ng_attach_check_reference <- function(scores, spec, trait_values = NULL, check_values,
                                       k_progeny,
-                                      mean_suffix = "_mean", sd_suffix = "_pmv_used") {
+                                      mean_suffix = "_mean", var_suffix = "_pmv_used") {
   scores <- as.data.frame(scores, stringsAsFactors = FALSE, check.names = FALSE)
   spec <- as.data.frame(spec, stringsAsFactors = FALSE)
   n <- nrow(scores)
   k_progeny <- as.integer(k_progeny[[1L]])
   ok_mat <- matrix(NA, nrow = n, ncol = nrow(spec), dimnames = list(NULL, spec$trait))
-  n_not_evaluable <- 0L
+  n_not_evaluable <- list()
   n_wrong <- list()
   # The cross table names its per-trait columns with the SANITISED trait name
   # (ng_run_cp_clean_trait_name: make.names + dots to underscores), while the spec carries the
@@ -107,11 +107,12 @@ ng_attach_check_reference <- function(scores, spec, trait_values = NULL, check_v
     # reject_if == "below" means the breeder wants the mid-parent ABOVE the check (increase
     # trait); sgn flips the comparison so that a positive margin always means "better".
     sgn <- if (identical(spec$reject_if[[k]], "below")) 1 else -1
-    mcol <- paste0(kk, mean_suffix); scol <- paste0(kk, sd_suffix)
+    mcol <- paste0(kk, mean_suffix); scol <- paste0(kk, var_suffix)
     if (!(mcol %in% names(scores))) ng_stop("scores missing mean column for check trait: ", mcol)
     mu <- suppressWarnings(as.numeric(scores[[mcol]]))
     v <- if (scol %in% names(scores)) suppressWarnings(as.numeric(scores[[scol]])) else rep(NA_real_, n)
-    tau <- suppressWarnings(as.numeric(check_values[[tr]][[ck]]))
+    cv <- check_values[[tr]]
+    tau <- suppressWarnings(as.numeric(if (!is.null(cv) && ck %in% names(cv)) cv[[ck]] else NA_real_))
     if (!length(tau)) tau <- NA_real_
     margin <- sgn * (mu - tau)
     ok <- margin >= 0                       # ties are not violations
@@ -129,14 +130,26 @@ ng_attach_check_reference <- function(scores, spec, trait_values = NULL, check_v
     }
     scores[[paste0(kk, "_p_beat_check")]] <- p
     ok_mat[, k] <- ok
-    n_not_evaluable <- n_not_evaluable + sum(is.na(ok))
+    # Per TRAIT (mirroring n_wrong below), not summed across traits: sum(is.na(ok)) counts the
+    # CROSSES for which THIS trait's check was not evaluable (either the check's tau itself is
+    # NA, in which case every cross is NA, or an individual cross's own mean/variance is NA).
+    # Aggregating across traits into one scalar (the previous behaviour) mixed unrelated traits'
+    # not-evaluable crosses together, which cannot honestly be rendered as "N of M crosses" for
+    # any single trait.
+    n_not_evaluable[[tr]] <- sum(is.na(ok))
     n_wrong[[tr]] <- sum(ok %in% FALSE)
   }
-  # NA never counts as a failure: an unevaluable check is reported, not held against a cross.
-  scores$checks_all_ok <- !apply(ok_mat, 1L, function(r) any(r %in% FALSE))
+  # Three-valued logic via base R's own Kleene `all()`: FALSE wins outright (a real failure),
+  # NA propagates when nothing resolves the row (all-NA, or a mix of NA and TRUE with no FALSE --
+  # in the latter case we genuinely do not know whether the row passes), and TRUE only when every
+  # evaluated check passed and none were NA. This is what actually implements "NA never counts as
+  # a failure" without also turning an all-NA (never evaluated) row into a false affirmative pass
+  # -- the bug the previous `!any(r %in% FALSE)` had (NA %in% FALSE is FALSE, so a row of all-NA
+  # silently reported checks_all_ok = TRUE).
+  scores$checks_all_ok <- apply(ok_mat, 1L, all)
   attr(scores, "check_reference_diagnostics") <- list(
     active = spec, n_wrong_side = n_wrong,
-    n_not_evaluable = as.integer(n_not_evaluable), n_candidates = n)
+    n_not_evaluable = n_not_evaluable, n_candidates = n)
   rownames(scores) <- NULL
   scores
 }
@@ -151,7 +164,9 @@ ng_check_tau_bounds <- function(spec, check_values) {
   lo <- stats::setNames(rep(-Inf, length(tr)), tr)
   hi <- stats::setNames(rep(Inf, length(tr)), tr)
   for (k in seq_along(tr)) {
-    tau <- suppressWarnings(as.numeric(check_values[[tr[[k]]]][[spec$check[[k]]]]))
+    cv <- check_values[[tr[[k]]]]
+    ck <- spec$check[[k]]
+    tau <- suppressWarnings(as.numeric(if (!is.null(cv) && ck %in% names(cv)) cv[[ck]] else NA_real_))
     if (!length(tau) || !is.finite(tau)) next
     if (identical(spec$reject_if[[k]], "below")) lo[[tr[[k]]]] <- tau else hi[[tr[[k]]]] <- tau
   }
@@ -161,7 +176,7 @@ ng_check_tau_bounds <- function(spec, check_values) {
 # P(a progeny beats EVERY check at once). Thin wrapper over the existing multi-trait threshold
 # machinery: the check values ARE the tau bounds, so no new probability model is introduced.
 ng_attach_joint_check_probability <- function(scores, spec, check_values, k_progeny,
-                                              mean_suffix = "_mean", sd_suffix = "_pmv_used",
+                                              mean_suffix = "_mean", var_suffix = "_pmv_used",
                                               cross_trait_cov = NULL) {
   spec <- as.data.frame(spec, stringsAsFactors = FALSE)
   b <- ng_check_tau_bounds(spec, check_values)
@@ -169,7 +184,7 @@ ng_attach_joint_check_probability <- function(scores, spec, check_values, k_prog
   trait_specs <- data.frame(
     trait = spec$trait,
     mean_col = paste0(key, mean_suffix),
-    var_col = paste0(key, sd_suffix),
+    var_col = paste0(key, var_suffix),
     stringsAsFactors = FALSE)
   ng_add_p_superior_progeny_multitrait(
     scores, trait_specs,
