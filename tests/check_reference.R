@@ -212,17 +212,46 @@ j_ctc_t4 <- ng_attach_joint_check_probability(scores_pev_t4, spec, cv, k_progeny
                                               cross_trait_cov = ctc_t4)
 stopifnot("p_beat_all_checks" %in% names(j_ctc_t4), nrow(j_ctc_t4) == 3L)
 stopifnot(all(j_ctc_t4$p_beat_all_checks >= 0 & j_ctc_t4$p_beat_all_checks <= 1, na.rm = TRUE))
-# the row with PEV = 0 (row 3) must still match Task 4's own diagonal-fallback exactness --
-# cross_trait_cov changes ONLY Sigma_c's off-diagonal here (its diagonal reproduces the same VPM),
-# so with PEV = 0 the row-3 value is unaffected by which Sigma_c path was used.
+# Row 3 happens to match Task 4's own diagonal-fallback value exactly, but NOT because
+# "cross_trait_cov changes only the off-diagonal" in general (a nonzero off-diagonal DOES change
+# a rectangle probability even at PEV = 0 -- see the two-positive-variance row below, which
+# proves exactly that). Row 3 matches only because ITS OWN yield_vpm is 0 (the fixture above),
+# so wf_cov_yield_matur = 0.5*sqrt(yield_vpm*matur_vpm) is ALSO 0 there -- ctc_t4's Sigma_c at
+# row 3 is already diagonal, identical to the NULL-covariance fallback's, independent of PEV.
 stopifnot(isTRUE(all.equal(j_ctc_t4$p_beat_all_checks[[3L]], j$p_beat_all_checks[[3L]],
                            tolerance = 1e-10)))
 # the invariant, on the REAL cross_trait_cov path, with genuine PEV: the provable-ceiling clip
-# (R/51_check_reference.R) makes this hold EXACTLY, not just within a tolerance band.
+# (R/51_check_reference.R) makes this hold EXACTLY, not just within a tolerance band. NOTE: this
+# assertion is a tautology of the implementation, not independent verification -- R/51's
+# out$p_beat_all_checks <- pmin(out$p_beat_all_checks, marg_min) makes it true by construction
+# regardless of whether the underlying D7 Monte Carlo integration is itself correct. The real D7
+# correctness check (joint vs. a literal simulation of the full model) lives in
+# tests/check_reference_joint_pev.R's Section 2.
 stopifnot(all(j_ctc_t4$p_beat_all_checks <= single_pev_t4$yield_p_beat_check + 1e-9))
 stopifnot(all(j_ctc_t4$p_beat_all_checks <= single_pev_t4$matur_p_beat_check + 1e-9))
 
 cat("task 4 ok\n")
+
+# --- M2: a row with TWO POSITIVE variances (unlike row 3 above, where yield_vpm = 0 made the
+# exact path's own off-diagonal 0 too) and PEV = 0 for both traits: cross_trait_cov's
+# off-diagonal is now genuinely nonzero, and it MUST move the joint probability away from the
+# NULL-covariance (diagonal-only, independence-assumed) fallback -- proving the exact
+# cross_trait_cov path is not inert at PEV = 0, correcting the reasoning above.
+scores_row4 <- data.frame(parent1 = "P9", parent2 = "P10",
+                          yield_mean = 6.5, yield_vpm = 4, yield_pmv_used = 4,   # PEV = 0
+                          matur_mean = 74, matur_vpm = 1, matur_pmv_used = 1,    # PEV = 0
+                          stringsAsFactors = FALSE)
+ctc_row4 <- data.frame(parent1 = "P9", parent2 = "P10",
+                       wf_var_yield = 4, wf_var_matur = 1,
+                       wf_cov_yield_matur = 0.6 * sqrt(4 * 1),   # rho = 0.6, genuinely nonzero
+                       stringsAsFactors = FALSE)
+j_exact_row4 <- ng_attach_joint_check_probability(scores_row4, spec, cv, k_progeny = 5L,
+                                                  cross_trait_cov = ctc_row4)
+j_diag_row4 <- ng_attach_joint_check_probability(scores_row4, spec, cv, k_progeny = 5L)
+stopifnot(!isTRUE(all.equal(j_exact_row4$p_beat_all_checks[[1L]],
+                           j_diag_row4$p_beat_all_checks[[1L]], tolerance = 1e-6)))
+
+cat("M2 ok: cross_trait_cov's off-diagonal is not inert at PEV = 0 when both variances are positive\n")
 
 # --- D3: p_beat_all_checks must be NA when not EVERY checked trait is evaluable -------------
 # One trait unevaluable (its check tau is NA): ng_check_tau_bounds() leaves that trait unbounded
