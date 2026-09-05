@@ -19,6 +19,7 @@
 \alias{ng_attach_joint_check_probability}
 \alias{ng_check_records_from_pheno}
 \alias{ng_plot_check_panels}
+\alias{ng_plot_check_reference_line}
 \alias{ng_check_line_value}
 \alias{ng_frontier_export_payload}
 \alias{ng_write_frontier_json}
@@ -274,8 +275,10 @@ probability a progeny beats every check at once. A completed run reports the
 check in a \code{Checks} workbook sheet and, on the score-versus-kinship plot,
 as a reference line on whichever axis carries the mean; use
 \code{ng_plot_check_panels()} for per-trait small multiples in multi-trait
-runs, and \code{ng_check_line_value()} to look up the check value/label pair a
-scored table carries for a given trait.
+runs, \code{ng_check_line_value()} to compute where that line falls on a
+scored table's axis for a given trait, and \code{ng_plot_check_reference_line()}
+to draw it -- as a horizontal or vertical line, via \code{mean_axis = "y"} or
+\code{"x"} -- on any plot of your own that carries the trait mean on one axis.
 
 Use \code{ng_run_stage()} to drive the cross-prediction pipeline one stage at a
 time (\code{qc}, \code{predict}, \code{index}, \code{allocate}, \code{rank}),

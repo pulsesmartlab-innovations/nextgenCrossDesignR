@@ -306,7 +306,10 @@ This is the primary regression test. Additional tests:
    GEBV substituted against a BLUE axis.
 7. `p_beat_check` for a `decrease` trait equals the hand-computed
    `1 - Phi((mu - tau)/sigma)^k`.
-8. Rank-based index -> no line drawn, explicit "not available" message.
+8. Rank-based index -> line drawn by quantile placement of the check among the candidates' own
+   raw values (section 8), mapped through the same rank-normal standardisation; NA/no line only
+   when the required inputs (candidate scores, resolved weights, a finite check value) are
+   missing, never merely because the family is rank-based.
 9. Multi-trait: `p_beat_all_checks` matches `ng_p_superior_progeny_multitrait()` with
    `tau_lower`/`tau_upper` filled by direction.
 10. Excel `Checks` sheet present and populated; per-trait columns on every cross sheet.

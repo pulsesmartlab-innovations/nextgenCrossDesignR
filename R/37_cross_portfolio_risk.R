@@ -372,9 +372,11 @@ ng_multitrait_pev_shares <- function(pev, w, trait_order = NULL) {
 # make risk_bin stop meaning "how well is this cross's INDEX estimated".
 #
 # The related breeder question -- "is this cross unacceptable on a minor trait?" -- is a
-# THRESHOLD question, and the package answers it separately and better via trait_checks (R/44)
-# and the multi-trait min_value/max_value thresholds. What was actually missing is the ability
-# to answer "high risk -- because of WHICH trait", which is what this provides.
+# THRESHOLD question, and the package answers it via the multi-trait min_value/max_value
+# thresholds, and, as a REFERENCE rather than a veto, via trait_checks
+# (R/51_check_reference.R::ng_attach_check_reference()) -- a check flags which side of a
+# benchmark line a cross falls on, it never excludes the cross. What was actually missing is the
+# ability to answer "high risk -- because of WHICH trait", which is what this provides.
 ng_multitrait_risk_driver <- function(shares, trait_order) {
   S <- as.matrix(shares)
   n <- nrow(S)
