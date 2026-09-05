@@ -194,6 +194,34 @@ single <- ng_attach_check_reference(scores, spec, NULL, cv, k_progeny = 50L)
 stopifnot(all(j$p_beat_all_checks <= single$yield_p_beat_check + 1e-8))
 stopifnot(all(j$p_beat_all_checks <= single$matur_p_beat_check + 1e-8))
 
+# D7: the invariant above used the NULL-covariance diagonal fallback (no cross_trait_cov passed
+# to ng_attach_joint_check_probability(), so Sigma_c came from ng_build_cross_trait_covariance()
+# with G_hat = NULL). Exercise the REAL cross_trait_cov path here too, on a scores fixture with
+# GENUINE nonzero PEV (unlike Task 3's yield_vpm == yield_pmv_used fixture), so this assertion
+# does not pass merely because PEV collapses to 0 everywhere.
+ctc_t4 <- data.frame(
+  parent1 = scores$parent1, parent2 = scores$parent2,
+  wf_var_yield = scores$yield_vpm, wf_var_matur = scores$matur_vpm,
+  wf_cov_yield_matur = 0.5 * sqrt(pmax(scores$yield_vpm, 0) * pmax(scores$matur_vpm, 0)),
+  stringsAsFactors = FALSE)
+scores_pev_t4 <- scores
+scores_pev_t4$yield_pmv_used <- scores$yield_vpm + c(3, 2, 0)   # genuine PEV on rows 1-2
+scores_pev_t4$matur_pmv_used <- scores$matur_vpm + c(0.5, 0.8, 0)
+single_pev_t4 <- ng_attach_check_reference(scores_pev_t4, spec, NULL, cv, k_progeny = 50L)
+j_ctc_t4 <- ng_attach_joint_check_probability(scores_pev_t4, spec, cv, k_progeny = 50L,
+                                              cross_trait_cov = ctc_t4)
+stopifnot("p_beat_all_checks" %in% names(j_ctc_t4), nrow(j_ctc_t4) == 3L)
+stopifnot(all(j_ctc_t4$p_beat_all_checks >= 0 & j_ctc_t4$p_beat_all_checks <= 1, na.rm = TRUE))
+# the row with PEV = 0 (row 3) must still match Task 4's own diagonal-fallback exactness --
+# cross_trait_cov changes ONLY Sigma_c's off-diagonal here (its diagonal reproduces the same VPM),
+# so with PEV = 0 the row-3 value is unaffected by which Sigma_c path was used.
+stopifnot(isTRUE(all.equal(j_ctc_t4$p_beat_all_checks[[3L]], j$p_beat_all_checks[[3L]],
+                           tolerance = 1e-10)))
+# the invariant, on the REAL cross_trait_cov path, with genuine PEV: the provable-ceiling clip
+# (R/51_check_reference.R) makes this hold EXACTLY, not just within a tolerance band.
+stopifnot(all(j_ctc_t4$p_beat_all_checks <= single_pev_t4$yield_p_beat_check + 1e-9))
+stopifnot(all(j_ctc_t4$p_beat_all_checks <= single_pev_t4$matur_p_beat_check + 1e-9))
+
 cat("task 4 ok\n")
 
 # --- D3: p_beat_all_checks must be NA when not EVERY checked trait is evaluable -------------
