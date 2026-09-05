@@ -389,7 +389,8 @@ ng_plot_check_panels <- function(scored, trait_check_reference, output_path = NU
     graphics::plot(x, y, pch = 19, col = ng_priority_plot_alpha_col(base_col, alpha),
                    xlab = "Pair kinship", ylab = paste(tr, "mid-parent"), main = tr)
     tau <- suppressWarnings(as.numeric(scored[[paste0(kk, "_check_value")]][[1L]]))
-    ng_plot_check_reference_line(if (length(tau)) tau[[1L]] else NA_real_, mean_axis = "y")
+    ng_plot_check_reference_line(if (length(tau)) tau[[1L]] else NA_real_,
+                                 label = spec$check[[i]], mean_axis = "y")
   }
   if (isTRUE(owns_device)) {
     ng_plot_close_device(dev_no)
