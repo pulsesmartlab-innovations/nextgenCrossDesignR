@@ -1326,6 +1326,26 @@ ng_cp__stage_index <- function(ctx) {
       check_values[[tr]] <- ng_check_reference_value(src, check_geno, effects_list[[tr]],
                                                      check_records = recs)
     }
+    # Design section 5's "not-evaluable rule" promises "NA with a diagnostic" -- until now there
+    # was no diagnostic anywhere in the run: a phenotypic source with no matching check_pheno/
+    # check_records record silently produced NA with no warning at all. Warn once per trait whose
+    # check value came back non-finite, naming the trait, the resolved source, and pointing the
+    # breeder at check_pheno (or check_records) as the fix.
+    for (tr in unique(tc_spec$trait)) {
+      ck <- tc_spec$check[match(tr, tc_spec$trait)]
+      cv <- check_values[[tr]]
+      val <- if (!is.null(cv) && ck %in% names(cv)) cv[[ck]] else NA_real_
+      if (!length(val) || !is.finite(val)) {
+        warning(sprintf(
+          "check reference for trait '%s' (check '%s') is not evaluable: the resolved mean ",
+          tr, ck),
+          sprintf("source '%s' has no record for this check. Supply a matching entry via ",
+                  check_source[[tr]]),
+          "check_pheno (or check_records) so this check can be compared against the cross ",
+          "means; its reference columns and 'checks_all_ok' will report NA for this trait ",
+          "until then.", call. = FALSE)
+      }
+    }
     cross_table <- ng_attach_check_reference(cross_table, tc_spec, trait_values = NULL,
                                              check_values = check_values,
                                              k_progeny = kp)
