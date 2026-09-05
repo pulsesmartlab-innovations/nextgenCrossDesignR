@@ -195,7 +195,9 @@ Rendering:
 
 The check's value is per-trait; the scatter's y is an index. Validity depends on the index:
 
-- **Single-trait run** -- the scatter's y is `multi_trait_score`, which is **z-normalised**
+- **Single-trait run** -- there is no shortcut here: the axis is still whatever the run's
+  scoring family produced, so a single-trait run follows the same rule as its family above. The
+  scatter's y is `multi_trait_score`, which is **transformed**
   by `ng_score_breeder_objective()` even for one trait (`R/19_multi_trait_selection.R:576`:
   `value_z <- (oriented - center) / scale`, with a robust per-trait `center`/`scale` taken
   from the candidate distribution). The check must therefore be mapped through that same
@@ -203,13 +205,28 @@ The check's value is per-trait; the scatter's y is an index. Validity depends on
   line entirely off-axis. The transform is deterministic, so this places the check where it
   genuinely falls; it is not an approximation. When the transform is unavailable, draw no
   line (see the rank-based case).
-- **Multi-trait, linear index** (weighted, economic / Smith-Hazel) -- map each trait's check
-  through its own `center`/`scale`, then apply the index coefficients to the resulting z values.
+- **`economic_index` / `desired_gain`** -- these genuinely use `value_z`, so map each trait's
+  check through its own `center`/`scale` and combine with the **solved** index coefficients
+  (`economic_index_coefficients` / `desired_gain_coefficients`), not the raw input weights --
+  those are a different vector in general.
   Applying raw coefficients to raw trait values is wrong for the same reason as above.
-- **Multi-trait, rank-based** (`rank_threshold`, the `auto` default, `R/19:7`) -- the score is a
-  function of the candidate distribution, not of trait values alone. A check has no rank
-  because it is not a cross. **No line is drawn**, and the UI says so explicitly rather than
-  displaying a number that looks authoritative and is not.
+- **Rank-based scoring** (`auto`, `threshold`, `weighted` -- everything routed through
+  `z %*% weights`, where `z` is `ng_rank_normalize()`): the axis is a rank-normal quantile
+  scale, not trait units, and not `value_z`. **Verified by running the scoring path**, not
+  inferred from the family label: only `economic_index` and `desired_gain` use `value_z`.
+
+  An earlier draft of this design said no line could be drawn here, on the grounds that "a
+  check has no rank because it is not a cross." **That reasoning was too strong.** A check's
+  *value* can be positioned within the candidate distribution without the check being a member
+  of it -- that is a quantile lookup, and it is precisely the question a breeder asks ("where
+  does my check sit among these crosses?"). So place it properly: take the check's fractional
+  rank among the candidate means, map it through the same rank-normal transform, and apply the
+  same standardisation, without perturbing the candidates.
+
+  Getting this wrong is not a rounding matter. Placing a check with the `value_z` transform on a
+  rank-normal axis put a measured example at `-0.327` where its true position was `+0.688` --
+  opposite sides of zero, about 20% of the axis span, changing how many crosses appear to clear
+  the check.
 
 ### Multi-trait panel
 
