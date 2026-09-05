@@ -125,8 +125,12 @@ ref <- with_ck$trait_check_reference
 # ---- 1. checks are never crossed --------------------------------------------
 ok(!any(c(ct$parent1, ct$parent2) %in% CHECKS),
    "no check line appears as a parent of any candidate cross")
-ok(!any(CHECKS %in% rownames(parent_geno)),
-   "no check line is in the candidate parent matrix")
+# parent_geno is a data frame keyed by its NAME column, so check that column -- rownames() here
+# would be 1..n and the assertion would pass vacuously.
+ok(!any(CHECKS %in% parent_geno$NAME),
+   "no check line is in the candidate parent table")
+ok(nrow(parent_geno) == nrow(geno_all) - length(CHECKS),
+   "the candidate parent table is exactly the genotype table minus the checks")
 
 # ---- 2. values resolve to real numbers --------------------------------------
 for (tr in traits) {
