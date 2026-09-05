@@ -22,22 +22,16 @@
                               mean = mu, sigma = Sigma))
 }
 
-ng_p_superior_progeny_multitrait <- function(mu, Sigma_c, tau_lower, tau_upper,
-                                              k_progeny) {
-  mu <- as.numeric(mu)
-  tau_lower <- as.numeric(tau_lower)
-  tau_upper <- as.numeric(tau_upper)
-  k_progeny <- as.numeric(k_progeny)
-  t <- length(mu)
-  if (t == 0L) ng_stop("mu must have length >= 1")
-  if (length(tau_lower) != t || length(tau_upper) != t) {
-    ng_stop("tau_lower and tau_upper must have length(mu) = ", t)
-  }
+# M3: Sigma_c's own validation (finiteness, symmetry, eigen decomposition, PSD repair) is a pure
+# function of Sigma_c alone -- it never reads mu, tau_lower/tau_upper, or k_progeny. Split out of
+# ng_p_superior_progeny_multitrait() so a caller evaluating MANY mu values against the SAME
+# Sigma_c (ng_p_superior_progeny_multitrait_pev()'s per-draw Monte Carlo loop, below) can run this
+# ONCE instead of re-running eigen() and the PSD repair on every draw -- this was measured to be
+# nearly all of the D7 Monte Carlo's cost (see the fix report's M3 benchmark). Returns the
+# repaired Sigma_c; identical numerically to what the inline block used to leave `Sigma_c` as.
+.ng_validate_repair_sigma_c <- function(Sigma_c, t) {
   if (!is.matrix(Sigma_c) || nrow(Sigma_c) != t || ncol(Sigma_c) != t) {
     ng_stop("Sigma_c must be a t x t matrix matching length(mu) = ", t)
-  }
-  if (any(!is.finite(mu)) || any(is.na(tau_lower)) || any(is.na(tau_upper))) {
-    ng_stop("mu must be finite and threshold bounds must not be missing")
   }
   if (any(!is.finite(Sigma_c))) ng_stop("Sigma_c contains non-finite entries")
   asym <- max(abs(Sigma_c - t(Sigma_c)))
@@ -56,11 +50,18 @@ ng_p_superior_progeny_multitrait <- function(mu, Sigma_c, tau_lower, tau_upper,
     Sigma_c <- Sigma_c * outer(scale, scale)
     diag(Sigma_c) <- requested_diag
   }
-  if (!is.finite(k_progeny) || k_progeny < 1 ||
-      abs(k_progeny - round(k_progeny)) > 1e-8) {
-    ng_stop("k_progeny must be a positive integer")
-  }
-  k_progeny <- as.integer(round(k_progeny))
+  Sigma_c
+}
+
+# M3: the remainder of ng_p_superior_progeny_multitrait()'s body, given an ALREADY-VALIDATED-AND-
+# REPAIRED Sigma_c (via .ng_validate_repair_sigma_c(), immediately above) and already-numeric,
+# already-length-checked mu/tau_lower/tau_upper/k_progeny. This is the mu-DEPENDENT part (the
+# zero-variance-trait branch reads mu, and of course the final pmvnorm call does too) -- it is
+# what a per-draw Monte Carlo loop must still repeat, just without Sigma_c's own validation.
+# `t` is length(mu) (equivalently nrow(Sigma_c)), passed in rather than recomputed per call.
+.ng_p_superior_progeny_multitrait_given_sigma <- function(mu, Sigma_c, tau_lower, tau_upper,
+                                                          k_progeny, t) {
+  if (any(!is.finite(mu))) ng_stop("mu must be finite and threshold bounds must not be missing")
   if (any(tau_upper <= tau_lower)) return(0)
   diag_var <- diag(Sigma_c)
   if (any(diag_var <= 0)) {
@@ -72,6 +73,9 @@ ng_p_superior_progeny_multitrait <- function(mu, Sigma_c, tau_lower, tau_upper,
     # all traits are deterministic (Sigma diagonal = 0) and all fall inside
     # their intervals (verified above) -> probability is 1.
     if (!length(keep)) return(1)
+    # A reduced dimension needs its OWN Sigma_c validation (the submatrix's own symmetry/PSD are
+    # not guaranteed by the full matrix's), so this recurses into the PUBLIC function rather than
+    # calling this internal one directly -- exactly the original (pre-M3) recursion, unchanged.
     return(ng_p_superior_progeny_multitrait(
       mu = mu[keep],
       Sigma_c = Sigma_c[keep, keep, drop = FALSE],
@@ -86,6 +90,32 @@ ng_p_superior_progeny_multitrait <- function(mu, Sigma_c, tau_lower, tau_upper,
   one_minus_p_max <- exp(k_progeny * log_complement)
   out <- 1 - one_minus_p_max
   max(0, min(1, out))
+}
+
+ng_p_superior_progeny_multitrait <- function(mu, Sigma_c, tau_lower, tau_upper,
+                                              k_progeny) {
+  mu <- as.numeric(mu)
+  tau_lower <- as.numeric(tau_lower)
+  tau_upper <- as.numeric(tau_upper)
+  k_progeny <- as.numeric(k_progeny)
+  t <- length(mu)
+  if (t == 0L) ng_stop("mu must have length >= 1")
+  if (length(tau_lower) != t || length(tau_upper) != t) {
+    ng_stop("tau_lower and tau_upper must have length(mu) = ", t)
+  }
+  if (!is.matrix(Sigma_c) || nrow(Sigma_c) != t || ncol(Sigma_c) != t) {
+    ng_stop("Sigma_c must be a t x t matrix matching length(mu) = ", t)
+  }
+  if (any(!is.finite(mu)) || any(is.na(tau_lower)) || any(is.na(tau_upper))) {
+    ng_stop("mu must be finite and threshold bounds must not be missing")
+  }
+  Sigma_c <- .ng_validate_repair_sigma_c(Sigma_c, t)
+  if (!is.finite(k_progeny) || k_progeny < 1 ||
+      abs(k_progeny - round(k_progeny)) > 1e-8) {
+    ng_stop("k_progeny must be a positive integer")
+  }
+  k_progeny <- as.integer(round(k_progeny))
+  .ng_p_superior_progeny_multitrait_given_sigma(mu, Sigma_c, tau_lower, tau_upper, k_progeny, t)
 }
 
 # ---- D7: joint P(beat every check) under SHARED posterior effect uncertainty ---------------
@@ -179,12 +209,36 @@ ng_p_superior_progeny_multitrait_pev <- function(mu, Sigma_c, tau_lower, tau_upp
   }
   if (is.null(z)) z <- ng_fixed_seed_normal_matrix(n_draws, t_n, seed = seed)
   if (ncol(z) != t_n) ng_stop("z must have t_n = ", t_n, " columns")
+
+  # M3: Sigma_c is FIXED across every draw (only mu shifts per draw) -- validate/repair it, and
+  # validate the equally-fixed tau_lower/tau_upper/k_progeny, ONCE here rather than once per draw
+  # inside ng_p_superior_progeny_multitrait(). This is the actual performance fix: symmetry
+  # checking, eigen(), and PSD repair on the SAME t_n x t_n matrix dominated the runtime at 150
+  # draws/row (~150x more per-cross cost than the pre-D7 closed form; see the fix report's M3
+  # benchmark for the measured before/after).
+  tau_lower <- as.numeric(tau_lower)
+  tau_upper <- as.numeric(tau_upper)
+  if (length(tau_lower) != t_n || length(tau_upper) != t_n) {
+    ng_stop("tau_lower and tau_upper must have length(mu) = ", t_n)
+  }
+  if (any(is.na(tau_lower)) || any(is.na(tau_upper))) {
+    ng_stop("mu must be finite and threshold bounds must not be missing")
+  }
+  Sigma_c <- .ng_validate_repair_sigma_c(Sigma_c, t_n)
+  k_progeny <- as.numeric(k_progeny)
+  if (!is.finite(k_progeny) || k_progeny < 1 ||
+      abs(k_progeny - round(k_progeny)) > 1e-8) {
+    ng_stop("k_progeny must be a positive integer")
+  }
+  k_progeny <- as.integer(round(k_progeny))
+
   sd_vec <- sqrt(pmax(pev, 0))
   nd <- nrow(z)
   acc <- 0
   for (j in seq_len(nd)) {
     mu_j <- mu + z[j, ] * sd_vec
-    acc <- acc + ng_p_superior_progeny_multitrait(mu_j, Sigma_c, tau_lower, tau_upper, k_progeny)
+    acc <- acc + .ng_p_superior_progeny_multitrait_given_sigma(
+      mu_j, Sigma_c, tau_lower, tau_upper, k_progeny, t_n)
   }
   max(0, min(1, acc / nd))
 }
