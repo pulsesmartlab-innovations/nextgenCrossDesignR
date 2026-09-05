@@ -135,3 +135,20 @@ stopifnot(is.character(err_idcol), grepl("check_pheno", err_idcol),
           grepl("missing its id column", err_idcol), grepl("id", err_idcol))
 
 cat("task 10 fix round 1 ok\n")
+
+# --- Task 10 fix round 2: check_pheno resolution must be LAZY -------------------------------
+# id_col omitted; the only trait ("yield") is supplied entirely via explicit check_records
+# (which wins over check_pheno per the documented precedence), and check_pheno is present but
+# keyed by a column OUTSIDE the auto-detect candidate list (accession_code, not id/name/...).
+# Because check_pheno is never actually consulted for this trait, attaching it must NOT turn a
+# working run into a failing one -- eager id-column resolution (fix round 1's first attempt)
+# would fail here even though nothing ever reads check_pheno.
+cp_unresolvable <- data.frame(accession_code = c("CHK_A", "CHK_B"), yield = c(1, 2),
+                              stringsAsFactors = FALSE)
+res_lazy <- do.call(ng_run_cross_prediction, c(args_auto, list(
+  check_geno = chk, check_progeny_size = 200L, check_pheno = cp_unresolvable,
+  check_records = list(yield = list(adjusted_pheno = c(CHK_A = 77))),
+  trait_checks = data.frame(trait = "yield", check = "CHK_A", stringsAsFactors = FALSE))))
+stopifnot(abs(res_lazy$trait_check_reference$values$yield[["CHK_A"]] - 77) < 1e-8)
+
+cat("task 10 fix round 2 ok\n")

@@ -1272,20 +1272,9 @@ ng_cp__stage_index <- function(ctx) {
       ng_stop("trait_checks names check line(s) absent from check_geno: ",
               paste(missing_chk, collapse = ", "))
     }
-    # check_pheno's id column resolves exactly the way every other table's does: an explicit
-    # id_col is passed straight through unchanged (so a missing explicit column still hits
-    # ng_check_records_from_pheno()'s own check and its existing message, unaltered); an omitted
-    # id_col auto-detects via ng_run_cp_id_col()'s own candidate list (parent, parent_id, id,
-    # name, line, entry, NAME) -- the SAME list and function the phenotype/genotype tables use,
-    # not a second hand-rolled copy of it.
-    check_pheno_id_col <- if (is.null(check_pheno)) {
-      NULL
-    } else if (is.null(id_col)) {
-      ng_run_cp_id_col(check_pheno, NULL, "check_pheno")
-    } else {
-      id_col
-    }
     check_values <- list(); check_source <- character(0)
+    # Resolved LAZILY, only the first time some trait actually needs check_pheno -- see below.
+    check_pheno_id_col <- NULL
     for (tr in unique(tc_spec$trait)) {
       if (!(tr %in% names(effects_list))) {
         ng_stop("trait_checks references a trait not present in trait_direction/effects: ", tr)
@@ -1301,6 +1290,24 @@ ng_cp__stage_index <- function(ctx) {
       # a GEBV source, since the value must then come from the check's own markers.
       recs <- check_records[[tr]]
       if (is.null(recs) && !is.null(check_pheno)) {
+        # check_pheno's id column resolves exactly the way every other table's does, and ONLY
+        # once we know some trait actually needs check_pheno (this gate) -- resolving eagerly,
+        # above the loop, would fail a run over a check_pheno table no trait ever consults (e.g.
+        # every trait supplied via check_records, or GEBV-sourced): attaching an input nothing
+        # reads must never turn a working run into a failing one. An explicit id_col passes
+        # through unchanged so a genuinely missing explicit column still hits
+        # ng_check_records_from_pheno()'s own check and its existing message, unaltered; an
+        # omitted id_col auto-detects via ng_run_cp_id_col()'s own candidate list (parent,
+        # parent_id, id, name, line, entry, NAME) -- the SAME list/function phenotype and
+        # genotype use, not a second hand-rolled copy of it. Resolved once (cached in the loop
+        # variable) and reused across every trait that shares this same check_pheno table.
+        if (is.null(check_pheno_id_col)) {
+          check_pheno_id_col <- if (is.null(id_col)) {
+            ng_run_cp_id_col(check_pheno, NULL, "check_pheno")
+          } else {
+            id_col
+          }
+        }
         col <- trait_spec$column[match(tr, trait_spec$trait)]
         conv <- ng_check_records_from_pheno(check_pheno, check_pheno_id_col,
                                             stats::setNames(list(col), tr), src)
