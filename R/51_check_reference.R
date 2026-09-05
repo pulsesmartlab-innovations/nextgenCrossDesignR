@@ -37,6 +37,27 @@ ng_trait_check_spec <- function(trait, check, direction = NA, trait_direction = 
 # Align a separate check genotype matrix to the marker set already fixed by parent QC. A check
 # matrix that silently disagrees on marker set or column order produces a wrong-but-plausible
 # reference value, so every disagreement is an error rather than an intersection.
+#
+# WHAT THIS VALIDATES, PRECISELY (design doc section 6, "Marker alignment"):
+#   - marker set: every marker used by the fitted effects is present in check_geno (hard error,
+#     naming the missing count), and the check matrix is subset + reordered to that exact set/
+#     order -- so a caller can never silently score against a shuffled or partial marker vector.
+#   - dosage RANGE: every value falls in [0, ploidy]. This catches a wrong PLOIDY assumption and
+#     most wrong-coding files (e.g. {-1,0,1} or {0,1} dosages), because those ranges collide with
+#     [0, ploidy] only by coincidence.
+# WHAT THIS DOES NOT, AND CANNOT, VALIDATE:
+#   - reference-allele agreement. A check_geno file coded against the OPPOSITE reference allele
+#     at a subset of markers (dosage = ploidy - true_dosage for just those columns) produces
+#     values that are STILL inside [0, ploidy] at every marker -- the range check cannot
+#     distinguish "correctly coded" from "flipped at some markers" because both produce valid-
+#     looking dosages. This is exactly the "wrong but entirely plausible" failure mode the design
+#     doc calls out: a check GEBV in the right ballpark, in the wrong place, with no warning.
+#     Detecting it would require an independent ground truth for the reference allele per marker
+#     (e.g. cross-referencing against the parent genotype matrix's own allele-frequency direction,
+#     which this function is not given) -- there is no rule over check_geno's dosages alone that
+#     can tell a flipped subset of markers from a genuinely different (but valid) check genotype.
+#     Relaxing check_geno to optional, or adding a frequency-based heuristic, is a separate,
+#     larger decision and is deliberately out of scope here.
 ng_align_check_geno <- function(check_geno, marker_names, ploidy = 2L) {
   marker_names <- as.character(marker_names)
   check_geno <- as.matrix(check_geno)

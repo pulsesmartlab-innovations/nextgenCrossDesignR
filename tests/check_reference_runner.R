@@ -152,3 +152,38 @@ res_lazy <- do.call(ng_run_cross_prediction, c(args_auto, list(
 stopifnot(abs(res_lazy$trait_check_reference$values$yield[["CHK_A"]] - 77) < 1e-8)
 
 cat("task 10 fix round 2 ok\n")
+
+# --- I3: a GEBV-sourced trait must never trigger check_pheno id-column resolution -----------
+# The stage_index loop gated check_pheno consultation on `is.null(recs) && !is.null(check_pheno)`
+# alone, which does not test the SOURCE: for a GEBV-sourced trait, ng_check_records_from_pheno()
+# itself returns NULL immediately (no check_records supplied --> recs stays NULL too), so the
+# branch still ran and called ng_run_cp_id_col() on check_pheno -- hard-erroring on an
+# unrecognised id column even though nothing in this trait's evaluation needs check_pheno at all.
+# This codebase's own ridge fit never calibrates reliability (R/02_effects.R sets
+# reliability_is_calibrated = FALSE unconditionally), so a GEBV* mean_source is otherwise
+# unreachable end-to-end via the normal per-trait fitting path -- force it by monkey-patching the
+# index stage (restored immediately after, success or failure) to override trait_mean_source
+# right before the check-reference block consumes it. check_pheno is keyed by a column outside
+# ng_run_cp_id_col()'s auto-detect candidate list, with id_col omitted so auto-detection (not an
+# explicit column) is what would fire if check_pheno were consulted.
+orig_index_stage <- ng_cp_pipeline$index
+ng_cp_pipeline$index <- function(ctx) {
+  ctx$trait_mean_source$yield <- "GEBV_uncalibrated"
+  orig_index_stage(ctx)
+}
+cp_gebv_unresolvable <- data.frame(accession_code = c("CHK_A", "CHK_B"), yield = c(1, 2),
+                                   stringsAsFactors = FALSE)
+res_gebv <- tryCatch(
+  do.call(ng_run_cross_prediction, c(args_auto, list(
+    check_geno = chk, check_progeny_size = 200L, check_pheno = cp_gebv_unresolvable,
+    trait_checks = data.frame(trait = "yield", check = "CHK_A", stringsAsFactors = FALSE)))),
+  error = function(e) e)
+ng_cp_pipeline$index <- orig_index_stage   # restore before any stopifnot can abort the script
+
+stopifnot(!inherits(res_gebv, "error"))
+stopifnot(identical(res_gebv$trait_check_reference$source[["yield"]], "GEBV_uncalibrated"))
+# the check's value was predicted from its OWN markers (check_geno), never from check_pheno --
+# proof that check_pheno was correctly never consulted for this trait.
+stopifnot(is.finite(res_gebv$trait_check_reference$values$yield[["CHK_A"]]))
+
+cat("I3 gebv check_pheno gate ok\n")

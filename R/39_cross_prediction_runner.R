@@ -1299,7 +1299,14 @@ ng_cp__stage_index <- function(ctx) {
       # never filled from check_pheno -- ng_check_records_from_pheno() itself returns NULL for
       # a GEBV source, since the value must then come from the check's own markers.
       recs <- check_records[[tr]]
-      if (is.null(recs) && !is.null(check_pheno)) {
+      # A GEBV-sourced trait never consults check_pheno at all -- ng_check_records_from_pheno()
+      # returns NULL immediately for a GEBV source (the value comes from the check's own markers
+      # instead) -- so it must never trigger id-column resolution either. Gating on
+      # `is.null(recs)` alone was NOT sufficient: for a GEBV trait `recs` is also NULL (no
+      # check_records supplied), so the branch below still ran, called ng_run_cp_id_col() on
+      # check_pheno, and hard-errored on an unrecognised id column even though nothing in this
+      # trait's evaluation needed check_pheno at all.
+      if (is.null(recs) && !is.null(check_pheno) && !startsWith(src, "GEBV")) {
         # check_pheno's id column resolves exactly the way every other table's does, and ONLY
         # once we know some trait actually needs check_pheno (this gate) -- resolving eagerly,
         # above the loop, would fail a run over a check_pheno table no trait ever consults (e.g.

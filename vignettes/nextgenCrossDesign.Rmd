@@ -804,20 +804,31 @@ candidate parent's id as a check id is a hard error: give it a distinct id inste
 Pass `trait_checks` as a data frame with `trait` and `check` columns (optional `direction` column
 overrides the trait's default per row). There is no basis argument to choose — the check is always
 resolved onto the *same* scale the run already used for that trait's cross means (a GEBV variant,
-or a supplied phenotypic record via `check_records`), so the reference is never off-scale from the
-axis it is compared against. `check_progeny_size` — the number of progeny you will raise per
-family — is **required** whenever `trait_checks` is supplied; it drives `P(beat check)` directly
-and has no default.
+or a supplied phenotypic record via `check_pheno`/`check_records`), so the reference is never
+off-scale from the axis it is compared against. `check_progeny_size` — the number of progeny you
+will raise per family — is **required** whenever `trait_checks` is supplied; it drives
+`P(beat check)` directly and has no default. Give a phenotypic record for the check whenever you
+have one, via `check_pheno` (same shape as the phenotype file you already supply — an id column
+plus one column per trait) — this is what makes the reference evaluable on every run, including
+one whose resolved `mean_source` for that trait is a phenotypic basis (BLUE/BLUP/adjusted
+phenotype) rather than GEBV, since a phenotypic source never falls back to predicting from
+`check_geno`'s markers.
 
 ```{r trait_checks}
 # Check lines are benchmarks, never crossed: they come in their own genotype matrix.
 chk <- as.matrix(geno[1:2, setdiff(names(geno), "NAME"), drop = FALSE])
 rownames(chk) <- c("CHECK_A", "CHECK_B")
+# check_pheno mirrors the phenotype file's own shape (id column + one column per trait). Whenever
+# the run's mean_source for a trait resolves to a phenotypic basis instead of GEBV, this is what
+# makes the check evaluable -- check_geno alone only covers the GEBV case.
+chk_pheno <- data.frame(NAME = c("CHECK_A", "CHECK_B"),
+                        yield = c(mean(pheno$yield) - 5, mean(pheno$yield) - 8),
+                        stringsAsFactors = FALSE)
 tc <- data.frame(trait = "yield", check = "CHECK_A", stringsAsFactors = FALSE)
 r <- ng_run_cross_prediction(phenotype = pheno, genotype = geno, marker_map = map,
   trait_direction = direction, id_col = "NAME",
   map_position_unit = "bp", bp_per_cm = 1e6, use_ocs = TRUE, n_crosses = 100,
-  trait_checks = tc, check_geno = chk, check_progeny_size = 200,
+  trait_checks = tc, check_geno = chk, check_pheno = chk_pheno, check_progeny_size = 200,
   include_trait_gebv = TRUE)
 # candidate_crosses gains per-trait reference columns -- nothing is dropped:
 head(r$candidate_crosses[, c("parent1", "parent2", "yield_check_value",
@@ -826,11 +837,12 @@ r$trait_check_reference$active          # which check is active for which trait
 r$trait_check_reference$progeny_size    # the family size that produced P(beat check)
 ```
 
-Note the chunk builds `chk` from rows of `geno` but renames them, so the ids do not collide with
-candidate parents — a check id that IS a parent is now a hard error. If a check's value is not
-evaluable on the run's source (a phenotypic source with no supplied `check_records` for that
-check), its reference columns are `NA` — never silently treated as passing or filled from a GEBV
-fallback. Checks require trait-by-trait prediction (they are keyed by trait); one check per trait.
+Note the chunk builds `chk` (and `chk_pheno`'s ids) from rows of `geno` but renames them, so the
+ids do not collide with candidate parents — a check id that IS a parent is now a hard error. If a
+check's value is not evaluable on the run's source (a phenotypic source with no supplied
+`check_pheno`/`check_records` entry for that check), its reference columns are `NA` — never
+silently treated as passing or filled from a GEBV fallback. Checks require trait-by-trait
+prediction (they are keyed by trait); one check per trait.
 With more than one active check, `p_beat_all_checks` reports the joint probability of a progeny
 beating every check at once.
 
