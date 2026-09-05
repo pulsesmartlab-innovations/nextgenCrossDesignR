@@ -284,9 +284,16 @@ ng_cpw_make_selected <- function(crosses, trait_info, parent_use, duplicate_pair
   # sheet. No `keep` vector exists in this function (unlike ng_cpw_candidate_table), so the
   # check columns are appended the same way trait/GEBV columns above are -- copied straight
   # from `crosses` when present, absent entirely on a no-checks run.
+  # M5: check_violation and priority_check_component were previously dropped here -- so once a
+  # breeder opts into priority_check_weight > 0 (I2), the workbook showed a moved tier with no
+  # column explaining why. check_violation is the integration wrong-side count
+  # (ng_attach_check_reference(), R/51); priority_check_component is its rank-normalised
+  # contribution to priority_index (ng_rank_cross_priority(), R/36) -- both intersect() away
+  # cleanly on a no-checks or check_weight = 0 run, same as checks_all_ok/p_beat_all_checks above.
   check_cols <- c(grep("_check_id$|_check_value$|_vs_check$|_check_ok$|_p_beat_check$",
                        names(crosses), value = TRUE),
-                  intersect(c("checks_all_ok", "p_beat_all_checks"), names(crosses)))
+                  intersect(c("checks_all_ok", "p_beat_all_checks", "check_violation",
+                             "priority_check_component"), names(crosses)))
   for (col in check_cols) out[[col]] <- crosses[[col]]
   out
 }
@@ -315,9 +322,12 @@ ng_cpw_candidate_table <- function(scored, selected, include_trait_gebv = FALSE)
   pred_cols <- grep("^pred_", names(scored), value = TRUE)
   keep <- unique(c(keep, pred_cols))
   # Per-trait check-reference columns ride along on the candidate table too, same as Selected_All.
+  # M5: check_violation added (it lives on the scored/candidate table, R/51); priority_check_
+  # component does not (priority ranking is computed only on the selected plan, R/36), but
+  # listing it here too is harmless -- intersect() below drops whatever names(scored) lacks.
   keep <- c(keep, grep("_check_id$|_check_value$|_vs_check$|_check_ok$|_p_beat_check$",
                        names(scored), value = TRUE),
-            "checks_all_ok", "p_beat_all_checks")
+            "checks_all_ok", "p_beat_all_checks", "check_violation", "priority_check_component")
   keep <- intersect(unique(keep), names(scored))
   out <- cbind(out, scored[, keep, drop = FALSE])
   if (isTRUE(include_trait_gebv)) {

@@ -56,6 +56,17 @@ selected_b <- openxlsx::readWorkbook(res_b$output_files$workbook, sheet = "Selec
 stopifnot(all(c("yield_check_id", "yield_check_value", "yield_vs_check",
                 "yield_check_ok", "yield_p_beat_check", "checks_all_ok") %in% names(selected_b)))
 
+# M5: check_violation (also on Candidate_Crosses) and priority_check_component (Selected_All
+# only -- priority ranking runs on the selected plan, not the full candidate table) must reach
+# the workbook. Both exist on a check-enabled run regardless of priority_check_weight (default
+# 0): check_violation is computed unconditionally by ng_attach_check_reference(), and
+# ng_rank_cross_priority() always reports priority_check_component (0-weighted contribution)
+# once ranking runs at all -- see tests/cross_priority.R.
+stopifnot("check_violation" %in% names(selected_b))
+stopifnot("priority_check_component" %in% names(selected_b))
+candidate_b <- openxlsx::readWorkbook(res_b$output_files$workbook, sheet = "Candidate_Crosses", startRow = 3L)
+stopifnot("check_violation" %in% names(candidate_b))
+
 cat("check reference output-files wiring ok\n")
 
 # (c) C2: check_geno supplied with NEITHER check_pheno NOR check_records (the vignette's
