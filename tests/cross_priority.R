@@ -60,4 +60,36 @@ design <- suppressWarnings(ng_design_crosses(
 ))
 stopifnot(nrow(design$plan) == 100L)
 
+# --- INTEGRATION: check_violation as a 4th, OFF-by-default priority component ----------------
+scores_chk <- scores
+scores_chk$check_violation <- rep(c(0L, 1L), length.out = 100L)
+
+# check_weight = 0 (the default) -> tiers/ranks IDENTICAL to a run with no check_violation column
+# at all: an existing run's tiers must never move just because the column now exists.
+ranked_no_col <- ng_rank_cross_priority(scores)
+ranked_col_off <- ng_rank_cross_priority(scores_chk)
+stopifnot(identical(ranked_no_col$priority_rank, ranked_col_off$priority_rank))
+stopifnot(identical(as.character(ranked_no_col$priority_tier), as.character(ranked_col_off$priority_tier)))
+stopifnot(identical(ranked_no_col$priority_index, ranked_col_off$priority_index))
+# reported (for inspection) even at weight 0, but contributes nothing to priority_index/rank/tier
+stopifnot("priority_check_component" %in% names(ranked_col_off))
+stopifnot(identical(ranked_col_off$priority_index, ranked_no_col$priority_index))
+
+# a positive check_weight must NEVER veto (row count / evaluability unchanged), but must shift an
+# otherwise-identical pair so the one failing checks ranks lower.
+pair <- data.frame(
+  parent1 = c("X1", "X2"), parent2 = c("Y1", "Y2"),
+  multi_trait_score = c(5, 5),           # tied score
+  pair_kinship = c(0, 0),                # tied kinship
+  check_violation = c(0L, 2L),           # X1/Y1 passes both checks; X2/Y2 fails both
+  stringsAsFactors = FALSE
+)
+ranked_pair <- ng_rank_cross_priority(pair, check_weight = 1, kinship_weight = 0)
+stopifnot(nrow(ranked_pair) == 2L)        # never a veto -- both rows survive
+stopifnot(identical(ranked_pair$parent1[[1L]], "X1"))    # 0 violations ranks ABOVE 2 violations
+stopifnot(ranked_pair$priority_index[ranked_pair$parent1 == "X1"] >
+          ranked_pair$priority_index[ranked_pair$parent1 == "X2"])
+cat("check_violation priority component: check_weight=0 reproduces the no-column run; a positive\n",
+    "check_weight demotes (never vetoes) an otherwise-identical cross that fails its checks\n")
+
 cat("cross priority tests passed\n")

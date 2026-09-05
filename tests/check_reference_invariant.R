@@ -83,12 +83,15 @@ stopifnot(isTRUE(all.equal(without$plan_summary, with_ck$plan_summary, tolerance
 
 # and the only difference is ADDED columns -- exactly the check-reference columns the
 # interface promises: per trait, <key>_check_id / _check_value / _vs_check / _check_ok /
-# _p_beat_check; globally, checks_all_ok, and (because two traits are checked here)
-# p_beat_all_checks.
+# _p_beat_check; globally, checks_all_ok, p_beat_all_checks (because two traits are checked
+# here), and check_violation (the INTEGRATION dimensionless wrong-side count -- exists ONLY on
+# check runs; priority_check_component / priority_rule stay identical between the two runs
+# because ng_rank_cross_priority()'s check component is gated on check_weight > 0, which neither
+# run here opts into).
 added <- setdiff(names(b), names(a))
 stopifnot(length(added) > 0L)
 allowed_suffix <- c("_check_id", "_check_value", "_vs_check", "_check_ok", "_p_beat_check")
-allowed_exact <- c("checks_all_ok", "p_beat_all_checks")
+allowed_exact <- c("checks_all_ok", "p_beat_all_checks", "check_violation")
 is_allowed <- vapply(added, function(nm) {
   nm %in% allowed_exact ||
     any(vapply(allowed_suffix, function(s) grepl(paste0(s, "$"), nm), logical(1)))

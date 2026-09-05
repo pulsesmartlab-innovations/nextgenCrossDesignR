@@ -19,9 +19,11 @@ ng_rank_cross_priority <- function(crosses,
                                    score_col = "multi_trait_score",
                                    pair_kinship_col = "pair_kinship",
                                    threshold_violation_col = "multi_trait_threshold_violation",
+                                   check_violation_col = "check_violation",
                                    score_weight = 1,
                                    kinship_weight = 0.15,
                                    threshold_weight = 1,
+                                   check_weight = 0,
                                    breaks = c(0.10, 0.35, 0.70, 1.00),
                                    labels = c("highly_priority", "priority", "medium_priority", "low_priority"),
                                    sort = TRUE) {
@@ -36,15 +38,18 @@ ng_rank_cross_priority <- function(crosses,
   score_weight <- suppressWarnings(as.numeric(score_weight[[1L]]))
   kinship_weight <- suppressWarnings(as.numeric(kinship_weight[[1L]]))
   threshold_weight <- suppressWarnings(as.numeric(threshold_weight[[1L]]))
+  check_weight <- suppressWarnings(as.numeric(check_weight[[1L]]))
   if (!is.finite(score_weight) || score_weight <= 0) ng_stop("score_weight must be positive")
   if (!is.finite(kinship_weight) || kinship_weight < 0) ng_stop("kinship_weight must be >= 0")
   if (!is.finite(threshold_weight) || threshold_weight < 0) ng_stop("threshold_weight must be >= 0")
+  if (!is.finite(check_weight) || check_weight < 0) ng_stop("check_weight must be >= 0")
 
   score <- suppressWarnings(as.numeric(crosses[[score_col]]))
   if (!any(is.finite(score))) ng_stop("score_col contains no finite values")
   score_component <- ng_priority_component(score, bigger_is_better = TRUE)
   kinship_component <- rep(0, nrow(crosses))
   threshold_component <- rep(0, nrow(crosses))
+  check_component <- rep(0, nrow(crosses))
 
   has_kinship <- nzchar(pair_kinship_col) && pair_kinship_col %in% names(crosses)
   if (isTRUE(has_kinship)) {
@@ -54,10 +59,31 @@ ng_rank_cross_priority <- function(crosses,
   if (isTRUE(has_threshold)) {
     threshold_component <- ng_priority_component(crosses[[threshold_violation_col]], bigger_is_better = FALSE)
   }
+  # The check is a REFERENCE, not a selection criterion (package owner's rule): it is one
+  # optional, weighted component of the same shape as kinship/threshold, defaulting to weight 0
+  # so an existing run's tiers never move unless the breeder opts in. check_violation itself is
+  # the dimensionless, NA-aware wrong-side COUNT ng_attach_check_reference() computes (R/51);
+  # fewer violations is better, exactly like threshold_violation_col. It never vetoes a cross --
+  # it only shifts the blended index, same as threshold_component.
+  #
+  # Gated on check_weight > 0, NOT merely on column presence: check_violation exists on every
+  # check-enabled run regardless of check_weight (D-series feature), but this component (and
+  # priority_rule's naming of it) must report EXACTLY as if the column were absent whenever the
+  # caller has not opted in -- otherwise a check-enabled run at the default check_weight = 0 would
+  # report a different priority_check_component / priority_rule than a run with no checks at all,
+  # even though priority_index/rank/tier are unchanged. That distinction (a check run vs a
+  # no-check run differing ONLY in check_violation and the columns ng_attach_check_reference()
+  # itself adds) is exactly what check_reference_invariant.R holds the whole feature to.
+  has_check <- isTRUE(check_weight > 0) &&
+    nzchar(check_violation_col) && check_violation_col %in% names(crosses)
+  if (isTRUE(has_check)) {
+    check_component <- ng_priority_component(crosses[[check_violation_col]], bigger_is_better = FALSE)
+  }
 
   index <- score_weight * score_component +
     kinship_weight * kinship_component +
-    threshold_weight * threshold_component
+    threshold_weight * threshold_component +
+    check_weight * check_component
   index[!is.finite(index)] <- min(index[is.finite(index)], na.rm = TRUE) - 1
   tie_kinship <- if (isTRUE(has_kinship)) suppressWarnings(as.numeric(crosses[[pair_kinship_col]])) else rep(0, nrow(crosses))
   tie_threshold <- if (isTRUE(has_threshold)) suppressWarnings(as.numeric(crosses[[threshold_violation_col]])) else rep(0, nrow(crosses))
@@ -82,14 +108,17 @@ ng_rank_cross_priority <- function(crosses,
   out$priority_score_component <- as.numeric(score_component)
   out$priority_kinship_component <- as.numeric(kinship_component)
   out$priority_threshold_component <- as.numeric(threshold_component)
+  out$priority_check_component <- as.numeric(check_component)
   out$priority_rule <- sprintf(
-    "score_col=%s; score_weight=%.4g; kinship_col=%s; kinship_weight=%.4g; threshold_col=%s; threshold_weight=%.4g; breaks=%s",
+    "score_col=%s; score_weight=%.4g; kinship_col=%s; kinship_weight=%.4g; threshold_col=%s; threshold_weight=%.4g; check_col=%s; check_weight=%.4g; breaks=%s",
     score_col,
     score_weight,
     if (isTRUE(has_kinship)) pair_kinship_col else "none",
     kinship_weight,
     if (isTRUE(has_threshold)) threshold_violation_col else "none",
     threshold_weight,
+    if (isTRUE(has_check)) check_violation_col else "none",
+    check_weight,
     paste(format(breaks, trim = TRUE), collapse = "/")
   )
   if (isTRUE(sort)) out <- out[order(out$priority_rank), , drop = FALSE]
