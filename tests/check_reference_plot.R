@@ -130,24 +130,33 @@ stopifnot(abs(ng_check_line_value(ref_3chk, meta_econ_3trait, trait_value_metric
 # rank placement must compare it against the candidates' "_mean" column, never "_value"
 # (mean +/- i*sigma under the default metric) -- see the REAL PIPELINE section below for the
 # worked example of what ranking against the wrong column actually does to the result.
+#
+# D4: the rank axis (z = ng_rank_normalize(<trait>_value)) and the check's rank placement (via
+# `_mean`) are the SAME axis only when trait_value_metric == "mean" (then `_value` IS `_mean`).
+# Every call below therefore passes trait_value_metric = "mean" explicitly to exercise the rank
+# path's math; the refusal-otherwise behaviour (the fix itself) has its own tests further down,
+# mirroring how the linear-family tests above are structured.
 rank_scores <- data.frame(yield_mean = c(8, 9, 10, 11, 12, 20, 21))
 rank_traits <- data.frame(trait = "yield", column = "yield_value", direction = "maximize",
                           stringsAsFactors = FALSE)
 meta_rank <- list(family = "rank_threshold", weights = c(yield = 1),
                   value_signs = c(yield = 1), traits = rank_traits)
-cl_rank <- ng_check_line_value(ref, meta_rank, candidate_scores = rank_scores)
+cl_rank <- ng_check_line_value(ref, meta_rank, candidate_scores = rank_scores,
+                               trait_value_metric = "mean")
 manual_rank <- ng_check_rank_axis_z(rank_scores$yield_mean, bigger_is_better = TRUE, tau_raw = 6)
 stopifnot(abs(cl_rank - manual_rank) < 1e-10)
 
 # Rank family but no candidate_scores supplied -> NA (this is exactly what a caller building
 # multi_trait_meta by hand, or an older stored result, would hit).
-stopifnot(is.na(ng_check_line_value(ref, meta_rank)))
+stopifnot(is.na(ng_check_line_value(ref, meta_rank, trait_value_metric = "mean")))
 
 # "threshold" and "weighted_index" families take the identical rank path.
 meta_rank2 <- meta_rank; meta_rank2$family <- "threshold"
-stopifnot(abs(ng_check_line_value(ref, meta_rank2, candidate_scores = rank_scores) - manual_rank) < 1e-10)
+stopifnot(abs(ng_check_line_value(ref, meta_rank2, candidate_scores = rank_scores,
+                                  trait_value_metric = "mean") - manual_rank) < 1e-10)
 meta_rank3 <- meta_rank; meta_rank3$family <- "weighted_index"
-stopifnot(abs(ng_check_line_value(ref, meta_rank3, candidate_scores = rank_scores) - manual_rank) < 1e-10)
+stopifnot(abs(ng_check_line_value(ref, meta_rank3, candidate_scores = rank_scores,
+                                  trait_value_metric = "mean") - manual_rank) < 1e-10)
 
 # Any other family, or a meta with no family/method at all -> NA.
 stopifnot(is.na(ng_check_line_value(ref, list(family = "other"), trait = "yield")))
@@ -158,7 +167,46 @@ stopifnot(is.na(ng_check_line_value(ref, list())))
 ref3 <- ref; ref3$values$yield <- c(CHK_A = NA_real_)
 stopifnot(is.na(ng_check_line_value(ref3, meta_econ_single, trait = "yield",
                                     trait_value_metric = "mean")))
-stopifnot(is.na(ng_check_line_value(ref3, meta_rank, candidate_scores = rank_scores)))
+stopifnot(is.na(ng_check_line_value(ref3, meta_rank, candidate_scores = rank_scores,
+                                    trait_value_metric = "mean")))
+
+# --- D4 fix itself: rank family REFUSES (NA, draws nothing) whenever trait_value_metric is not
+# "mean" -- a check has no usefulness (it is never crossed, so it has no variance), and
+# `<trait>_value` is usefulness under every other metric, a distribution the check cannot be
+# placed on exactly. This is the same refusal the economic branch already has (tested above);
+# before this fix the rank branch instead silently drew a line on the WRONG axis. ----------------
+stopifnot(is.na(ng_check_line_value(ref, meta_rank, candidate_scores = rank_scores)))                    # metric omitted
+stopifnot(is.na(ng_check_line_value(ref, meta_rank, candidate_scores = rank_scores,
+                                    trait_value_metric = "usefulness")))                                 # the DEFAULT metric
+stopifnot(is.na(ng_check_line_value(ref, meta_rank, candidate_scores = rank_scores,
+                                    trait_value_metric = "pmv")))
+stopifnot(is.na(ng_check_line_value(ref, meta_rank2, candidate_scores = rank_scores,
+                                    trait_value_metric = "vpm")))
+stopifnot(is.na(ng_check_line_value(ref, meta_rank3, candidate_scores = rank_scores,
+                                    trait_value_metric = "parent_distance")))
+
+# --- D5 fix: a check on only SOME of the rank family's weighted traits refuses (NA) rather than
+# silently imputing the omitted traits' terms at 0 (the rank-normal axis's own mean) -- mirrors
+# the economic branch's partial-coverage refusal tested above. ----------------------------------
+rank_scores2 <- data.frame(yield_mean = c(8, 9, 10, 11, 12, 20, 21),
+                           protein_mean = c(2, 3, 4, 5, 6, 7, 8))
+meta_rank_2trait <- list(family = "rank_threshold", weights = c(yield = 0.6, protein = 0.4),
+                         value_signs = c(yield = 1, protein = 1),
+                         traits = data.frame(trait = c("yield", "protein"),
+                                             column = c("yield_value", "protein_value"),
+                                             direction = "maximize", stringsAsFactors = FALSE))
+stopifnot(is.na(ng_check_line_value(ref, meta_rank_2trait, trait = "yield",
+                                    candidate_scores = rank_scores2, trait_value_metric = "mean")))
+# ...but a check on EVERY weighted trait is fine.
+ref_2chk <- list(active = data.frame(trait = c("yield", "protein"), check = c("CHK_A", "CHK_A"),
+                                     reject_if = "below", stringsAsFactors = FALSE),
+                 values = list(yield = c(CHK_A = 6), protein = c(CHK_A = 4)),
+                 source = c(yield = "GEBV", protein = "GEBV"))
+cl_2trait <- ng_check_line_value(ref_2chk, meta_rank_2trait, candidate_scores = rank_scores2,
+                                 trait_value_metric = "mean")
+manual_yield <- ng_check_rank_axis_z(rank_scores2$yield_mean, bigger_is_better = TRUE, tau_raw = 6)
+manual_protein <- ng_check_rank_axis_z(rank_scores2$protein_mean, bigger_is_better = TRUE, tau_raw = 4)
+stopifnot(abs(cl_2trait - (0.6 * manual_yield + 0.4 * manual_protein)) < 1e-10)
 
 # ---------------------------------------------------------------------------
 # ng_check_line_label(): names the check id, or names the blend when the traits contributing to
@@ -271,7 +319,7 @@ rp_pheno <- data.frame(id = ids, yield = rnorm(n_p, 10, 2), stringsAsFactors = F
 rp_chk <- matrix(2L * rbinom(2 * n_m, 1, 0.4), nrow = 2,
                  dimnames = list(c("CHK_A", "CHK_B"), markers))
 rp_chk_records <- list(yield = list(adjusted_pheno = c(CHK_A = 11.5, CHK_B = 9.25)))
-rp_res <- ng_run_cross_prediction(
+rp_args <- list(
   genotype = genotype, phenotype = rp_pheno, marker_map = marker_map,
   map_marker_col = "marker", map_chr_col = "chr", map_pos_col = "bp",
   bp_per_cm = 1e6, id_col = "id",
@@ -280,11 +328,32 @@ rp_res <- ng_run_cross_prediction(
   check_geno = rp_chk, check_progeny_size = 200L, check_records = rp_chk_records,
   trait_checks = data.frame(trait = "yield", check = "CHK_A", stringsAsFactors = FALSE))
 
+# D4: the rank-family line requires trait_value_metric == "mean" (the ONLY case where
+# `<trait>_value`, what the candidates are actually ranked on, is identical to `<trait>_mean`,
+# what the check's tau is on). Run once with that override for the tight-agreement check below...
+rp_res <- do.call(ng_run_cross_prediction, c(rp_args, list(trait_value_metric = "mean")))
+
 rp_mt <- attr(rp_res$candidate_crosses, "multi_trait")
 stopifnot(identical(rp_mt$family, "rank_threshold"))  # confirms this hits the rank path, not value_z
 rp_cl <- ng_check_line_value(rp_res$trait_check_reference, rp_mt,
-                             candidate_scores = rp_res$candidate_crosses)
+                             candidate_scores = rp_res$candidate_crosses,
+                             trait_value_metric = "mean")
 stopifnot(is.finite(rp_cl))
+
+# ...and once more with the run's DEFAULT trait_value_metric ("usefulness", mean +/- i*sigma):
+# before the D4 fix this silently placed the line on the wrong axis (the 22% wrong-side rate the
+# QG review measured); after the fix it draws NOTHING (NA) rather than a misplaced line.
+rp_res_default <- do.call(ng_run_cross_prediction, rp_args)
+rp_mt_default <- attr(rp_res_default$candidate_crosses, "multi_trait")
+stopifnot(identical(rp_mt_default$family, "rank_threshold"))
+rp_cl_default <- ng_check_line_value(rp_res_default$trait_check_reference, rp_mt_default,
+                                     candidate_scores = rp_res_default$candidate_crosses,
+                                     trait_value_metric = "usefulness")
+stopifnot(is.na(rp_cl_default))
+# same result whether trait_value_metric is passed explicitly as the run's own default or omitted
+stopifnot(is.na(ng_check_line_value(rp_res_default$trait_check_reference, rp_mt_default,
+                                    candidate_scores = rp_res_default$candidate_crosses)))
+cat("task D4 ok (rank-family check line is NA under the default trait_value_metric, never misplaced)\n")
 
 # Independent recomputation -- hand-rolled rank/qnorm arithmetic, NOT a call to the package's
 # ng_check_rank_axis_z() helper, so this genuinely cross-checks the implementation rather than

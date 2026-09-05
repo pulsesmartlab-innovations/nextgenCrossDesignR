@@ -329,10 +329,26 @@ ng_check_line_value <- function(trait_check_reference, multi_trait_meta = NULL, 
     return(sum(v * as.numeric(coef_vec[tr])))
   }
   if (family %in% c("rank_threshold", "threshold", "weighted_index")) {
+    # D4: candidates' axis position for this family is z = ng_rank_normalize(<trait>_value)
+    # (R/19_multi_trait_selection.R:568). `<trait>_value` is USEFULNESS (mean +/- i*sigma) under
+    # the default trait_value_metric, a DIFFERENT distribution from the check, which has no
+    # usefulness at all (a check is never crossed, so it has no variance -- usefulness needs
+    # one). ng_check_rank_axis_z() below only ever ranks the check's (mean-scale) tau against the
+    # candidates' `_mean` column, which is only the SAME axis the candidates were ranked on when
+    # trait_value_metric == "mean" (then `_value` IS `_mean`, so rank(_value) == rank(_mean)
+    # exactly). Every other metric draws no line, matching the gate the economic branch above
+    # already applies (line 315) for the identical reason.
+    metric <- tolower(as.character(if (is.null(trait_value_metric)) "" else trait_value_metric[[1L]]))
+    if (!identical(metric, "mean")) return(NA_real_)
     w <- multi_trait_meta$weights
     if (is.null(w) || !length(w)) return(NA_real_)
     tr <- intersect(tr_list, names(w))
     if (!length(tr)) return(NA_real_)
+    # D5: mirrors the economic branch's refusal (line 326) -- a check on only SOME of the
+    # weighted traits would silently drop the omitted traits' terms from the sum, which is
+    # mathematically identical to imputing each missing trait's z at exactly 0 (the rank-normal
+    # axis's own mean), a plausible-looking substitute for a position the check does not have.
+    if (length(tr) < length(w)) return(NA_real_)
     v <- vapply(tr, z_of_rank, numeric(1))
     if (any(!is.finite(v))) return(NA_real_)
     return(sum(v * as.numeric(w[tr])))
