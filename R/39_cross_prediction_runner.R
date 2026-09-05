@@ -1041,6 +1041,13 @@ ng_cp__stage_predict <- function(ctx) {
         column = column,
         direction = trait_spec$direction[[i]],
         value_column = paste0(clean_trait, "_value"),
+        # RESERVED, deliberately NA: a PEV-based reliability (accuracy^2 against true breeding
+        # value) is not available in this package. R/02_effects.R:117-119 refuses to populate
+        # one, because the quantities it CAN compute are phenotype predictive diagnostics --
+        # a different thing: CV R^2 is bounded above by h^2, reliability by 1. The honest
+        # measure is the adjacent cv_predictive_r2; do NOT copy it here, that is exactly the
+        # conflation R/02 refuses. This slot is meaningful only if a calibrated reliability
+        # ever enters the package (see the deferred mean_source work).
         marker_effect_reliability = NA_real_,
         cv_predictive_r2 = fit$cv_predictive_r2,
         marker_effect_training_n = as.integer(n_effect_training),
@@ -1641,6 +1648,9 @@ ng_cp__stage_rank <- function(ctx) {
           list(trait = trait_spec$trait[[k]],
                direction = trait_spec$direction[[k]],
                weight = unname(ib$w[[k]]),
+               # RESERVED, deliberately NA -- see the note at the effect_summary construction
+               # above. No PEV-based reliability exists here, and the adjacent cv_predictive_r2
+               # is a phenotype diagnostic, not a substitute for it.
                marker_effect_reliability = NA_real_,
                cv_predictive_r2 = unname(pred_r2[[k]]),
                mean_variance_share = unname(var_share[[k]]),

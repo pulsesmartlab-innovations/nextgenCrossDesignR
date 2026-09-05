@@ -1,5 +1,13 @@
 ng_stop <- function(..., call. = FALSE) stop(paste0(...), call. = call.)
 
+# Null-coalescing operator. `%||%` only entered base R in 4.4.0, but DESCRIPTION declares
+# R (>= 4.1.0), and the operator is used across the package -- including R/03_metrics.R, which
+# sits in ng_score_crosses()'s core scoring path. Without this definition the package fails
+# immediately on R 4.1-4.3 and is silently fine on 4.4+, so the breakage is invisible to anyone
+# developing on a current R. Defining it here shadows the base version identically on 4.4+.
+`%||%` <- function(a, b) if (is.null(a)) b else a
+
+
 ng_as_numeric_matrix <- function(x, name = deparse(substitute(x))) {
   x <- as.matrix(x)
   storage.mode(x) <- "double"
