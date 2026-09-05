@@ -65,8 +65,10 @@ ng_align_check_geno <- function(check_geno, marker_names, ploidy = 2L) {
     ng_stop("check_geno must have marker column names to verify alignment with the parent ",
             "marker set; an unnamed matrix cannot be checked for allele-order agreement")
   }
+  # M6: no separate rownames check needed here -- ng_as_numeric_matrix() (R/00_utils.R) already
+  # errors "check_geno must have row names" one line above whenever rownames(check_geno) is NULL,
+  # so a second check for the same condition below it could never fire.
   check_geno <- ng_as_numeric_matrix(check_geno, "check_geno")
-  if (is.null(rownames(check_geno))) ng_stop("check_geno must have check ids as rownames")
   miss <- setdiff(marker_names, colnames(check_geno))
   if (length(miss)) {
     ng_stop(sprintf(

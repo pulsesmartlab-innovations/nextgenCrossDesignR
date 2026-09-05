@@ -647,7 +647,14 @@ ng_run_cp_output_files <- function(output_dir,
       path = files$priority_score_vs_kinship_png,
       stringsAsFactors = FALSE
     )
-    if (!is.null(trait_check_reference) && nrow(trait_check_reference$active) > 1L) {
+    # M1 fix: the main scatter's check line is gated (inside ng_check_line_value()) on
+    # trait_value_metric == "mean" (D4) -- so under the package default ("usefulness") it draws
+    # no line at all. The per-trait panel's y-axis is always <trait>_mean (never the ranking
+    # metric), so it is commensurable with the check under EVERY trait_value_metric and is
+    # exactly the right fallback -- including for a single checked trait, previously excluded by
+    # requiring nrow(active) > 1L (leaving a default single-check run with no check visual
+    # whatsoever). Draw it whenever any check is active, regardless of count.
+    if (!is.null(trait_check_reference) && nrow(trait_check_reference$active) >= 1L) {
       panel_path <- file.path(output_dir, "check_panels.png")
       ng_plot_check_panels(candidate_crosses, trait_check_reference, output_path = panel_path)
       files$check_panels_png <- normalizePath(panel_path, winslash = "/", mustWork = TRUE)
@@ -1086,7 +1093,8 @@ ng_cp__stage_predict <- function(ctx) {
     }
     cross_table[[paste0(clean_trait, "_value")]] <- item$value
     cross_table[[paste0(clean_trait, "_mean")]] <- scored_trait$cross_mean_blend
-    if (!exists("trait_mean_source", inherits = FALSE)) trait_mean_source <- list()
+    # M6: trait_mean_source is already initialised unconditionally to list() right before this
+    # loop begins, so this guard could never fire.
     trait_mean_source[[trait]] <- scored_trait$mean_source[[1L]]
     cross_table[[paste0(clean_trait, "_pmv")]] <- scored_trait$pmv
     cross_table[[paste0(clean_trait, "_pmv_fast")]] <- scored_trait$pmv

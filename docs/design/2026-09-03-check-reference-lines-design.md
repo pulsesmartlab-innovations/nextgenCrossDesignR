@@ -234,6 +234,19 @@ One axis cannot carry N check lines honestly. Multi-trait checks get **per-trait
 multiples**: one facet per trait with a check, each with its own line on its own scale, plus
 the single `p_beat_all_checks` summary column.
 
+**Implementation note (M1, post-ship):** the rank-based quantile placement above (and the
+`economic_index`/`desired_gain` affine mapping) is what was DESIGNED, but what actually shipped
+(D4, commit 7d2e432) is more conservative: the main scatter's line is drawn only when
+`trait_value_metric == "mean"`, and refuses (no line) under every other metric -- including
+`"usefulness"`, the package default -- rather than attempting the quantile/affine placement this
+section describes. The measured ~22% misplacement rate the D4 fix cites is for exactly that
+attempted placement, which is why it was pulled rather than shipped as designed. Consequently the
+per-trait panel above is not merely a "multi-trait" convenience: since its y-axis is always
+`<trait>_mean` (never the ranking metric), it is commensurable with the check under every
+`trait_value_metric`, and is drawn for ANY number of active checks (including exactly one) -- it
+is the fallback that makes a check visible at all on a default (non-"mean"-metric) run, not an
+enhancement reserved for multi-trait runs.
+
 ## 9. Excel output
 
 **New `Checks` sheet** -- the reference itself, one row per trait:
@@ -306,10 +319,12 @@ This is the primary regression test. Additional tests:
    GEBV substituted against a BLUE axis.
 7. `p_beat_check` for a `decrease` trait equals the hand-computed
    `1 - Phi((mu - tau)/sigma)^k`.
-8. Rank-based index -> line drawn by quantile placement of the check among the candidates' own
-   raw values (section 8), mapped through the same rank-normal standardisation; NA/no line only
-   when the required inputs (candidate scores, resolved weights, a finite check value) are
-   missing, never merely because the family is rank-based.
+8. **Superseded by the shipped D4 behaviour (see the implementation note in section 8):** the
+   main scatter's check line is drawn only when `trait_value_metric == "mean"`; every other
+   metric (rank-based or not -- including `"usefulness"`, the default) refuses (`NA`, no line),
+   not merely when the quantile-placement inputs happen to be missing. The per-trait small-
+   multiples panel is the fallback for every other metric, at any number of active checks
+   (including one), since its axis is always the trait mean.
 9. Multi-trait: `p_beat_all_checks` matches `ng_p_superior_progeny_multitrait()` with
    `tau_lower`/`tau_upper` filled by direction.
 10. Excel `Checks` sheet present and populated; per-trait columns on every cross sheet.

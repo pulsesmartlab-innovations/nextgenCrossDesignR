@@ -90,3 +90,20 @@ stopifnot(is.na(checks_sheet_c$value[[1L]]))
 stopifnot(identical(checks_sheet_c$n_crosses_on_wrong_side[[1L]], "not evaluable"))
 
 cat("check reference not-evaluable diagnostic + workbook wiring ok\n")
+
+# --- M1: a default (single-check) run must still get a check visual -------------------------
+# Previously the per-trait check panel was gated on nrow(trait_check_reference$active) > 1L
+# (multi-trait only), and the main scatter's line is itself gated (D4, inside
+# ng_check_line_value()) on trait_value_metric == "mean" -- so a run with exactly one active
+# check and the package default trait_value_metric ("usefulness") got NEITHER visual. Reuse
+# scenario (b)'s single yield check, this time with write_figures = TRUE.
+out_dir_d <- tempfile("check_ref_outputs_d_")
+args_d <- modifyList(args, list(write_figures = TRUE))
+res_d <- do.call(ng_run_cross_prediction, c(args_d, list(
+  output_dir = out_dir_d,
+  check_geno = chk, check_progeny_size = 200L, check_records = chk_records,
+  trait_checks = data.frame(trait = "yield", check = "CHK_A", stringsAsFactors = FALSE))))
+stopifnot(!is.null(res_d$output_files$check_panels_png))
+stopifnot(file.exists(res_d$output_files$check_panels_png))
+
+cat("M1 single-check panel ok\n")

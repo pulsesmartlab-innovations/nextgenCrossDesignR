@@ -295,7 +295,9 @@ ng_check_line_value <- function(trait_check_reference, multi_trait_meta = NULL, 
     if (is.na(idx)) return(NA_real_)
     key <- if ("column_key" %in% names(spec)) spec$column_key[[match(tr, spec$trait)]] else tr
     col <- paste0(key, "_mean")
-    if (is.null(col) || !(col %in% names(candidate_scores))) return(NA_real_)
+    # M6: `col` is always a non-NULL character (paste0() never returns NULL), so `is.null(col) ||`
+    # was dead; the presence check is the only one that can ever fire.
+    if (!(col %in% names(candidate_scores))) return(NA_real_)
     sign_i <- suppressWarnings(as.numeric(signs[[tr]]))
     if (!is.finite(sign_i)) return(NA_real_)
     x <- suppressWarnings(as.numeric(candidate_scores[[col]]))
@@ -381,7 +383,15 @@ ng_plot_check_panels <- function(scored, trait_check_reference, output_path = NU
   if (is.null(trait_check_reference)) return(invisible(NULL))
   spec <- as.data.frame(trait_check_reference$active, stringsAsFactors = FALSE)
   key <- if ("column_key" %in% names(spec)) as.character(spec$column_key) else as.character(spec$trait)
-  keep <- paste0(key, "_mean") %in% names(scored)
+  # M6 fix: `keep` must gate on every column the loop below actually reads
+  # (<key>_mean, <key>_check_value, <key>_check_ok), not just <key>_mean -- otherwise a trait
+  # with a _mean column but no _check_value/_check_ok (reachable by a direct caller of this
+  # exported function, never via the runner) hits `scored[[paste0(kk, "_check_value")]][[1L]]`
+  # ("subscript out of bounds" on a zero-length result) or col2rgb(logical(0)) inside
+  # ng_priority_plot_alpha_col() for _check_ok.
+  keep <- paste0(key, "_mean") %in% names(scored) &
+    paste0(key, "_check_value") %in% names(scored) &
+    paste0(key, "_check_ok") %in% names(scored)
   # traits, key AND checks must all be filtered by `keep` together -- indexing the
   # unfiltered spec inside the loop mislabels every panel after a dropped trait.
   traits <- spec$trait[keep]; key <- key[keep]; checks <- as.character(spec$check)[keep]
