@@ -106,10 +106,16 @@ names(check_records) <- traits
 trait_checks <- data.frame(trait = traits, check = unname(CHECK_FOR[traits]),
                            stringsAsFactors = FALSE)
 
+# parent_type = "ril", not the default "inbred". These lines carry ~0.8% heterozygous markers
+# overall (worst line 3.3%), which trips the inbred gate: that gate is inbred_marker_fraction
+# = 0.02, NOT inbred_tolerance = 0.05, so 9 of 154 parents exceed it. Residual heterozygosity at
+# a few loci is exactly what RILs retain after finite selfing, and the QC message itself names
+# "ril" as the remedy. This is a property of the germplasm, not a workaround: declaring the
+# material honestly is what lets the a'Ra kernel model it correctly.
 base_args <- list(
   genotype = parent_geno, phenotype = parent_pheno, marker_map = map,
   trait_direction = dir_df, id_col = "NAME", bp_per_cm = 1e6,
-  n_crosses = N_CROSSES, seed = 11L)
+  parent_type = "ril", n_crosses = N_CROSSES, seed = 11L)
 
 # ---- run, with and without ---------------------------------------------------
 say("running WITHOUT checks ...")
