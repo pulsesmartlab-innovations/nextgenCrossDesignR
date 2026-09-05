@@ -108,3 +108,30 @@ res_prec <- do.call(ng_run_cross_prediction, c(args, list(
 stopifnot(abs(res_prec$trait_check_reference$values$yield[["CHK_A"]] - 99) < 1e-8)
 
 cat("task 10 runner ok\n")
+
+# --- Task 10 fix round 1: check_pheno's id column resolves like every other table's ----------
+# id_col OMITTED entirely: check_pheno keyed by NAME (the column real project phenotype files
+# use, e.g. test_data/rich_pheno_new.csv) must still auto-detect and produce real check values,
+# the same way phenotype/genotype auto-detect their own id column when id_col is not given.
+args_auto <- args
+args_auto$id_col <- NULL
+cp_name <- data.frame(NAME = c("CHK_A", "CHK_B"), yield = c(15.0, 7.0), stringsAsFactors = FALSE)
+res_auto <- do.call(ng_run_cross_prediction, c(args_auto, list(
+  check_geno = chk, check_progeny_size = 200L, check_pheno = cp_name,
+  trait_checks = data.frame(trait = "yield", check = "CHK_A", stringsAsFactors = FALSE))))
+stopifnot(identical(res_auto$trait_check_reference$source[["yield"]], "adjusted_pheno"))
+stopifnot(abs(res_auto$trait_check_reference$values$yield[["CHK_A"]] - 15.0) < 1e-8)
+ct_auto <- res_auto$candidate_crosses
+stopifnot(all(is.finite(ct_auto$yield_check_value)))
+
+# id_col GIVEN explicitly but absent from check_pheno: must still fail with the existing,
+# clear message -- auto-detection must never mask a genuinely wrong explicit column name.
+cp_wrong_col <- data.frame(NAME = c("CHK_A", "CHK_B"), yield = c(1, 2), stringsAsFactors = FALSE)
+err_idcol <- tryCatch(do.call(ng_run_cross_prediction, c(args, list(
+  check_geno = chk, check_progeny_size = 200L, check_pheno = cp_wrong_col,
+  trait_checks = data.frame(trait = "yield", check = "CHK_A", stringsAsFactors = FALSE)))),
+  error = function(e) conditionMessage(e))
+stopifnot(is.character(err_idcol), grepl("check_pheno", err_idcol),
+          grepl("missing its id column", err_idcol), grepl("id", err_idcol))
+
+cat("task 10 fix round 1 ok\n")

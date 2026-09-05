@@ -1272,6 +1272,19 @@ ng_cp__stage_index <- function(ctx) {
       ng_stop("trait_checks names check line(s) absent from check_geno: ",
               paste(missing_chk, collapse = ", "))
     }
+    # check_pheno's id column resolves exactly the way every other table's does: an explicit
+    # id_col is passed straight through unchanged (so a missing explicit column still hits
+    # ng_check_records_from_pheno()'s own check and its existing message, unaltered); an omitted
+    # id_col auto-detects via ng_run_cp_id_col()'s own candidate list (parent, parent_id, id,
+    # name, line, entry, NAME) -- the SAME list and function the phenotype/genotype tables use,
+    # not a second hand-rolled copy of it.
+    check_pheno_id_col <- if (is.null(check_pheno)) {
+      NULL
+    } else if (is.null(id_col)) {
+      ng_run_cp_id_col(check_pheno, NULL, "check_pheno")
+    } else {
+      id_col
+    }
     check_values <- list(); check_source <- character(0)
     for (tr in unique(tc_spec$trait)) {
       if (!(tr %in% names(effects_list))) {
@@ -1289,7 +1302,7 @@ ng_cp__stage_index <- function(ctx) {
       recs <- check_records[[tr]]
       if (is.null(recs) && !is.null(check_pheno)) {
         col <- trait_spec$column[match(tr, trait_spec$trait)]
-        conv <- ng_check_records_from_pheno(check_pheno, id_col,
+        conv <- ng_check_records_from_pheno(check_pheno, check_pheno_id_col,
                                             stats::setNames(list(col), tr), src)
         recs <- if (is.null(conv)) NULL else conv[[tr]]
       }
