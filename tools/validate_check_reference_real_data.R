@@ -79,18 +79,39 @@ ok(all(dir_df$direction == "decrease"),
 is_check <- rownames(geno_all) %in% CHECKS
 ok(sum(is_check) == length(CHECKS), "all four named checks found in the genotype table")
 
+# Residual heterozygosity: the package gates on inbred_marker_fraction = 0.02 (NOT
+# inbred_tolerance = 0.05), and a handful of these lines exceed it. parent_type = "ril" is the
+# honest label for them, but that path additionally requires phased haplotypes, which this
+# dataset does not carry -- without them the inbred a'Ra kernel is biased low at the het loci,
+# and the package refuses rather than quietly under-reporting variance.
+#
+# For a validation harness the right move is to narrow the material, not to relax the model:
+# drop the lines above the gate and run the remainder as genuinely inbred. This harness is
+# testing the CHECK REFERENCE feature, not the residual-het variance model. A production run on
+# the full set needs either phased haplotypes or a decision about those lines' genotype quality.
+HET_GATE <- 0.02
+parent_ids_all <- rownames(geno_all)[!is_check]
+het_frac <- rowMeans(geno_all[!is_check, , drop = FALSE] == 1, na.rm = TRUE)
+too_het <- names(het_frac)[het_frac > HET_GATE]
+if (length(too_het)) {
+  say("note: dropping %d parent(s) above the %.2f het-marker gate (max %.3f): %s",
+      length(too_het), HET_GATE, max(het_frac), paste(too_het, collapse = ", "))
+}
+keep_parent <- setdiff(parent_ids_all, too_het)
+
 # The candidate parents go in as a DATA FRAME with an explicit id column: passing a bare matrix
 # loses the rownames, because ng_run_cp_canonical_id_table() coerces with as.data.frame().
 # check_geno stays a matrix -- ng_align_check_geno() wants rownames and reads them directly.
-parent_geno <- data.frame(NAME = rownames(geno_all)[!is_check],
-                          geno_all[!is_check, , drop = FALSE],
+parent_geno <- data.frame(NAME = keep_parent,
+                          geno_all[keep_parent, , drop = FALSE],
                           check.names = FALSE, stringsAsFactors = FALSE)
 check_geno  <- geno_all[is_check, , drop = FALSE]
-parent_pheno <- pheno_raw[!(pheno_raw$NAME %in% CHECKS), , drop = FALSE]
+parent_pheno <- pheno_raw[pheno_raw$NAME %in% keep_parent, , drop = FALSE]
 check_pheno  <- pheno_raw[  pheno_raw$NAME %in% CHECKS,  , drop = FALSE]
 rownames(parent_pheno) <- parent_pheno$NAME
 
-say("split: %d candidate parents, %d check lines", nrow(parent_geno), nrow(check_geno))
+say("split: %d candidate parents (of %d non-check lines), %d check lines",
+    nrow(parent_geno), length(parent_ids_all), nrow(check_geno))
 
 # The run's mean source is resolved per trait; supply the checks' own values on the phenotypic
 # sources so the comparison is apples-to-apples whichever one the run picks. Task 10 added
@@ -106,16 +127,12 @@ names(check_records) <- traits
 trait_checks <- data.frame(trait = traits, check = unname(CHECK_FOR[traits]),
                            stringsAsFactors = FALSE)
 
-# parent_type = "ril", not the default "inbred". These lines carry ~0.8% heterozygous markers
-# overall (worst line 3.3%), which trips the inbred gate: that gate is inbred_marker_fraction
-# = 0.02, NOT inbred_tolerance = 0.05, so 9 of 154 parents exceed it. Residual heterozygosity at
-# a few loci is exactly what RILs retain after finite selfing, and the QC message itself names
-# "ril" as the remedy. This is a property of the germplasm, not a workaround: declaring the
-# material honestly is what lets the a'Ra kernel model it correctly.
+# parent_type is left at the default "inbred": the lines above the het gate were excluded above,
+# so the remainder genuinely are fixed material and the a'Ra kernel is unbiased for them.
 base_args <- list(
   genotype = parent_geno, phenotype = parent_pheno, marker_map = map,
   trait_direction = dir_df, id_col = "NAME", bp_per_cm = 1e6,
-  parent_type = "ril", n_crosses = N_CROSSES, seed = 11L)
+  n_crosses = N_CROSSES, seed = 11L)
 
 # ---- run, with and without ---------------------------------------------------
 say("running WITHOUT checks ...")
@@ -135,8 +152,8 @@ ok(!any(c(ct$parent1, ct$parent2) %in% CHECKS),
 # would be 1..n and the assertion would pass vacuously.
 ok(!any(CHECKS %in% parent_geno$NAME),
    "no check line is in the candidate parent table")
-ok(nrow(parent_geno) == nrow(geno_all) - length(CHECKS),
-   "the candidate parent table is exactly the genotype table minus the checks")
+ok(nrow(parent_geno) == length(keep_parent),
+   "the candidate parent table is exactly the retained, sufficiently-inbred non-check lines")
 
 # ---- 2. values resolve to real numbers --------------------------------------
 for (tr in traits) {
