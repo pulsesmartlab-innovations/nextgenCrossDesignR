@@ -69,6 +69,31 @@ ng_multitrait_direction <- function(direction) {
   out
 }
 
+# DEFECT 2 fix (threshold-fix report): ng_preflight_input_tables() (R/26_data_preflight.R)
+# accepts min/minimum as aliases for min_value (max/maximum for max_value) and even
+# cross-validates min <= max -- but the scorer's spec intake recognised only the literal
+# "min_value"/"max_value" names, so a spec using an alias passed preflight's "thresholds are
+# consistent" check and then had its thresholds silently replaced by NA here. Reuse R/26's own
+# alias lists (ng_preflight_min_value_aliases / ng_preflight_max_value_aliases) so the two
+# cannot drift apart again; do not copy them.
+#
+# If the spec somehow carries BOTH the canonical column and an alias (e.g. both min_value and
+# min), the canonical name wins and a warning is raised -- never a silent pick.
+ng_multitrait_apply_threshold_alias <- function(spec, canonical, aliases) {
+  hit <- ng_preflight_id_column(spec, aliases)
+  if (is.null(hit)) return(spec)
+  if (canonical %in% names(spec)) {
+    collided <- setdiff(intersect(aliases, names(spec)), canonical)
+    if (length(collided)) {
+      warning("multi-trait spec has both '", canonical, "' and '", collided[[1L]],
+              "'; using '", canonical, "' and ignoring '", collided[[1L]], "'", call. = FALSE)
+    }
+    return(spec)
+  }
+  spec[[canonical]] <- spec[[hit]]
+  spec
+}
+
 ng_multitrait_spec <- function(trait,
                                column = NULL,
                                direction = NULL,
@@ -85,6 +110,8 @@ ng_multitrait_spec <- function(trait,
     if (!("trait" %in% names(spec)) && "column" %in% names(spec)) spec$trait <- spec$column
     if (!("direction" %in% names(spec))) spec$direction <- "maximize"
     if (!("weight" %in% names(spec))) spec$weight <- NA_real_
+    spec <- ng_multitrait_apply_threshold_alias(spec, "min_value", ng_preflight_min_value_aliases)
+    spec <- ng_multitrait_apply_threshold_alias(spec, "max_value", ng_preflight_max_value_aliases)
     if (!("min_value" %in% names(spec))) spec$min_value <- NA_real_
     if (!("max_value" %in% names(spec))) spec$max_value <- NA_real_
     if (!("threshold_weight" %in% names(spec))) spec$threshold_weight <- 1
