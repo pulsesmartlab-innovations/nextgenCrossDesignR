@@ -62,6 +62,34 @@ ng_priority_plot_apply_check_style <- function(base_col, style) {
   ng_priority_plot_alpha_col(col, alpha)
 }
 
+# Draw a check reference line on whichever axis carries the check's mean value. A check has a
+# value on the mean axis and NONE on any other, so the line is perpendicular to whichever axis
+# carries the mean: horizontal ("y") when the mean is plotted on y, vertical ("x") when the mean
+# is plotted on x (e.g. a diversity-on-y-vs-mean-GEBV-on-x scatter). A plot with NEITHER axis
+# carrying a mean has no honest way to place the check at all, so `mean_axis = NULL` (the
+# default) draws nothing -- there is deliberately no default that guesses "y", because that
+# would work silently on every plot built so far and fail silently on the first one that puts
+# the mean on x. Label placement follows orientation so it never collides with the axis it sits
+# on: side 4 (right margin) for a horizontal line, side 3 (top margin) for a vertical one.
+ng_plot_check_reference_line <- function(value, label = NULL, mean_axis = NULL) {
+  if (is.null(mean_axis) || is.null(value) || !is.finite(value)) return(invisible(NULL))
+  mean_axis <- match.arg(mean_axis, c("y", "x"))
+  if (identical(mean_axis, "y")) {
+    graphics::abline(h = value, lty = 2, lwd = 2, col = "#B00020")
+    if (!is.null(label)) {
+      graphics::mtext(sprintf("check: %s", label), side = 4, at = value, las = 1, cex = 0.7,
+                      col = "#B00020")
+    }
+  } else {
+    graphics::abline(v = value, lty = 2, lwd = 2, col = "#B00020")
+    if (!is.null(label)) {
+      graphics::mtext(sprintf("check: %s", label), side = 3, at = value, las = 1, cex = 0.7,
+                      col = "#B00020")
+    }
+  }
+  invisible(NULL)
+}
+
 ng_plot_priority_score_vs_kinship <- function(scored,
                                               selected = NULL,
                                               output_path = NULL,
@@ -118,11 +146,9 @@ ng_plot_priority_score_vs_kinship <- function(scored,
     ylab = "Multi-trait score",
     main = title
   )
-  if (!is.null(check_line) && is.finite(check_line)) {
-    graphics::abline(h = check_line, lty = 2, lwd = 2, col = "#B00020")
-    graphics::mtext(sprintf("check: %s", if (is.null(check_label)) "reference" else check_label),
-                    side = 4, at = check_line, las = 1, cex = 0.7, col = "#B00020")
-  }
+  ng_plot_check_reference_line(check_line, label = if (is.null(check_line)) NULL else
+                               (if (is.null(check_label)) "reference" else check_label),
+                               mean_axis = "y")
 
   selected <- selected[selected_ok, , drop = FALSE]
   selected_score <- selected_score[selected_ok]
@@ -163,41 +189,75 @@ ng_plot_priority_score_vs_kinship <- function(scored,
   }
 }
 
-# The y value at which to draw the check reference line. Single-trait runs plot the trait mean
-# itself, so the check's value is the line. A LINEAR index (weighted / economic) is a fixed
-# combination of trait values, so the check's index value is exact. A RANK-based index is a
-# function of the candidate distribution, and a check has no rank because it is not a cross --
-# there is no honest line, so we return NA and the caller says so rather than drawing a number
-# that looks authoritative and is not.
+# Mirrors ng_rank_normalize() (R/04_optimizers.R) exactly, so a check can be placed on the SAME
+# standardized axis WITHOUT perturbing the candidates it is being compared against. The
+# candidates' z is: orient by direction -> rank (ties = average) -> (r-0.5)/n -> qnorm -> zero-
+# fill non-finite rows -> standardize (mean/sd) over ALL rows including the zero-filled ones.
+# The check never joins that ranked vector (it is not a cross); instead its fractional position
+# is read off the candidates' empirical CDF with a Blom-style continuity correction --
+# (#candidates <= check + 0.5) / n -- then pushed through qnorm and the SAME standardization
+# (mean/sd) the candidates' vector used, so it lands on their exact axis.
+ng_check_rank_axis_z <- function(x, bigger_is_better, tau_raw) {
+  x <- as.numeric(x)
+  ok <- is.finite(x)
+  n_ok <- sum(ok)
+  if (n_ok <= 1L || !is.finite(tau_raw)) return(NA_real_)
+  value <- if (isTRUE(bigger_is_better)) x[ok] else -x[ok]
+  tau_oriented <- if (isTRUE(bigger_is_better)) tau_raw else -tau_raw
+  r <- rank(value, ties.method = "average")
+  p <- (r - 0.5) / length(r)
+  out <- rep(0, length(x))
+  out[ok] <- stats::qnorm(p)
+  bad <- !is.finite(out)
+  if (any(bad)) out[bad] <- min(out[!bad], na.rm = TRUE) - 1
+  mu <- mean(out)
+  sd_out <- stats::sd(out)
+  if (!is.finite(sd_out) || sd_out <= 0) return(NA_real_)
+  p_check <- (sum(value <= tau_oriented) + 0.5) / length(value)
+  (stats::qnorm(p_check) - mu) / sd_out
+}
+
+# The y value at which to draw the check reference line. multi_trait_score is z-normalised by
+# ng_add_multitrait_score() (R/19_multi_trait_selection.R), but WHICH standardization applies
+# depends on the run's actual method family, and a check must be placed on the axis that
+# actually exists rather than a plausible-looking substitute:
 #
-# THE AXIS IS NEVER RAW TRAIT UNITS. ng_score_breeder_objective() -> ng_add_multitrait_score()
-# (R/19_multi_trait_selection.R) z-normalises multi_trait_score for EVERY method, including a
-# single-trait run (one trait still goes through the same standardization loop). A check has no
-# row in that computation and therefore no z of its own, so the only honest way to place it on
-# this axis is to push its raw value through the SAME affine transform the candidates went
-# through: oriented <- sign * tau; z <- (oriented - center) / scale. ng_add_multitrait_score()
-# retains those per-trait parameters in multi_trait_meta$value_centers / $value_scales /
-# $value_signs (named by trait) for exactly this purpose. Without them (an older result, or a
-# multi_trait_meta the caller built by hand without these fields) there is no honest line, so we
-# return NA -- the same discipline already applied to the rank-based-index case, now applied to
-# every case, because drawing a raw-units number on a z-normalised axis is not "conservative
-# single-trait math", it is simply wrong (it was invisible off the plotted range in real runs).
-ng_check_line_value <- function(trait_check_reference, multi_trait_meta = NULL, trait = NULL) {
+#   - "rank_threshold" (auto), "threshold", "weighted_index" (weighted): the score is
+#     z %*% weights where z = ng_rank_normalize() -- a RANK transform of the candidates. A check
+#     has no rank of its own (it never enters that vector), but its VALUE can be positioned
+#     within the candidate distribution by quantile lookup -- see ng_check_rank_axis_z(). This
+#     needs the candidates' own raw trait values, so `candidate_scores` (the scored/candidate
+#     table) is required for this family; without it, no line.
+#   - "economic_index", "desired_gain": the score is value_z %*% <solved coefficients>. value_z
+#     is a plain affine standardization (center/scale/sign, retained in multi_trait_meta), so
+#     the check maps through the identical transform. The combining vector must be the SOLVED
+#     coefficients actually used for scoring (multi_trait_meta$economic_index_coefficients /
+#     $desired_gain_coefficients) -- NOT the raw input weights, which are a different vector in
+#     general.
+#   - anything else, or any case whose required parameters are missing: NA_real_. No plausible-
+#     looking number is drawn for a case that cannot be placed exactly.
+ng_check_line_value <- function(trait_check_reference, multi_trait_meta = NULL, trait = NULL,
+                                candidate_scores = NULL) {
   spec <- as.data.frame(trait_check_reference$active, stringsAsFactors = FALSE)
   if (!nrow(spec)) return(NA_real_)
   val <- function(tr) {
     ck <- spec$check[[match(tr, spec$trait)]]
     suppressWarnings(as.numeric(trait_check_reference$values[[tr]][[ck]]))
   }
+  tr_list <- if (is.null(trait)) spec$trait else trait
+  if (!all(tr_list %in% spec$trait)) return(NA_real_)
+
+  family <- as.character(if (is.null(multi_trait_meta$family)) "" else multi_trait_meta$family)
+
+  # value_z placement, for the LINEAR families (economic_index / desired_gain) only.
   centers <- multi_trait_meta$value_centers
   scales <- multi_trait_meta$value_scales
   signs <- multi_trait_meta$value_signs
-  has_transform <- !is.null(centers) && !is.null(scales) && !is.null(signs)
-  # The check's raw value, mapped onto the SAME standardized axis the candidates were scored on.
-  z_of <- function(tr) {
+  has_value_z_transform <- !is.null(centers) && !is.null(scales) && !is.null(signs)
+  z_of_value_z <- function(tr) {
     tau <- val(tr)
     if (!length(tau) || !is.finite(tau)) return(NA_real_)
-    if (!has_transform || !(tr %in% names(centers)) || !(tr %in% names(scales)) ||
+    if (!has_value_z_transform || !(tr %in% names(centers)) || !(tr %in% names(scales)) ||
         !(tr %in% names(signs))) {
       return(NA_real_)
     }
@@ -210,20 +270,46 @@ ng_check_line_value <- function(trait_check_reference, multi_trait_meta = NULL, 
     oriented <- if (sign_i > 0) tau else -tau
     (oriented - center_i) / scale_i
   }
-  if (!is.null(trait) || nrow(spec) == 1L) {
-    tr <- if (is.null(trait)) spec$trait[[1L]] else trait
-    if (!(tr %in% spec$trait)) return(NA_real_)
-    return(z_of(tr))
+
+  # Quantile placement onto the candidates' rank-normalized axis, for the RANK families only.
+  traits_df <- multi_trait_meta$traits
+  z_of_rank <- function(tr) {
+    tau <- val(tr)
+    if (!length(tau) || !is.finite(tau)) return(NA_real_)
+    if (is.null(candidate_scores) || is.null(traits_df) || is.null(signs) ||
+        !(tr %in% names(signs))) {
+      return(NA_real_)
+    }
+    idx <- match(tr, traits_df$trait)
+    if (is.na(idx)) return(NA_real_)
+    col <- traits_df$column[[idx]]
+    if (is.null(col) || !(col %in% names(candidate_scores))) return(NA_real_)
+    sign_i <- suppressWarnings(as.numeric(signs[[tr]]))
+    if (!is.finite(sign_i)) return(NA_real_)
+    x <- suppressWarnings(as.numeric(candidate_scores[[col]]))
+    ng_check_rank_axis_z(x, bigger_is_better = sign_i > 0, tau_raw = tau)
   }
-  method <- as.character(if (is.null(multi_trait_meta$method)) "" else multi_trait_meta$method)
-  if (!(method %in% c("weighted", "economic_index", "desired_gain"))) return(NA_real_)
-  w <- multi_trait_meta$weights
-  if (is.null(w) || !length(w)) return(NA_real_)
-  tr <- intersect(spec$trait, names(w))
-  if (!length(tr)) return(NA_real_)
-  v <- vapply(tr, z_of, numeric(1))
-  if (any(!is.finite(v))) return(NA_real_)
-  sum(v * as.numeric(w[tr]))
+
+  if (family %in% c("economic_index", "desired_gain")) {
+    coef_vec <- if (identical(family, "economic_index")) multi_trait_meta$economic_index_coefficients
+                else multi_trait_meta$desired_gain_coefficients
+    if (is.null(coef_vec) || !length(coef_vec)) return(NA_real_)
+    tr <- intersect(tr_list, names(coef_vec))
+    if (!length(tr)) return(NA_real_)
+    v <- vapply(tr, z_of_value_z, numeric(1))
+    if (any(!is.finite(v))) return(NA_real_)
+    return(sum(v * as.numeric(coef_vec[tr])))
+  }
+  if (family %in% c("rank_threshold", "threshold", "weighted_index")) {
+    w <- multi_trait_meta$weights
+    if (is.null(w) || !length(w)) return(NA_real_)
+    tr <- intersect(tr_list, names(w))
+    if (!length(tr)) return(NA_real_)
+    v <- vapply(tr, z_of_rank, numeric(1))
+    if (any(!is.finite(v))) return(NA_real_)
+    return(sum(v * as.numeric(w[tr])))
+  }
+  NA_real_
 }
 
 # Label for the check reference line. `active$check[[1L]]` alone is only correct when every
@@ -275,9 +361,7 @@ ng_plot_check_panels <- function(scored, trait_check_reference, output_path = NU
     graphics::plot(x, y, pch = 19, col = ng_priority_plot_alpha_col(base_col, alpha),
                    xlab = "Pair kinship", ylab = paste(tr, "mid-parent"), main = tr)
     tau <- suppressWarnings(as.numeric(scored[[paste0(kk, "_check_value")]][[1L]]))
-    if (length(tau) && is.finite(tau)) {
-      graphics::abline(h = tau, lty = 2, lwd = 2, col = "#B00020")
-    }
+    ng_plot_check_reference_line(if (length(tau)) tau[[1L]] else NA_real_, mean_axis = "y")
   }
   if (isTRUE(owns_device)) {
     ng_plot_close_device(dev_no)

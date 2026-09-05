@@ -5,68 +5,121 @@ helper <- c(file.path("tests", "helper_load.R"), "helper_load.R",
 source(helper[file.exists(helper)][[1L]])
 
 # ---------------------------------------------------------------------------
-# ng_check_line_value(): the plotted axis (multi_trait_score) is ALWAYS z-normalised by
-# ng_add_multitrait_score() (R/19), even for a single trait. A check has no row in that
-# computation, so it has no z of its own; it must be pushed through the SAME affine transform
-# (oriented = sign * tau; z = (oriented - center) / scale) via the value_centers/value_scales/
-# value_signs the runner retains in multi_trait_meta. Without that transform there is no honest
-# line -- same discipline as the rank-based-index case, applied uniformly.
+# ng_check_line_value() places a check on the axis that ACTUALLY exists, and that axis depends
+# on the run's real scoring method family (multi_trait_meta$family):
+#   - "rank_threshold" (auto) / "threshold" / "weighted_index" (weighted): the score is
+#     z %*% weights where z = ng_rank_normalize() -- a RANK transform. The check is placed by
+#     quantile lookup among the candidates' own oriented raw values (ng_check_rank_axis_z()),
+#     which needs the candidate score table itself, not just metadata.
+#   - "economic_index" / "desired_gain": the score is value_z %*% <SOLVED coefficients>. The
+#     check maps through the retained affine value_z transform and combines with the solved
+#     coefficients (not the raw input weights, which differ from the solved vector in general).
+#   - anything else, or missing parameters: NA_real_ -- never a plausible-looking substitute.
 # ---------------------------------------------------------------------------
 
+# --- ng_check_rank_axis_z(): unit-test the quantile-placement primitive in isolation ---
+# 7 candidates, increasing trait. Check value 5.5 sits strictly between candidates 5 and 6 of 7.
+cand_x <- c(1, 2, 3, 4, 5, 6, 7)
+z_check <- ng_check_rank_axis_z(cand_x, bigger_is_better = TRUE, tau_raw = 5.5)
+# Independent hand computation (mirrors ng_rank_normalize(), not the package's own helper):
+r <- rank(cand_x, ties.method = "average")
+p <- (r - 0.5) / length(r)
+out <- stats::qnorm(p)
+mu <- mean(out); sdv <- stats::sd(out)
+p_check_manual <- (sum(cand_x <= 5.5) + 0.5) / length(cand_x)  # 5 of 7 candidates are <= 5.5
+z_check_manual <- (stats::qnorm(p_check_manual) - mu) / sdv
+stopifnot(abs(z_check - z_check_manual) < 1e-10)
+# A decreasing trait orients by -x throughout (candidates AND the check), mirroring
+# ng_rank_normalize()'s bigger_is_better = FALSE. NOT a simple sign flip of the increasing-trait
+# result: the "+0.5" continuity correction in p_check is asymmetric under negation whenever the
+# check does not exactly tie a candidate (5 of 7 candidates are <= 5.5, but only 2 are >= 5.5,
+# not the complementary 7-5=2 by coincidence here, so this is worth computing independently
+# rather than assumed).
+value_dec <- -cand_x
+r_dec <- rank(value_dec, ties.method = "average")
+p_dec <- (r_dec - 0.5) / length(r_dec)
+out_dec <- stats::qnorm(p_dec)
+mu_dec <- mean(out_dec); sd_dec <- stats::sd(out_dec)
+p_check_dec_manual <- (sum(value_dec <= -5.5) + 0.5) / length(value_dec)
+z_check_dec_manual <- (stats::qnorm(p_check_dec_manual) - mu_dec) / sd_dec
+z_check_dec <- ng_check_rank_axis_z(cand_x, bigger_is_better = FALSE, tau_raw = 5.5)
+stopifnot(abs(z_check_dec - z_check_dec_manual) < 1e-10)
+# Degenerate inputs -> NA, never a fabricated number.
+stopifnot(is.na(ng_check_rank_axis_z(c(1, NA), bigger_is_better = TRUE, tau_raw = 1)))
+stopifnot(is.na(ng_check_rank_axis_z(cand_x, bigger_is_better = TRUE, tau_raw = NA_real_)))
+
+# --- ng_check_line_value(): LINEAR families (economic_index / desired_gain) ---
 ref <- list(active = data.frame(trait = "yield", check = "CHK_A", reject_if = "below",
                                 stringsAsFactors = FALSE),
             values = list(yield = c(CHK_A = 6)), source = c(yield = "GEBV"))
+meta_econ_single <- list(family = "economic_index",
+                        economic_index_coefficients = c(yield = 1),
+                        value_centers = c(yield = 5), value_scales = c(yield = 2),
+                        value_signs = c(yield = 1))
+stopifnot(abs(ng_check_line_value(ref, meta_econ_single, trait = "yield") - 0.5) < 1e-8)
 
-# SINGLE TRAIT, transform present (identity: center 0, scale 1, sign +1) -- the check maps
-# straight through, so the line equals the raw check value in this degenerate case.
-meta_single_identity <- list(value_centers = c(yield = 0), value_scales = c(yield = 1),
-                             value_signs = c(yield = 1))
-stopifnot(ng_check_line_value(ref, meta_single_identity, trait = "yield") == 6)
-
-# SINGLE TRAIT, transform present and NON-trivial -- the check must land on the SAME
-# standardized axis as the candidates, not in raw trait units.
-meta_single_nontrivial <- list(value_centers = c(yield = 5), value_scales = c(yield = 2),
-                               value_signs = c(yield = 1))
-stopifnot(abs(ng_check_line_value(ref, meta_single_nontrivial, trait = "yield") - 0.5) < 1e-8)
-
-# SINGLE TRAIT, NO transform available (e.g. multi_trait_meta = NULL, or a hand-built meta that
-# never carried it) -- there is no honest way to place the check on a z-normalised axis, so this
-# must be NA, not the raw check value. This is exactly the case that was silently wrong before:
-# a real single-trait run's check line was drawn in raw units on a z-normalised axis and fell
-# off the plotted range entirely.
-stopifnot(is.na(ng_check_line_value(ref, multi_trait_meta = NULL, trait = "yield")))
-stopifnot(is.na(ng_check_line_value(ref, list(method = "weighted"), trait = "yield")))
-
-# LINEAR INDEX: apply the same coefficients to the check's per-trait Z values (identity
-# transform here isolates the weighting logic from the standardization logic tested above)
 ref2 <- list(active = data.frame(trait = c("yield", "protein"), check = c("CHK_A", "CHK_A"),
                                  reject_if = "below", stringsAsFactors = FALSE),
              values = list(yield = c(CHK_A = 6), protein = c(CHK_A = 10)),
              source = c(yield = "GEBV", protein = "GEBV"))
-meta_lin <- list(method = "weighted", weights = c(yield = 0.5, protein = 0.5),
-                 value_centers = c(yield = 0, protein = 0),
-                 value_scales = c(yield = 1, protein = 1),
-                 value_signs = c(yield = 1, protein = 1))
-stopifnot(abs(ng_check_line_value(ref2, meta_lin) - 8) < 1e-8)
+# SOLVED coefficients differ from the raw/normalized weights on purpose, so this exercises that
+# the function uses the coefficients, not $weights.
+meta_econ_multi <- list(family = "economic_index",
+                        economic_index_coefficients = c(yield = 0.7, protein = 0.3),
+                        weights = c(yield = 0.5, protein = 0.5),
+                        value_centers = c(yield = 0, protein = 0),
+                        value_scales = c(yield = 1, protein = 1),
+                        value_signs = c(yield = 1, protein = 1))
+stopifnot(abs(ng_check_line_value(ref2, meta_econ_multi) - (6 * 0.7 + 10 * 0.3)) < 1e-8)
 
-# LINEAR INDEX, transform missing for one trait -- no honest combined line
-meta_lin_partial <- meta_lin
-meta_lin_partial$value_scales <- meta_lin_partial$value_scales["yield"]
-stopifnot(is.na(ng_check_line_value(ref2, meta_lin_partial)))
+meta_desired <- list(family = "desired_gain",
+                     desired_gain_coefficients = c(yield = 0.4, protein = 0.6),
+                     value_centers = c(yield = 0, protein = 0),
+                     value_scales = c(yield = 1, protein = 1),
+                     value_signs = c(yield = 1, protein = 1))
+stopifnot(abs(ng_check_line_value(ref2, meta_desired) - (6 * 0.4 + 10 * 0.6)) < 1e-8)
 
-# RANK-BASED INDEX: a check has no rank, so there is NO valid line, transform or not
-meta_rank <- list(method = "rank_threshold", value_centers = c(yield = 0, protein = 0),
-                  value_scales = c(yield = 1, protein = 1), value_signs = c(yield = 1, protein = 1))
-stopifnot(is.na(ng_check_line_value(ref2, meta_rank)))
+# Linear family but the solved coefficients are missing from the metadata -> NA.
+meta_econ_no_coef <- list(family = "economic_index",
+                          value_centers = c(yield = 0), value_scales = c(yield = 1),
+                          value_signs = c(yield = 1))
+stopifnot(is.na(ng_check_line_value(ref, meta_econ_no_coef, trait = "yield")))
+
+# --- ng_check_line_value(): RANK families (auto / threshold / weighted) ---
+# Small synthetic candidate table: one trait "yield", column "yield_value".
+rank_scores <- data.frame(yield_value = c(8, 9, 10, 11, 12, 20, 21))
+rank_traits <- data.frame(trait = "yield", column = "yield_value", direction = "maximize",
+                          stringsAsFactors = FALSE)
+meta_rank <- list(family = "rank_threshold", weights = c(yield = 1),
+                  value_signs = c(yield = 1), traits = rank_traits)
+cl_rank <- ng_check_line_value(ref, meta_rank, candidate_scores = rank_scores)
+manual_rank <- ng_check_rank_axis_z(rank_scores$yield_value, bigger_is_better = TRUE, tau_raw = 6)
+stopifnot(abs(cl_rank - manual_rank) < 1e-10)
+
+# Rank family but no candidate_scores supplied -> NA (this is exactly what a caller building
+# multi_trait_meta by hand, or an older stored result, would hit).
+stopifnot(is.na(ng_check_line_value(ref, meta_rank)))
+
+# "threshold" and "weighted_index" families take the identical rank path.
+meta_rank2 <- meta_rank; meta_rank2$family <- "threshold"
+stopifnot(abs(ng_check_line_value(ref, meta_rank2, candidate_scores = rank_scores) - manual_rank) < 1e-10)
+meta_rank3 <- meta_rank; meta_rank3$family <- "weighted_index"
+stopifnot(abs(ng_check_line_value(ref, meta_rank3, candidate_scores = rank_scores) - manual_rank) < 1e-10)
+
+# Any other family, or a meta with no family/method at all -> NA.
+stopifnot(is.na(ng_check_line_value(ref, list(family = "other"), trait = "yield")))
+stopifnot(is.na(ng_check_line_value(ref, NULL, trait = "yield")))
+stopifnot(is.na(ng_check_line_value(ref, list())))
 
 # an unevaluable check yields no line rather than a misplaced one
 ref3 <- ref; ref3$values$yield <- c(CHK_A = NA_real_)
-stopifnot(is.na(ng_check_line_value(ref3, meta_single_identity, trait = "yield")))
+stopifnot(is.na(ng_check_line_value(ref3, meta_econ_single, trait = "yield")))
+stopifnot(is.na(ng_check_line_value(ref3, meta_rank, candidate_scores = rank_scores)))
 
 # ---------------------------------------------------------------------------
 # ng_check_line_label(): names the check id, or names the blend when the traits contributing to
-# the line use DIFFERENT checks (Finding 3 -- naming only the first check misrepresents a blend
-# as a single check's value).
+# the line use DIFFERENT checks (naming only the first check would misrepresent a blend as a
+# single check's value).
 # ---------------------------------------------------------------------------
 stopifnot(identical(ng_check_line_label(ref$active), "CHK_A"))
 stopifnot(identical(ng_check_line_label(ref2$active), "CHK_A"))
@@ -76,18 +129,58 @@ lbl <- ng_check_line_label(ref_two_checks)
 stopifnot(grepl("CHK_A", lbl), grepl("CHK_B", lbl), !identical(lbl, "CHK_A"))
 
 # ---------------------------------------------------------------------------
-# Plot rendering: check_line/check_label are passed straight through as numeric/string, so
-# these tests exercise the DRAWING code only (not ng_check_line_value's resolution logic).
+# Plot rendering: a byte-identical PNG passed a file-existence check and hid the original
+# off-axis bug (with-checks and no-checks PNGs came back byte-identical because the line was
+# off the plotted range). Every rendering test below therefore asserts a BYTE DIFFERENCE against
+# the same plot drawn with no line, not merely that a file was written.
 # ---------------------------------------------------------------------------
 scored <- data.frame(parent1 = c("P1", "P1"), parent2 = c("P2", "P3"),
                      multi_trait_score = c(9, 4), pair_kinship = c(0.1, 0.2),
                      priority_tier = c("priority", "low_priority"), stringsAsFactors = FALSE)
-p <- file.path(tempdir(), "chk-plot.png")
-ng_plot_priority_score_vs_kinship(scored, output_path = p, check_line = 6,
+p_base <- file.path(tempdir(), "chk-plot-base.png")
+ng_plot_priority_score_vs_kinship(scored, output_path = p_base)
+p_line <- file.path(tempdir(), "chk-plot-line.png")
+ng_plot_priority_score_vs_kinship(scored, output_path = p_line, check_line = 6,
                                   check_label = "CHK_A")
-stopifnot(file.exists(p), file.size(p) > 0)
+stopifnot(file.exists(p_line), file.size(p_line) > 0)
+stopifnot(!identical(readBin(p_base, "raw", file.info(p_base)$size),
+                     readBin(p_line, "raw", file.info(p_line)$size)))
 
-# multi-trait: one panel per trait with a check, each with its own line
+# --- ng_plot_check_reference_line(): both orientations, byte-diff against a line-free baseline ---
+draw_baseline <- function(path) {
+  grDevices::png(path, width = 400, height = 300)
+  on.exit(grDevices::dev.off())
+  graphics::plot(1:10, 1:10, main = "orientation test")
+}
+draw_with_line <- function(path, mean_axis) {
+  grDevices::png(path, width = 400, height = 300)
+  on.exit(grDevices::dev.off())
+  graphics::plot(1:10, 1:10, main = "orientation test")
+  ng_plot_check_reference_line(5.5, label = "CHK_A", mean_axis = mean_axis)
+}
+p_orient_base <- file.path(tempdir(), "chk-orient-base.png")
+p_orient_y <- file.path(tempdir(), "chk-orient-y.png")
+p_orient_x <- file.path(tempdir(), "chk-orient-x.png")
+draw_baseline(p_orient_base)
+draw_with_line(p_orient_y, "y")
+draw_with_line(p_orient_x, "x")
+bytes_base <- readBin(p_orient_base, "raw", file.info(p_orient_base)$size)
+bytes_y <- readBin(p_orient_y, "raw", file.info(p_orient_y)$size)
+bytes_x <- readBin(p_orient_x, "raw", file.info(p_orient_x)$size)
+stopifnot(!identical(bytes_base, bytes_y))   # horizontal line changes the plot
+stopifnot(!identical(bytes_base, bytes_x))   # vertical line changes the plot
+stopifnot(!identical(bytes_y, bytes_x))      # the two orientations are not the same drawing
+
+# mean_axis = NULL (the default) draws nothing -- a plot with no mean-bearing axis gets no line,
+# never a guessed default orientation.
+p_orient_none <- file.path(tempdir(), "chk-orient-none.png")
+grDevices::png(p_orient_none, width = 400, height = 300)
+graphics::plot(1:10, 1:10, main = "orientation test")
+ng_plot_check_reference_line(5.5, label = "CHK_A", mean_axis = NULL)
+invisible(grDevices::dev.off())
+stopifnot(identical(readBin(p_orient_none, "raw", file.info(p_orient_none)$size), bytes_base))
+
+# multi-trait panels: one panel per trait with a check, each with its own line
 scored_mt <- data.frame(
   parent1 = c("P1", "P1"), parent2 = c("P2", "P3"),
   pair_kinship = c(0.1, 0.2),
@@ -101,21 +194,23 @@ ref_mt <- list(active = data.frame(trait = c("yield", "protein"), check = "CHK_A
 p2 <- file.path(tempdir(), "chk-panels.png")
 ng_plot_check_panels(scored_mt, ref_mt, output_path = p2)
 stopifnot(file.exists(p2), file.size(p2) > 0)
+scored_mt_no_check <- scored_mt
+scored_mt_no_check$yield_check_value <- NA_real_
+scored_mt_no_check$protein_check_value <- NA_real_
+p2_base <- file.path(tempdir(), "chk-panels-base.png")
+ng_plot_check_panels(scored_mt_no_check, ref_mt, output_path = p2_base)
+stopifnot(!identical(readBin(p2, "raw", file.info(p2)$size),
+                     readBin(p2_base, "raw", file.info(p2_base)$size)))
 
 # a run with no checks draws nothing and returns NULL rather than erroring
 stopifnot(is.null(ng_plot_check_panels(scored_mt, NULL, output_path = p2)))
 
 # ---------------------------------------------------------------------------
-# REAL PIPELINE (Finding 2): the assertion that would actually have caught the axis-units bug.
-# Every other check-reference test uses synthetic multi_trait_score values or write_figures =
-# FALSE, so none of them can see whether the resolved line actually falls on the axis that gets
-# plotted. This runs the FULL runner (single trait, default "auto" method -- the most common
-# real call pattern) with a trait check attached, and requires the resolved line to fall inside
-# the ACTUAL plotted data range (padded by one range-width, so this is a "not wildly off-axis"
-# check, not a tight numerical equality). Confirmed RED against the pre-fix code (see task-9
-# fix-round-1 report): the unfixed ng_check_line_value returned the check's raw 11.5 while the
-# real run's multi_trait_score ranged -2.43..2.43 -- 11.5 is far outside even the padded range,
-# and the assertion below failed for exactly that reason before the fix.
+# REAL PIPELINE: the resolved line on a DEFAULT ("auto") single-trait run must agree with an
+# INDEPENDENTLY computed quantile placement to a tight tolerance -- not merely fall "in range".
+# An earlier version of this test only checked range membership, which a genuinely wrong value_z
+# -based placement (-0.327) satisfied while still disagreeing with the true rank placement
+# (+0.688) by about 20% of the axis span. That gap is exactly what this test now catches.
 # ---------------------------------------------------------------------------
 set.seed(11)
 n_p <- 12L; n_m <- 40L
@@ -142,8 +237,23 @@ rp_res <- ng_run_cross_prediction(
   trait_checks = data.frame(trait = "yield", check = "CHK_A", stringsAsFactors = FALSE))
 
 rp_mt <- attr(rp_res$candidate_crosses, "multi_trait")
-rp_cl <- ng_check_line_value(rp_res$trait_check_reference, rp_mt)
+stopifnot(identical(rp_mt$family, "rank_threshold"))  # confirms this hits the rank path, not value_z
+rp_cl <- ng_check_line_value(rp_res$trait_check_reference, rp_mt,
+                             candidate_scores = rp_res$candidate_crosses)
 stopifnot(is.finite(rp_cl))
+
+# Independent recomputation -- hand-rolled rank/qnorm arithmetic, NOT a call to the package's
+# ng_check_rank_axis_z() helper, so this genuinely cross-checks the implementation rather than
+# restating it.
+rp_x <- rp_res$candidate_crosses$yield_value
+rp_r <- rank(rp_x, ties.method = "average")
+rp_p <- (rp_r - 0.5) / length(rp_r)
+rp_out <- stats::qnorm(rp_p)
+rp_mu <- mean(rp_out); rp_sd <- stats::sd(rp_out)
+rp_p_check <- (sum(rp_x <= 11.5) + 0.5) / length(rp_x)
+rp_indep <- (stats::qnorm(rp_p_check) - rp_mu) / rp_sd
+stopifnot(abs(rp_cl - rp_indep) < 1e-8)
+
 rp_rng <- range(rp_res$candidate_crosses$multi_trait_score, na.rm = TRUE)
 stopifnot(rp_cl >= rp_rng[1] - diff(rp_rng), rp_cl <= rp_rng[2] + diff(rp_rng))
 

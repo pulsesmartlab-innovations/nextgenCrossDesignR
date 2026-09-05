@@ -629,7 +629,8 @@ ng_run_cp_output_files <- function(output_dir,
   figures <- NULL
   if (isTRUE(write_figures)) {
     chk_line <- if (is.null(trait_check_reference)) NA_real_ else
-      ng_check_line_value(trait_check_reference, multi_trait_meta)
+      ng_check_line_value(trait_check_reference, multi_trait_meta,
+                          candidate_scores = candidate_crosses)
     plot_path <- file.path(output_dir, "priority_score_vs_kinship.png")
     ng_plot_priority_score_vs_kinship(
       scored = candidate_crosses,
