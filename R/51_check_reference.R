@@ -265,8 +265,39 @@ ng_check_tau_bounds <- function(spec, check_values) {
 # beats EVERY active check; when even one active check cannot be evaluated that promise cannot be
 # honestly reported under this name, so the column is NA_real_ rather than silently covering only
 # the evaluable subset.
+#
+# D7 fix: a real-data run (147 parents x 3189 markers, two correlated `decrease` traits, most
+# crosses on the wrong side of the check) produced p_beat_all_checks > a single-trait
+# <trait>_p_beat_check -- impossible for a true joint-vs-marginal pair, since beating every check
+# is a subset of beating any one of them. The cause: the D1 fix made the MARGINAL integrate shared
+# posterior effect uncertainty (delta ~ N(0, PEV)) while this joint stayed conditional on
+# delta = 0 (VPM diagonal only) -- two different probability models describing the same crosses.
+# `pmv_suffix` (default "_pmv_used", matching ng_attach_check_reference's own default for the SAME
+# quantity) recovers PEV = PMV - VPM per trait per cross, exactly the way the marginal does; when
+# supplied and genuinely positive somewhere, ng_add_p_superior_progeny_multitrait() integrates the
+# SAME shared delta (now a per-trait vector) via Monte Carlo
+# (ng_p_superior_progeny_multitrait_pev(), R/33). Sigma_c (the VPM/exact-cov diagonal) is
+# UNCHANGED -- only the mean vector shifts by delta per draw, mirroring the marginal exactly.
+# Wherever PMV is absent or PEV collapses to 0 everywhere, this reproduces the pre-D7 value
+# EXACTLY (see tests/check_reference_joint_pev.R), so a caller that never attached a `_pmv_used`
+# column (e.g. a hand-built `scores` fixture, or Task 4's fixture in tests/check_reference.R)
+# keeps working unchanged.
+#
+# PROVABLE CEILING (not a new approximation): for ANY fixed delta, the rectangle event "one
+# progeny clears every check at once" is a SUBSET of "one progeny clears check t alone", for every
+# t, so the family-level probability 1-(1-p_one)^k is monotone in that subset relationship too --
+# p_beat_all_checks(delta) <= p_beat_check_t(delta) for every delta, hence (integrating the SAME
+# delta_t marginal on both sides) E_delta[joint] <= E_{delta_t}[marginal_t] EXACTLY, in the true
+# (infinite-draw) population quantities. The Monte Carlo estimate above can occasionally overshoot
+# that provable ceiling by a small finite-sample amount (see the fix report's MC-error table); this
+# block computes each trait's marginal via the SAME closed form ng_attach_check_reference() uses
+# (ng_p_superior_progeny_pev(), sgn-mirrored per spec$reject_if) and clips the joint to the
+# row-wise minimum. This can only move the reported estimate CLOSER to the unknown true value,
+# never further from it, and it is what makes the invariant hold EXACTLY (not just "usually,
+# within Monte Carlo noise") for every row where the marginals themselves are evaluable.
 ng_attach_joint_check_probability <- function(scores, spec, check_values, k_progeny,
                                               mean_suffix = "_mean", var_suffix = "_vpm",
+                                              pmv_suffix = "_pmv_used",
                                               cross_trait_cov = NULL) {
   spec <- as.data.frame(spec, stringsAsFactors = FALSE)
   b <- ng_check_tau_bounds(spec, check_values)
@@ -277,22 +308,67 @@ ng_attach_joint_check_probability <- function(scores, spec, check_values, k_prog
     scores$p_beat_all_checks <- NA_real_
     return(scores)
   }
+  scores_df <- as.data.frame(scores, stringsAsFactors = FALSE, check.names = FALSE)
   key <- if ("column_key" %in% names(spec)) as.character(spec$column_key) else as.character(spec$trait)
   trait_specs <- data.frame(
     trait = spec$trait,
     mean_col = paste0(key, mean_suffix),
     var_col = paste0(key, var_suffix),
     stringsAsFactors = FALSE)
+  # Per-cross, per-trait PEV = PMV - VPM, mirroring ng_attach_check_reference(): 0 wherever the
+  # PMV column is absent, non-finite, or (numerically) below VPM, rather than NA -- an invalid or
+  # unavailable PEV for one trait/row falls back to "no correction for that trait/row", it never
+  # blocks the row's joint probability the way an unevaluable CHECK (tau) does.
+  n <- nrow(scores_df)
+  t_n <- nrow(trait_specs)
+  pev_mat <- matrix(0, nrow = n, ncol = t_n)
+  for (kk in seq_len(t_n)) {
+    vcol <- trait_specs$var_col[[kk]]
+    pcol <- paste0(key[[kk]], pmv_suffix)
+    if (pcol %in% names(scores_df) && vcol %in% names(scores_df)) {
+      vpmv <- suppressWarnings(as.numeric(scores_df[[vcol]]))
+      pmvv <- suppressWarnings(as.numeric(scores_df[[pcol]]))
+      ok <- is.finite(vpmv) & is.finite(pmvv) & (pmvv >= vpmv - 1e-8)
+      pev_mat[ok, kk] <- pmax(pmvv[ok] - vpmv[ok], 0)
+    }
+  }
+  pev_mat_mc <- if (any(is.finite(pev_mat) & pev_mat > 0)) pev_mat else NULL
   out <- ng_add_p_superior_progeny_multitrait(
-    scores, trait_specs,
+    scores_df, trait_specs,
     tau_lower = as.numeric(b$tau_lower[spec$trait]),
     tau_upper = as.numeric(b$tau_upper[spec$trait]),
     k_progeny = k_progeny, cross_trait_cov = cross_trait_cov,
+    pev_mat = pev_mat_mc,
     out_col = "p_beat_all_checks")
-  attr(out, "p_beat_all_checks_note") <- paste(
+  # The provable ceiling: each trait's own PEV-integrated marginal, computed the same way
+  # ng_attach_check_reference() computes <trait>_p_beat_check (same closed form, same sgn
+  # convention), independent of whether the caller separately attached those columns.
+  marg_mat <- matrix(NA_real_, nrow = n, ncol = t_n)
+  for (kk in seq_len(t_n)) {
+    tr <- spec$trait[[kk]]; ck <- spec$check[[kk]]
+    sgn <- if (identical(spec$reject_if[[kk]], "below")) 1 else -1
+    mu_k <- suppressWarnings(as.numeric(scores_df[[trait_specs$mean_col[[kk]]]]))
+    vpm_k <- suppressWarnings(as.numeric(scores_df[[trait_specs$var_col[[kk]]]]))
+    cv <- check_values[[tr]]
+    tau_k <- suppressWarnings(as.numeric(if (!is.null(cv) && ck %in% names(cv)) cv[[ck]] else NA_real_))
+    ok <- is.finite(mu_k) & is.finite(vpm_k) & vpm_k >= 0 & is.finite(tau_k)
+    if (any(ok)) {
+      marg_mat[ok, kk] <- ng_p_superior_progeny_pev(sgn * mu_k[ok], vpm_k[ok], pev_mat[ok, kk],
+                                                     sgn * tau_k, k_progeny)
+    }
+  }
+  marg_min <- apply(marg_mat, 1L, function(r) if (anyNA(r)) NA_real_ else min(r))
+  out$p_beat_all_checks <- pmin(out$p_beat_all_checks, marg_min)
+  attr(out, "p_beat_all_checks_note") <- if (!is.null(pev_mat_mc)) paste(
+    "p_beat_all_checks integrates shared posterior marker-effect uncertainty (PEV, a diagonal",
+    "per-trait approximation -- no cross-trait PEV covariance is estimated) via a fixed",
+    sprintf("%d-draw seeded Monte Carlo (D7), the same shared-delta model", NG_JOINT_PEV_MC_DRAWS),
+    "<trait>_p_beat_check (D1) integrates via Gauss-Hermite, then is clipped to the row-wise",
+    "minimum of the (independently recomputed) per-trait marginals -- a provable ceiling, not a",
+    "new approximation -- so the invariant p_beat_all_checks <= min(marginals) holds exactly.") else paste(
     "p_beat_all_checks is conditional on the point-estimated marker effects (VPM diagonal);",
-    "unlike <trait>_p_beat_check (D1), it does not integrate posterior marker-effect",
-    "uncertainty (PEV) because that integral is not tractable in the multivariate case.")
+    "no _pmv_used column was available to recover PEV, so this does not integrate posterior",
+    "marker-effect uncertainty and is not comparable to a PEV-integrated <trait>_p_beat_check.")
   out
 }
 

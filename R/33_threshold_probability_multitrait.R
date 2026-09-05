@@ -88,6 +88,97 @@ ng_p_superior_progeny_multitrait <- function(mu, Sigma_c, tau_lower, tau_upper,
   max(0, min(1, out))
 }
 
+# ---- D7: joint P(beat every check) under SHARED posterior effect uncertainty ---------------
+#
+# ng_p_superior_progeny_multitrait() above is CONDITIONAL on the point-estimated marker effects
+# (delta = 0): Sigma_c is VPM, the independent-across-progeny within-family covariance, and mu is
+# taken as exactly known. That is no longer consistent with the (D1-fixed) per-trait marginals
+# ng_p_superior_progeny_pev() (R/30_posterior_prediction.R) computes, which integrate a SHARED
+# per-trait effect deviation delta ~ N(0, PEV) across the whole family before raising the
+# within-family tail probability to the k-th power. Because beating every check is a subset of
+# beating any one of them, p_beat_all_checks can never exceed any single p_beat_check under a
+# CONSISTENT model -- but with two different models (joint conditional on delta = 0, marginals
+# integrated over delta) that subset relationship is not guaranteed, and empirically fails on real
+# data (see docs/design and the fix report for the worked case). The fix: integrate the SAME
+# shared delta in the joint too, only now delta is a per-checked-trait VECTOR (one shared
+# deviation per trait, not a scalar), and the covariance among (mu + delta) draws stays exactly
+# Sigma_c = VPM (unchanged) at every draw -- only the MEAN vector shifts, mirroring the marginals.
+#
+# delta ~ N(0, diag(pev)): no cross-trait POSTERIOR EFFECT UNCERTAINTY covariance is estimated
+# anywhere in this package (ng_p_superior_progeny_pev() itself only ever sees one trait's PEV at a
+# time), so a diagonal is used here -- a documented approximation, not a claim that posterior
+# marker-effect uncertainty is independent across traits. If a cross-trait PEV covariance ever
+# becomes available it can replace this diagonal without changing the calling convention (pev
+# would become a covariance matrix rather than a vector).
+#
+# Multivariate Gauss-Hermite is impractical beyond a couple of traits (tensor-product nodes scale
+# as n_nodes^t_n), so this integrates by MONTE CARLO instead, with a FIXED, SEEDED number of
+# draws so the result is reproducible run to run (never a function of the ambient RNG state):
+# ng_fixed_seed_normal_matrix() saves/restores .Random.seed around a single seeded draw, so this
+# never perturbs any caller's random stream -- required so a with-checks run stays numerically
+# identical elsewhere to a without-checks run (tests/check_reference_invariant.R). The same
+# n_draws x t_n standard-normal matrix `z` is reused across every row of a call (common random
+# numbers), scaled per row by that row's own sqrt(pev); this is both cheap (one seeded draw per
+# call, not per row) and keeps cross-row comparisons free of independent MC noise.
+#
+# EXACT collapse: wherever pev is non-positive/non-finite for every trait, every draw's delta is
+# exactly 0 (scaling standard normal by sd = 0 gives exactly 0, not approximately), so this
+# returns EXACTLY ng_p_superior_progeny_multitrait(mu, ...) with no Monte Carlo cost at all -- the
+# cheapest and most important correctness check on this function (see
+# tests/check_reference_joint_pev.R).
+NG_JOINT_PEV_MC_SEED <- 20260904L
+NG_JOINT_PEV_MC_DRAWS <- 150L
+
+# Antithetic pairing (z and -z): delta's distribution is exactly symmetric about 0, so pairing
+# each draw with its negation is a variance-reduction trick that costs nothing extra (still
+# n_draws total evaluations) and materially tightens the joint-vs-marginal comparison relative to
+# plain iid draws -- see the fix report's Monte-Carlo-error table for the measured effect. Odd
+# n_draws drops the last unpaired draw's mirror so the returned matrix still has exactly n_draws
+# rows.
+ng_fixed_seed_normal_matrix <- function(n_draws, t_n, seed = NG_JOINT_PEV_MC_SEED,
+                                        antithetic = TRUE) {
+  had_seed <- exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+  old_seed <- if (had_seed) get(".Random.seed", envir = .GlobalEnv, inherits = FALSE) else NULL
+  on.exit({
+    if (had_seed) {
+      assign(".Random.seed", old_seed, envir = .GlobalEnv, inherits = FALSE)
+    } else if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+      rm(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+    }
+  })
+  set.seed(seed)
+  n_draws <- as.integer(n_draws); t_n <- as.integer(t_n)
+  if (!isTRUE(antithetic)) {
+    return(matrix(stats::rnorm(n_draws * t_n), nrow = n_draws, ncol = t_n))
+  }
+  half <- ceiling(n_draws / 2)
+  z_half <- matrix(stats::rnorm(half * t_n), nrow = half, ncol = t_n)
+  rbind(z_half, -z_half)[seq_len(n_draws), , drop = FALSE]
+}
+
+ng_p_superior_progeny_multitrait_pev <- function(mu, Sigma_c, tau_lower, tau_upper, k_progeny,
+                                                  pev, z = NULL, n_draws = NG_JOINT_PEV_MC_DRAWS,
+                                                  seed = NG_JOINT_PEV_MC_SEED) {
+  mu <- as.numeric(mu)
+  pev <- as.numeric(pev)
+  t_n <- length(mu)
+  if (length(pev) != t_n) ng_stop("pev must have length(mu) = ", t_n)
+  has_pev <- any(is.finite(pev) & pev > 0)
+  if (!has_pev) {
+    return(ng_p_superior_progeny_multitrait(mu, Sigma_c, tau_lower, tau_upper, k_progeny))
+  }
+  if (is.null(z)) z <- ng_fixed_seed_normal_matrix(n_draws, t_n, seed = seed)
+  if (ncol(z) != t_n) ng_stop("z must have t_n = ", t_n, " columns")
+  sd_vec <- sqrt(pmax(pev, 0))
+  nd <- nrow(z)
+  acc <- 0
+  for (j in seq_len(nd)) {
+    mu_j <- mu + z[j, ] * sd_vec
+    acc <- acc + ng_p_superior_progeny_multitrait(mu_j, Sigma_c, tau_lower, tau_upper, k_progeny)
+  }
+  max(0, min(1, acc / nd))
+}
+
 # Build a cross-level trait covariance Sigma_c from per-trait within-family
 # variances and an optional t x t genetic correlation matrix G_hat.
 #   - per_trait_var: length-t vector, typically the per-trait pmv
@@ -286,11 +377,21 @@ ng_multitrait_exact_sigma_list <- function(scores, trait_order, cross_trait_cov)
 # ng_cross_trait_within_family_cov(). When supplied, Sigma_c per cross is taken directly from it
 # (recombination-aware a_t' R a_s), overriding both var_col and the G_hat population-correlation
 # proxy -- the statistically correct within-family covariance for the progeny distribution.
+#
+# pev_mat (optional, D7): an nrow(scores) x nrow(trait_specs) matrix of per-cross, per-trait
+# posterior effect variance (PEV = PMV - VPM), in the SAME trait order as trait_specs. When
+# supplied, each row's probability integrates a shared delta ~ N(0, diag(pev_mat[i, ])) via
+# ng_p_superior_progeny_multitrait_pev() instead of conditioning on delta = 0 -- see that
+# function's docstring for the model and the Monte Carlo scheme. NULL (the default) reproduces
+# the pre-D7 behaviour exactly.
 ng_add_p_superior_progeny_multitrait <- function(scores, trait_specs,
                                                   tau_lower, tau_upper,
                                                   k_progeny = 100L,
                                                   G_hat = NULL,
                                                   cross_trait_cov = NULL,
+                                                  pev_mat = NULL,
+                                                  n_mc_draws = NG_JOINT_PEV_MC_DRAWS,
+                                                  mc_seed = NG_JOINT_PEV_MC_SEED,
                                                   out_col = "p_superior_progeny_mt") {
   scores <- as.data.frame(scores, stringsAsFactors = FALSE)
   trait_specs <- as.data.frame(trait_specs, stringsAsFactors = FALSE)
@@ -314,6 +415,20 @@ ng_add_p_superior_progeny_multitrait <- function(scores, trait_specs,
   exact_sigma <- if (!is.null(cross_trait_cov)) {
     ng_multitrait_exact_sigma_list(scores, trait_specs$trait, cross_trait_cov)
   } else NULL
+  if (!is.null(pev_mat)) {
+    pev_mat <- as.matrix(pev_mat)
+    if (nrow(pev_mat) != nrow(scores) || ncol(pev_mat) != t_n) {
+      ng_stop("pev_mat must be nrow(scores) x ", t_n, " (one column per trait_specs row)")
+    }
+    storage.mode(pev_mat) <- "double"
+  }
+  # One seeded draw for the WHOLE call (not per row): cheap, and every row reuses the same
+  # standard-normal shocks (common random numbers), scaled by that row's own sqrt(pev). Skipped
+  # entirely when pev_mat is NULL or carries no positive entry anywhere -- the exact-collapse
+  # gate, so a checks-supplied-but-PEV-unavailable run costs nothing extra.
+  z <- if (!is.null(pev_mat) && any(is.finite(pev_mat) & pev_mat > 0)) {
+    ng_fixed_seed_normal_matrix(n_mc_draws, t_n, seed = mc_seed)
+  } else NULL
   out <- numeric(nrow(scores))
   for (i in seq_len(nrow(scores))) {
     # D6: <trait>_mean is a mid-parent of phenotypes; a parent missing a phenotype for even one
@@ -328,10 +443,18 @@ ng_add_p_superior_progeny_multitrait <- function(scores, trait_specs,
     }
     Sigma_i <- if (!is.null(exact_sigma)) exact_sigma[[i]] else
       ng_build_cross_trait_covariance(per_trait_var = var_mat[i, ], G_hat = G_hat)
-    out[[i]] <- ng_p_superior_progeny_multitrait(
-      mu = mean_mat[i, ], Sigma_c = Sigma_i,
-      tau_lower = tau_lower, tau_upper = tau_upper, k_progeny = k_progeny
-    )
+    out[[i]] <- if (!is.null(z)) {
+      ng_p_superior_progeny_multitrait_pev(
+        mu = mean_mat[i, ], Sigma_c = Sigma_i,
+        tau_lower = tau_lower, tau_upper = tau_upper, k_progeny = k_progeny,
+        pev = pev_mat[i, ], z = z
+      )
+    } else {
+      ng_p_superior_progeny_multitrait(
+        mu = mean_mat[i, ], Sigma_c = Sigma_i,
+        tau_lower = tau_lower, tau_upper = tau_upper, k_progeny = k_progeny
+      )
+    }
   }
   scores[[out_col]] <- out
   attr(scores, "p_superior_progeny_mt") <- list(
@@ -339,7 +462,9 @@ ng_add_p_superior_progeny_multitrait <- function(scores, trait_specs,
     var_cols = trait_specs$var_col, tau_lower = tau_lower,
     tau_upper = tau_upper, k_progeny = k_progeny,
     G_hat_supplied = !is.null(G_hat),
-    exact_cross_trait_cov = !is.null(cross_trait_cov), out_col = out_col
+    exact_cross_trait_cov = !is.null(cross_trait_cov),
+    pev_integrated = !is.null(z), n_mc_draws = if (!is.null(z)) n_mc_draws else NA_integer_,
+    out_col = out_col
   )
   scores
 }
