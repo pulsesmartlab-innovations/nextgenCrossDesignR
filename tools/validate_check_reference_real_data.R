@@ -79,16 +79,24 @@ ok(all(dir_df$direction == "decrease"),
 is_check <- rownames(geno_all) %in% CHECKS
 ok(sum(is_check) == length(CHECKS), "all four named checks found in the genotype table")
 
-parent_geno <- geno_all[!is_check, , drop = FALSE]
-check_geno  <- geno_all[ is_check, , drop = FALSE]
+# The candidate parents go in as a DATA FRAME with an explicit id column: passing a bare matrix
+# loses the rownames, because ng_run_cp_canonical_id_table() coerces with as.data.frame().
+# check_geno stays a matrix -- ng_align_check_geno() wants rownames and reads them directly.
+parent_geno <- data.frame(NAME = rownames(geno_all)[!is_check],
+                          geno_all[!is_check, , drop = FALSE],
+                          check.names = FALSE, stringsAsFactors = FALSE)
+check_geno  <- geno_all[is_check, , drop = FALSE]
 parent_pheno <- pheno_raw[!(pheno_raw$NAME %in% CHECKS), , drop = FALSE]
 check_pheno  <- pheno_raw[  pheno_raw$NAME %in% CHECKS,  , drop = FALSE]
 rownames(parent_pheno) <- parent_pheno$NAME
 
 say("split: %d candidate parents, %d check lines", nrow(parent_geno), nrow(check_geno))
 
-# The run's mean source is resolved per trait; supply the checks' own records on the phenotypic
-# sources so the comparison is apples-to-apples whichever one the run picks.
+# The run's mean source is resolved per trait; supply the checks' own values on the phenotypic
+# sources so the comparison is apples-to-apples whichever one the run picks. Task 10 added
+# `check_pheno` (a table shaped like the phenotype file), which is the friendlier route; this
+# harness uses the lower-level check_records so it also exercises the escape hatch, and because
+# check_records wins by documented precedence it pins the value regardless of source resolution.
 check_records <- lapply(traits, function(tr) {
   v <- stats::setNames(suppressWarnings(as.numeric(check_pheno[[tr]])), check_pheno$NAME)
   list(adjusted_pheno = v, BLUE = v, BLUP = v)
