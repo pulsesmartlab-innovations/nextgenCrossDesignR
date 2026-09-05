@@ -1228,6 +1228,15 @@ ng_cp__stage_index <- function(ctx) {
   objective_traits$column <- vapply(objective_traits$trait, function(trait) {
     paste0(ng_run_cp_clean_trait_name(trait), "_value")
   }, character(1L))
+  # DEFECT 1 fix (threshold-fix report): min_value/max_value are trait-unit thresholds a breeder
+  # sets against the family MEAN, not against `column` (the `_value` column, which under the
+  # default trait_value_metric = "usefulness" is mean + i*sqrt(pmv), and under "pmv"/"vpm" is a
+  # variance -- neither is trait units). Point the threshold comparison at `<trait>_mean`, built
+  # around line 1088 above for every trait (including the index_as_trait pseudo-trait
+  # "selection_index", whose column is "selection_index_mean").
+  objective_traits$threshold_column <- vapply(objective_traits$trait, function(trait) {
+    paste0(ng_run_cp_clean_trait_name(trait), "_mean")
+  }, character(1L))
   objective <- ng_breeder_selection_objective(
     trait = objective_traits,
     method = multi_trait_method,
