@@ -1,3 +1,67 @@
+# nextgenCrossDesign 0.24.0
+
+## Breaking
+
+* Threshold columns are now scored against the family MEAN, never the ranking metric.
+  `min_value`/`max_value` are trait-unit thresholds, but `ng_add_multitrait_score()` compared
+  them against `traits$column` -- under the default `trait_value_metric = "usefulness"` that is
+  `mean + i*sqrt(pmv)`, not the family mean, and under `pmv`/`vpm` it is a variance. A cross
+  whose predicted mean genuinely missed a threshold could clear the (unit-mismatched) comparison
+  and, under `threshold_policy = "strict"`, still get selected -- a cross that previously
+  survived can now be excluded, and one that previously survived on a false pass can now be
+  correctly excluded. `ng_run_cross_prediction()` sets the new `threshold_column` to
+  `<trait>_mean` (or `selection_index_mean` for `index_as_trait`) automatically; a direct caller
+  of `ng_multitrait_score()`/`ng_multitrait_spec()` is unaffected unless it opts in.
+* `min`/`minimum` and `max`/`maximum` are now recognised as threshold-column aliases in the
+  multi-trait scorer (`ng_multitrait_spec()`), matching the aliases `ng_preflight_input_tables()`
+  already accepted. A spec written with an alias previously passed preflight's consistency check
+  and then had its threshold silently discarded (never enforced); it is now enforced, so a run
+  using an alias can newly exclude crosses that previously slipped through unfiltered.
+
+## Bug fixes
+
+* `<trait>_p_beat_check` and `p_beat_all_checks` now integrate shared posterior marker-effect
+  uncertainty (PEV) correctly instead of raising it to the k-th power, which is only valid for
+  variance components independent across a family's k progeny (D1-D3/D6). This changes the
+  reported numbers materially -- e.g. 0.9997 -> 0.678 on the documented worked case -- because
+  the old value systematically overstated confidence for any family with non-trivial PEV. The
+  joint `p_beat_all_checks` is also now guaranteed `<=` every per-trait marginal (previously it
+  could exceed a single-trait `<trait>_p_beat_check`, which is impossible for a genuine
+  joint-vs-marginal pair) and integrates the SAME shared per-trait effect uncertainty the
+  marginals do, via a fixed, seeded 150-draw Monte Carlo (D7). Whenever no checked trait's PEV
+  is available, both paths reproduce the pre-0.23.0 numbers exactly.
+* `p_beat_all_checks` is `NA_real_`, not a false-affirmative `1.0`, whenever any active checked
+  trait cannot be evaluated (D3) -- integrating an unbounded `(-Inf, Inf)` region previously
+  reported certainty instead of "unknown".
+* The check reference line on the main score-versus-kinship plot now refuses to draw under any
+  `trait_value_metric` except `"mean"` (D4), instead of ranking the check's mean-scale value
+  against the candidates' usefulness-scaled rank axis -- previously wrong on ~22% of crosses per
+  the QG review's simulation. The corresponding weighted-index branch also refuses (`NA`) unless
+  every weighted trait is represented among the checked traits (D5), rather than silently
+  imputing 0 for an unweighted trait.
+* The joint check probability (`p_beat_all_checks`) no longer consumes or perturbs the caller's
+  ambient random-number stream. `mvtnorm::pmvnorm()`, used at 3 or more checked traits, switches
+  to a randomised algorithm that both draws from and advances `.Random.seed`; left unguarded,
+  this could shift a with-checks run's later stochastic allocation (e.g.
+  `optimizer = "evolution"`) away from a without-checks run's, breaking the "checks are a
+  reference, never a filter" invariant. The joint probability is also now reproducible run to
+  run at >= 3 traits, which it previously was not.
+* `%||%` is now defined at package scope (`R/00_utils.R`). It only entered base R in 4.4.0, but
+  `DESCRIPTION` declares R (>= 4.1.0) and the package used it in 15 places outside the one
+  function carrying a local copy -- so the package failed to load at all on R 4.1-4.3, invisibly
+  to anyone developing on a current R.
+
+## New
+
+* `priority_check_weight` (default `0`) on `ng_run_cross_prediction()`: lets `check_violation`
+  (the count of checks a cross fails) influence a cross's priority tier, blended the same way as
+  the existing score/kinship/threshold weights and never a veto. The default of `0` leaves every
+  existing run's tiers unchanged; `ng_rank_cross_priority()`'s own `check_weight` argument
+  (added in 0.23.0) was previously unreachable from the runner.
+* `check_violation` itself (a 4th, off-by-default priority-tier component computed from the same
+  per-check pass/fail matrix as `checks_all_ok`) was added in 0.23.0's development but is now
+  actually wireable end to end via `priority_check_weight`, above.
+
 # nextgenCrossDesign 0.23.0
 
 ## Breaking
