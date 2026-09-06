@@ -787,38 +787,68 @@ r <- ng_run_cross_prediction(phenotype = pheno, genotype = geno, marker_map = ma
 See `inst/examples/24_*`. (The equivalent scores-level helper `ng_apply_marker_management()` is
 shown in Part 6.)
 
-## Per-trait check-line veto
+## Per-trait check lines (reference, not a filter)
 
-Breeders optimize one objective but still judge crosses **trait by trait**. `trait_checks` lets you
-name, for any trait, a **check line** — a genotyped parent used as a reference — and reject a cross
-whose predicted **mid-parent** value for that trait is on the *worse* side of the check. The worse
-side follows the trait's selection direction (increase → reject below the check; decrease → reject
-above). This is a **candidate-eligibility filter applied before allocation** — like the lethal
-guard, and exactly parallel to it — so the objective/index is never touched and it works with any
-`multi_trait_method`.
+Breeders optimize one objective but still judge crosses **trait by trait**, against a benchmark
+they trust: a released variety, a commercial check. `trait_checks` lets you name, for any trait, a
+**check line** and attach its value as a *reference* alongside every candidate cross — it never
+removes a cross from the pool, never penalizes the objective/index, and works with any
+`multi_trait_method`. (An earlier veto that dropped or flagged crosses against a check has been
+removed; a check informs the breeder, it does not decide for them.)
 
-Pass `trait_checks` as a data frame with `trait` and `check` columns (optional `direction` and
-`basis` columns override per row). `check_basis` picks the comparison scale for all checks —
-`"gebv"` (default, a GEBV from the marker effects) or `"phenotype"` (the trait's phenotype
-column) — and mid-parent and check are always compared on the *same* basis.
+A check is a benchmark genotype, not breeding material — it is **never crossed** (check × check
+would be a self, which the candidate crosses never enumerate), so it is supplied in its own
+genotype matrix, `check_geno`, kept entirely separate from the candidate parents. Reusing a
+candidate parent's id as a check id is a hard error: give it a distinct id instead.
+
+Pass `trait_checks` as a data frame with `trait` and `check` columns (optional `direction` column
+overrides the trait's default per row). There is no basis argument to choose — the check is always
+resolved onto the *same* scale the run already used for that trait's cross means (a GEBV variant,
+or a supplied phenotypic record via `check_pheno`/`check_records`), so the reference is never
+off-scale from the axis it is compared against. `check_progeny_size` — the number of progeny you
+will raise per family — is **required** whenever `trait_checks` is supplied; it drives
+`P(beat check)` directly and has no default. Give a phenotypic record for the check whenever you
+have one, via `check_pheno` (same shape as the phenotype file you already supply — an id column
+plus one column per trait) — this is what makes the reference evaluable on every run, including
+one whose resolved `mean_source` for that trait is a phenotypic basis (BLUE/BLUP/adjusted
+phenotype) rather than GEBV, since a phenotypic source never falls back to predicting from
+`check_geno`'s markers.
 
 ```{r trait_checks}
-tc <- data.frame(trait = "yield", check = "P001", stringsAsFactors = FALSE)
+# Check lines are benchmarks, never crossed: they come in their own genotype matrix.
+chk <- as.matrix(geno[1:2, setdiff(names(geno), "NAME"), drop = FALSE])
+rownames(chk) <- c("CHECK_A", "CHECK_B")
+# check_pheno mirrors the phenotype file's own shape (id column + one column per trait). Whenever
+# the run's mean_source for a trait resolves to a phenotypic basis instead of GEBV, this is what
+# makes the check evaluable -- check_geno alone only covers the GEBV case.
+chk_pheno <- data.frame(NAME = c("CHECK_A", "CHECK_B"),
+                        yield = c(mean(pheno$yield) - 5, mean(pheno$yield) - 8),
+                        stringsAsFactors = FALSE)
+tc <- data.frame(trait = "yield", check = "CHECK_A", stringsAsFactors = FALSE)
 r <- ng_run_cross_prediction(phenotype = pheno, genotype = geno, marker_map = map,
-  trait_direction = direction, id_col = "NAME", use_ocs = TRUE, n_crosses = 100,
-  trait_checks = tc, check_basis = "gebv",
-  include_trait_gebv = TRUE)               # also surface each cross's mid-parent GEBV per trait
-# candidate_crosses gains per-trait check columns and a threshold flag:
+  trait_direction = direction, id_col = "NAME",
+  map_position_unit = "bp", bp_per_cm = 1e6, use_ocs = TRUE, n_crosses = 100,
+  trait_checks = tc, check_geno = chk, check_pheno = chk_pheno, check_progeny_size = 200,
+  include_trait_gebv = TRUE)
+# candidate_crosses gains per-trait reference columns -- nothing is dropped:
 head(r$candidate_crosses[, c("parent1", "parent2", "yield_check_value",
-                             "yield_check_violation", "threshold_ok")])
-r$trait_check_diagnostics                  # active checks + counts (flagged / not-evaluable / excluded)
+                             "yield_vs_check", "yield_check_ok", "yield_p_beat_check")])
+r$trait_check_reference$active          # which check is active for which trait
+r$trait_check_reference$progeny_size    # the family size that produced P(beat check)
 ```
 
-By default violators are only **flagged** (`yield_check_violation` / `threshold_ok`). Set
-`exclude_threshold_violators = TRUE` to drop them from the candidate pool before allocation. If a
-trait's value is missing on the chosen basis the cross is counted as **not-evaluable** — it is never
-silently treated as passing, and a check that would remove *every* candidate is an error, not an
-empty plan. Checks require trait-by-trait prediction (they are keyed by trait); one check per trait.
+Note the chunk builds `chk` (and `chk_pheno`'s ids) from rows of `geno` but renames them, so the
+ids do not collide with candidate parents — a check id that IS a parent is now a hard error. If a
+check's value is not evaluable on the run's source (a phenotypic source with no supplied
+`check_pheno`/`check_records` entry for that check), its reference columns are `NA` — never
+silently treated as passing or filled from a GEBV fallback. Checks require trait-by-trait
+prediction (they are keyed by trait); one check per trait.
+With more than one active check, `p_beat_all_checks` reports the joint probability of a progeny
+beating every check at once. Where posterior effect variance is available for a checked trait,
+this is a fixed-seed, 150-draw Monte Carlo estimate (error up to about 0.03) computed under a
+diagonal approximation to the cross-trait posterior effect covariance, and clipped to the
+row-wise minimum of the per-trait marginals — the same caveat is attached to a completed run as
+`trait_check_reference$p_beat_all_checks_note`.
 
 ## Cost, budget, and logistics
 
@@ -1743,7 +1773,7 @@ This table groups the exported functions so you can find the right entry point.
 | Single- and multi-trait objectives | `ng_multitrait_spec()`, `ng_add_multitrait_score()`, `ng_multitrait_select_topn()`, `ng_optimize_multitrait_mating_plan()`, `ng_breeder_selection_objective()`, `ng_score_breeder_objective()`, `ng_optimize_breeder_selection_plan()` |
 | Cross optimization and OCS | `ng_optimize_mating_plan()`, `ng_add_balanced_usefulness_score()`, `ng_optimize_balanced_usefulness()`, `ng_optimize_robust_mating_plan()`, `ng_pareto_mate_allocation()`, `ng_allocate_family_sizes()` |
 | Gain–diversity balancing and constraints | `ng_select_by_strategy()`, `ng_select_by_target_coancestry()`, `ng_choose_frontier_point()`, `ng_progeny_inbreeding_histogram()` (constraint / progeny-inbreeding / cost arguments are on `ng_optimize_mating_plan()` and `ng_run_cross_prediction()`) |
-| Marker, lethal-allele, and trait-check management | `ng_marker_target_spec()`, `ng_marker_target_scores()`, `ng_lethal_recessive_spec()`, `ng_lethal_recessive_cross_risk()`, `ng_apply_marker_management()`, `ng_trait_check_spec()`, `ng_apply_trait_checks()` |
+| Marker, lethal-allele, and trait-check management | `ng_marker_target_spec()`, `ng_marker_target_scores()`, `ng_lethal_recessive_spec()`, `ng_lethal_recessive_cross_risk()`, `ng_apply_marker_management()`, `ng_trait_check_spec()`, `ng_attach_check_reference()` |
 | Frontend export artifacts | `ng_frontier_export_payload()`, `ng_write_frontier_json()`, `ng_write_progeny_inbreeding_histogram_json()`, `ng_run_comparison_payload()`, `ng_write_run_comparison_json()` |
 | Number of crosses | `ng_optimize_mating_plan_curve()`, `ng_plot_diminishing_returns()` |
 | Priority ranking and workbook output | `ng_rank_cross_priority()`, `ng_cross_priority_summary()`, `ng_plot_priority_score_vs_kinship()`, `ng_cross_priority_workbook_tables()`, `ng_write_cross_priority_workbook()`, `ng_write_crossing_plan_workbook()` (single-trait runs also attach `cross_level` / `cross_upside` / `risk_bin` / `portfolio_profile` columns and a `priority_risk_diagnostics` block automatically) |

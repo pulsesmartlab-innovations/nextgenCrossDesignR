@@ -291,7 +291,92 @@ ng_p_superior_progeny <- function(mu, sigma, tau, k_progeny) {
   log_pnorm_below <- stats::pnorm(z, lower.tail = TRUE, log.p = TRUE)
   one_minus_p <- exp(k_progeny * log_pnorm_below)
   out <- 1 - one_minus_p
-  out[sigma <= 0] <- as.numeric(mu[sigma <= 0] >= tau)
+  out[sigma <= 0] <- as.numeric(mu[sigma <= 0] >= tau[sigma <= 0])
+  pmax(pmin(out, 1), 0)
+}
+
+# ---- Gauss-Hermite quadrature (hand-rolled; no extra package dependency) ---
+#
+# statmod is not a package dependency (DESCRIPTION Imports/Suggests checked), so nodes/weights
+# for the physicists' Gauss-Hermite rule -- integral exp(-x^2) f(x) dx ~= sum_i w_i f(x_i) -- are
+# built at call time via the Golub-Welsch algorithm: the nodes are the eigenvalues of the
+# symmetric tridiagonal Jacobi matrix J[i, i+1] = J[i+1, i] = sqrt(i / 2) (i = 1..n-1, zero
+# diagonal), and each weight is sqrt(pi) * (first entry of the corresponding unit eigenvector)^2.
+# This is deterministic (no RNG), exact to machine precision for the smooth integrands used here
+# (tail probabilities of a normal), and needs nothing beyond base R's eigen(). Cached by n so
+# repeated per-row calls do not repeat the eigen-decomposition.
+ng_gauss_hermite_cache <- new.env(parent = emptyenv())
+ng_gauss_hermite_rule <- function(n = 32L) {
+  n <- as.integer(n[[1L]])
+  if (!is.finite(n) || n < 2L) ng_stop("Gauss-Hermite rule needs n >= 2 nodes")
+  key <- as.character(n)
+  cached <- ng_gauss_hermite_cache[[key]]
+  if (!is.null(cached)) return(cached)
+  i <- seq_len(n - 1L)
+  off <- sqrt(i / 2)
+  J <- matrix(0, n, n)
+  J[cbind(i, i + 1L)] <- off
+  J[cbind(i + 1L, i)] <- off
+  ev <- eigen(J, symmetric = TRUE)
+  ord <- order(ev$values)
+  nodes <- ev$values[ord]
+  weights <- sqrt(pi) * (ev$vectors[1L, ord])^2
+  out <- list(nodes = nodes, weights = weights)
+  ng_gauss_hermite_cache[[key]] <- out
+  out
+}
+
+# P(>=1 of k progeny clears tau) under SHARED posterior marker-effect uncertainty (D1 fix).
+#
+# ng_p_superior_progeny() raises 1 - Phi((tau - mu) / sigma) to the k-th power, which is only
+# valid when the k deviations behind that probability are INDEPENDENT across progeny. That holds
+# for VPM (a'Ra: k independent meiotic draws) but NOT for PMV = VPM + posterior marker-effect
+# uncertainty, because every progeny of a cross is scored with the SAME beta-hat -- the
+# effect-uncertainty component is common to the whole family, not an independent per-progeny
+# draw. Raising PMV to the k-th power therefore treats a shared error as if it were k independent
+# ones, which is anti-conservative and gets worse as k or PEV grows (worst exactly below the
+# check, the region P(beat check) exists to illuminate).
+#
+# Correct model: mu_true = mu_hat + delta, delta ~ N(0, PEV) shared across the whole family;
+# conditional on delta the k progeny ARE independent with within-family variance VPM. So
+#   P = E_delta[ 1 - Phi((tau - (mu_hat + delta)) / sqrt(VPM))^k ]
+# via Gauss-Hermite: for delta ~ N(0, sigma_d^2), E[f(delta)] ~= (1/sqrt(pi)) * sum_i w_i *
+# f(sqrt(2) * sigma_d * x_i). Where pev is 0 / non-finite / <= 0 the integral collapses EXACTLY
+# (not approximately) to ng_p_superior_progeny() on sqrt(vpm): a point mass at delta = 0 makes the
+# expectation the integrand itself. `sgn`-mirroring for a decrease trait (see
+# R/51_check_reference.R) still works unmodified here: negating both mu and tau leaves delta's
+# distribution (symmetric about 0) unaffected, so the same integral answers the mirrored question.
+ng_p_superior_progeny_pev <- function(mu, vpm, pev, tau, k_progeny, n_nodes = 32L) {
+  mu <- as.numeric(mu); vpm <- as.numeric(vpm); pev <- as.numeric(pev)
+  tau <- as.numeric(tau); k_progeny <- as.numeric(k_progeny)
+  out_len <- max(length(mu), length(vpm), length(pev), length(tau), length(k_progeny))
+  lens <- c(length(mu), length(vpm), length(pev), length(tau), length(k_progeny))
+  if (out_len < 1L || any(!(lens %in% c(1L, out_len)))) {
+    ng_stop("mu, vpm, pev, tau, and k_progeny must have length 1 or a common output length")
+  }
+  mu <- rep(mu, length.out = out_len)
+  vpm <- rep(vpm, length.out = out_len)
+  pev <- rep(pev, length.out = out_len)
+  tau <- rep(tau, length.out = out_len)
+  k_progeny <- rep(k_progeny, length.out = out_len)
+  if (any(!is.finite(vpm)) || any(vpm < 0)) {
+    ng_stop("vpm must contain finite non-negative variances")
+  }
+  sigma <- sqrt(vpm)
+  # Exact closed form everywhere first; this is also the final answer wherever pev collapses.
+  out <- ng_p_superior_progeny(mu, sigma, tau, k_progeny)
+  has_pev <- is.finite(pev) & pev > 0
+  if (!any(has_pev)) return(out)
+  rule <- ng_gauss_hermite_rule(n_nodes)
+  idx <- which(has_pev)
+  sigma_d <- sqrt(pev[idx])
+  for (jj in seq_along(idx)) {
+    ii <- idx[[jj]]
+    delta <- sqrt(2) * sigma_d[[jj]] * rule$nodes
+    f <- ng_p_superior_progeny(mu[[ii]] + delta, rep(sigma[[ii]], length(delta)),
+                               rep(tau[[ii]], length(delta)), rep(k_progeny[[ii]], length(delta)))
+    out[[ii]] <- (1 / sqrt(pi)) * sum(rule$weights * f)
+  }
   pmax(pmin(out, 1), 0)
 }
 

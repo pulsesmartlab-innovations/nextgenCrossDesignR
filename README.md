@@ -164,10 +164,10 @@ result <- ng_run_cross_prediction(
   genotype = geno, phenotype = pheno, marker_map = map, n_crosses = 100,
   # 1. Relatedness intent as one dial (not two stacked lambdas):
   mate_relatedness = "avoid_inbreeding", mate_relatedness_weight = 20,
-  # 2. Per-trait check-line veto — flag/remove crosses whose mid-parent for a
-  #    trait is worse than a reference line, on GEBV or phenotype basis:
-  trait_checks = data.frame(trait = "yield", check = "P001"),
-  check_basis = "gebv", exclude_threshold_violators = FALSE
+  # 2. Per-trait check lines — attach a reference value for a trait from a
+  #    benchmark genotype that is never crossed (its own genotype matrix):
+  trait_checks = data.frame(trait = "yield", check = "CHECK_A"),
+  check_geno = chk, check_progeny_size = 200
 )
 ```
 
@@ -176,10 +176,14 @@ result <- ng_run_cross_prediction(
   penalty for you; setting it *and* the raw `lambda_mating` /
   `lambda_progeny_inbreeding` is a hard error, so two relatedness terms can never
   silently stack.
-- **Per-trait check-line veto** — a candidate-eligibility filter applied *before*
-  allocation (like the lethal guard), so the objective/index is never touched and
-  it works with any multi-trait method. Flags by default; `exclude_threshold_violators = TRUE`
-  drops violators. Not-evaluable crosses are counted, never silently passed.
+- **Per-trait check lines (reference, not a filter)** — `trait_checks` attaches a
+  per-trait reference value from a check line supplied in its own `check_geno`
+  matrix (checks are never crossed, so a check id colliding with a candidate
+  parent is a hard error). It never drops or reorders candidate crosses; it adds
+  `<trait>_check_value`, `<trait>_vs_check`, `<trait>_check_ok`, and
+  `<trait>_p_beat_check` columns. `check_progeny_size` is required whenever
+  `trait_checks` is supplied — it sets `P(beat check)` and has no default.
+  Not-evaluable checks report `NA`, never a silent pass or a GEBV fallback.
 - **Portfolio & risk profiling** — the runner attaches `cross_level`,
   `cross_upside`, a `risk_bin` from the mid-parent prediction-error variance, a
   `portfolio_profile` (`breakthrough` / `workhorse` / `long_shot` /
@@ -332,9 +336,12 @@ for full notes. Recent highlights:
 - **0.19.0** — multi-trait portfolio & risk on the selection index: `cross_level` =
   w′m, `cross_upside` = √(w′Sw) from the exact cross-trait covariance, plus
   `portfolio_basis` and per-cross risk attribution.
-- **0.14.0** — per-trait check-line veto (`trait_checks` / `check_basis` /
-  `exclude_threshold_violators`): flag or remove candidate crosses whose
-  mid-parent for a trait is worse than a reference line, before allocation.
+- **0.14.0** — per-trait check lines (`trait_checks` / `check_geno` /
+  `check_progeny_size`): attach a per-trait reference value from a check line
+  supplied in its own genotype matrix (checks are never crossed) — adds
+  `<trait>_vs_check` / `<trait>_p_beat_check` columns and never removes a
+  candidate cross from the pool. (An earlier veto that flagged/dropped crosses
+  against a check has been replaced by this reference-only design.)
 - **0.13.0** — single-trait portfolio & risk decision layer (`cross_level`,
   `cross_upside`, `risk_bin`, `portfolio_profile`) plus `priority_risk_diagnostics`.
 - **0.12.0** — `constraint_diagnostics` on every run (what each allocation

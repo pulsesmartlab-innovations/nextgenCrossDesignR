@@ -69,6 +69,31 @@ ng_multitrait_direction <- function(direction) {
   out
 }
 
+# DEFECT 2 fix (threshold-fix report): ng_preflight_input_tables() (R/26_data_preflight.R)
+# accepts min/minimum as aliases for min_value (max/maximum for max_value) and even
+# cross-validates min <= max -- but the scorer's spec intake recognised only the literal
+# "min_value"/"max_value" names, so a spec using an alias passed preflight's "thresholds are
+# consistent" check and then had its thresholds silently replaced by NA here. Reuse R/26's own
+# alias lists (ng_preflight_min_value_aliases / ng_preflight_max_value_aliases) so the two
+# cannot drift apart again; do not copy them.
+#
+# If the spec somehow carries BOTH the canonical column and an alias (e.g. both min_value and
+# min), the canonical name wins and a warning is raised -- never a silent pick.
+ng_multitrait_apply_threshold_alias <- function(spec, canonical, aliases) {
+  hit <- ng_preflight_id_column(spec, aliases)
+  if (is.null(hit)) return(spec)
+  if (canonical %in% names(spec)) {
+    collided <- setdiff(intersect(aliases, names(spec)), canonical)
+    if (length(collided)) {
+      warning("multi-trait spec has both '", canonical, "' and '", collided[[1L]],
+              "'; using '", canonical, "' and ignoring '", collided[[1L]], "'", call. = FALSE)
+    }
+    return(spec)
+  }
+  spec[[canonical]] <- spec[[hit]]
+  spec
+}
+
 ng_multitrait_spec <- function(trait,
                                column = NULL,
                                direction = NULL,
@@ -77,18 +102,30 @@ ng_multitrait_spec <- function(trait,
                                max_value = NULL,
                                threshold_weight = NULL,
                                desired_change = NULL,
-                               economic_weight = NULL) {
+                               economic_weight = NULL,
+                               threshold_column = NULL) {
   if (is.data.frame(trait)) {
     spec <- as.data.frame(trait, stringsAsFactors = FALSE)
     if (!("column" %in% names(spec)) && "trait" %in% names(spec)) spec$column <- spec$trait
     if (!("trait" %in% names(spec)) && "column" %in% names(spec)) spec$trait <- spec$column
     if (!("direction" %in% names(spec))) spec$direction <- "maximize"
     if (!("weight" %in% names(spec))) spec$weight <- NA_real_
+    spec <- ng_multitrait_apply_threshold_alias(spec, "min_value", ng_preflight_min_value_aliases)
+    spec <- ng_multitrait_apply_threshold_alias(spec, "max_value", ng_preflight_max_value_aliases)
     if (!("min_value" %in% names(spec))) spec$min_value <- NA_real_
     if (!("max_value" %in% names(spec))) spec$max_value <- NA_real_
     if (!("threshold_weight" %in% names(spec))) spec$threshold_weight <- 1
     if (!("desired_change" %in% names(spec))) spec$desired_change <- NA_real_
     if (!("economic_weight" %in% names(spec))) spec$economic_weight <- NA_real_
+    # DEFECT 1 fix: a breeder's min_value/max_value are trait-unit thresholds; `column` is
+    # whatever metric the run ranks on (e.g. usefulness = mean + i*sqrt(pmv) under the default
+    # trait_value_metric), which is NOT trait units. threshold_column gives the threshold
+    # comparison its own, independently-controlled basis. Defaulting it to `column` when absent
+    # keeps every direct caller of ng_add_multitrait_score()/ng_breeder_selection_objective()
+    # working exactly as before: they control both the spec and the `scores` table, so their
+    # `column` IS their intended comparison basis. R/39_cross_prediction_runner.R sets
+    # threshold_column explicitly to `<trait>_mean`.
+    if (!("threshold_column" %in% names(spec))) spec$threshold_column <- spec$column
   } else {
     trait <- as.character(trait)
     n <- length(trait)
@@ -101,6 +138,7 @@ ng_multitrait_spec <- function(trait,
     threshold_weight <- ng_multitrait_recycle(threshold_weight, n, "threshold_weight", 1)
     desired_change <- ng_multitrait_recycle(desired_change, n, "desired_change", NA_real_)
     economic_weight <- ng_multitrait_recycle(economic_weight, n, "economic_weight", NA_real_)
+    threshold_column <- ng_multitrait_recycle(threshold_column, n, "threshold_column", column)
     spec <- data.frame(
       trait = trait,
       column = as.character(column),
@@ -111,19 +149,24 @@ ng_multitrait_spec <- function(trait,
       threshold_weight = threshold_weight,
       desired_change = desired_change,
       economic_weight = economic_weight,
+      threshold_column = as.character(threshold_column),
       stringsAsFactors = FALSE
     )
   }
 
   required <- c("trait", "column", "direction", "weight", "min_value", "max_value",
-                "threshold_weight", "desired_change", "economic_weight")
+                "threshold_weight", "desired_change", "economic_weight", "threshold_column")
   missing <- setdiff(required, names(spec))
   if (length(missing)) ng_stop("multi-trait spec missing columns: ", paste(missing, collapse = ", "))
   spec <- spec[required]
   spec$trait <- trimws(as.character(spec$trait))
   spec$column <- trimws(as.character(spec$column))
+  spec$threshold_column <- trimws(as.character(spec$threshold_column))
   if (any(!nzchar(spec$trait) | is.na(spec$trait))) ng_stop("trait names must be non-empty")
   if (any(!nzchar(spec$column) | is.na(spec$column))) ng_stop("trait columns must be non-empty")
+  if (any(!nzchar(spec$threshold_column) | is.na(spec$threshold_column))) {
+    ng_stop("threshold_column must be non-empty")
+  }
   if (any(duplicated(spec$trait))) ng_stop("trait names must be unique")
   spec$direction <- ng_multitrait_direction(spec$direction)
   spec$weight <- suppressWarnings(as.numeric(spec$weight))
@@ -159,6 +202,7 @@ ng_breeder_selection_objective <- function(trait,
                                            threshold_weight = NULL,
                                            desired_change = NULL,
                                            economic_weight = NULL,
+                                           threshold_column = NULL,
                                            method = "auto",
                                            threshold_policy = c("soft", "strict"),
                                            strict_direction_required = TRUE,
@@ -190,7 +234,8 @@ ng_breeder_selection_objective <- function(trait,
     max_value = max_value,
     threshold_weight = threshold_weight,
     desired_change = desired_change,
-    economic_weight = economic_weight
+    economic_weight = economic_weight,
+    threshold_column = threshold_column
   )
 
   method_requested <- method
@@ -527,6 +572,16 @@ ng_add_multitrait_score <- function(scores,
   }
   missing_cols <- setdiff(traits$column, names(scores))
   if (length(missing_cols)) ng_stop("scores missing multi-trait columns: ", paste(missing_cols, collapse = ", "))
+  # threshold_column naming a column absent from `scores` is a programming error, not a silent
+  # fallback (see DEFECT 1 in the threshold-fix report): name the trait and the missing column
+  # so the caller can see exactly which threshold_column is wrong.
+  missing_threshold <- is.finite(traits$min_value) | is.finite(traits$max_value)
+  missing_threshold <- missing_threshold & !(traits$threshold_column %in% names(scores))
+  if (any(missing_threshold)) {
+    bad <- traits[missing_threshold, c("trait", "threshold_column"), drop = FALSE]
+    ng_stop("scores missing threshold_column for trait(s): ",
+            paste(sprintf("%s -> %s", bad$trait, bad$threshold_column), collapse = ", "))
+  }
   weights <- ng_multitrait_resolve_weights(traits, method)
   threshold_penalty_weight <- suppressWarnings(as.numeric(threshold_penalty_weight[[1]]))
   if (!is.finite(threshold_penalty_weight) || threshold_penalty_weight < 0) threshold_penalty_weight <- 1.0
@@ -556,7 +611,13 @@ ng_add_multitrait_score <- function(scores,
 
   z <- matrix(0, nrow = nrow(scores), ncol = nrow(traits))
   value_z <- matrix(0, nrow = nrow(scores), ncol = nrow(traits))
-  value_scales <- rep(1, nrow(traits))
+  value_scales <- stats::setNames(rep(1, nrow(traits)), traits$trait)
+  # Retained alongside value_scales so a check-reference value (which never appears as a row in
+  # `scores`, so it has no rank of its own) can be placed on this SAME affine axis after the
+  # fact: oriented <- sign * tau; z <- (oriented - center) / scale. See ng_check_line_value()
+  # (R/38_cross_priority_plots.R), which is the sole consumer of these three vectors.
+  value_centers <- stats::setNames(rep(0, nrow(traits)), traits$trait)
+  value_signs <- stats::setNames(rep(1, nrow(traits)), traits$trait)
   violation <- matrix(0, nrow = nrow(scores), ncol = nrow(traits))
   colnames(z) <- colnames(value_z) <- colnames(violation) <- traits$trait
   for (i in seq_len(nrow(traits))) {
@@ -570,20 +631,31 @@ ng_add_multitrait_score <- function(scores,
     }
     scale <- ng_multitrait_value_scale(x)
     value_scales[[i]] <- scale
+    sign_i <- if (identical(traits$direction[[i]], "maximize")) 1 else -1
+    value_signs[[i]] <- sign_i
     oriented <- if (identical(traits$direction[[i]], "maximize")) x else -x
     finite_oriented <- oriented[is.finite(oriented)]
     center <- if (length(finite_oriented)) stats::median(finite_oriented, na.rm = TRUE) else 0
+    value_centers[[i]] <- center
     value_z[, i] <- (oriented - center) / scale
     bad_value <- !is.finite(value_z[, i])
     if (any(bad_value)) {
       finite_value <- value_z[is.finite(value_z[, i]), i]
       value_z[bad_value, i] <- if (length(finite_value)) min(finite_value, na.rm = TRUE) - 1 else -1
     }
+    # DEFECT 1 fix: min_value/max_value are trait-unit thresholds set by a breeder ("the family
+    # mean must reach 70"), but `x` above is whatever metric this run ranks on -- under the
+    # default trait_value_metric = "usefulness" that is mean + i*sqrt(pmv), not the mean, and
+    # under "pmv"/"vpm" it is a variance. Comparing min_value/max_value against `x` mixes units
+    # and silently biases toward "no violation" in both directions. threshold_column (defaults
+    # to `column` -- see ng_multitrait_spec()) gives the threshold its own, correctly-scaled
+    # axis; the ranking z-score above is deliberately left on `column`/x.
+    x_thresh <- suppressWarnings(as.numeric(scores[[traits$threshold_column[[i]]]]))
     if (is.finite(traits$min_value[[i]])) {
-      violation[, i] <- violation[, i] + pmax(traits$min_value[[i]] - x, 0) / scale
+      violation[, i] <- violation[, i] + pmax(traits$min_value[[i]] - x_thresh, 0) / scale
     }
     if (is.finite(traits$max_value[[i]])) {
-      violation[, i] <- violation[, i] + pmax(x - traits$max_value[[i]], 0) / scale
+      violation[, i] <- violation[, i] + pmax(x_thresh - traits$max_value[[i]], 0) / scale
     }
     violation[!is.finite(violation[, i]), i] <- 1
     violation[, i] <- violation[, i] * traits$threshold_weight[[i]]
@@ -655,7 +727,10 @@ ng_add_multitrait_score <- function(scores,
     effective_threshold_penalty = effective_penalty,
     cov_source_phenotypic = if (is.null(phenotypic_covariance)) NA_character_ else "user_supplied",
     cov_source_genetic = if (is.null(genetic_covariance)) NA_character_ else "user_supplied",
-    source = source
+    source = source,
+    value_centers = value_centers,
+    value_scales = value_scales,
+    value_signs = value_signs
   )
   if (!is.null(desired_gain)) {
     attr(scores, "multi_trait")$desired_gain_coefficients <- desired_gain$coefficients

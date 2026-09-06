@@ -819,6 +819,59 @@ strongest favorable/risk trait evidence. It intentionally leaves
 `Crossing_Status` blank because final rationale differs by breeder, market,
 nursery capacity, and cycle.
 
+### Check Lines As Reference (Not A Filter)
+
+A check is a benchmark genotype -- a released variety, a commercial standard
+-- that a breeder wants candidate crosses compared against. It is
+**reference-only**: a check contributes one scalar value per trait, drawn as
+a reference line and reported in the workbook, and it never drops, reorders,
+or otherwise changes any candidate cross's numbers. A check is never crossed
+(check x check would be a self, which the package does not enumerate), so it
+is supplied in its own genotype matrix, separate from the candidate parents.
+
+```r
+traits <- ng_trait_check_spec(
+  trait = c("yield", "disease"),
+  check = c("CHK_A", "CHK_A"),
+  trait_direction = c(yield = "increase", disease = "decrease")
+)
+
+scored <- ng_run_cross_prediction(
+  genotype = genotype, phenotype = phenotype, marker_map = marker_map,
+  trait_direction = c(yield = "increase", disease = "decrease"),
+  prediction_mode = "trait_by_trait",
+  trait_checks = traits,
+  check_geno = check_geno,          # the check's own genotype matrix
+  check_progeny_size = 200L         # required whenever trait_checks is supplied
+)
+```
+
+`check_progeny_size` has no default: progeny per family scales P(beat check)
+directly, so it must be the breeding program's own figure. Which input the
+check value is read from is decided by the run's own resolved `mean_source`
+per trait, not by the caller: a GEBV-sourced trait predicts the check's value
+from `check_geno` with the same fitted effects used for the candidates; a
+phenotypic-sourced trait (BLUP/BLUE/adjusted_pheno) instead reads the check's
+own record from `check_pheno` (shaped like the phenotype file, with the same
+`id_col`) or an explicit `check_records` list, which always wins over
+`check_pheno` for the same trait. This is what keeps the check reference on
+exactly the same scale as the parent means it is compared against; there is
+no `check_basis` argument to get that choice wrong.
+
+The scored table gains, per checked trait, `<trait>_check_value`,
+`<trait>_vs_check` (direction-aware: positive always means better),
+`<trait>_check_ok`, and `<trait>_p_beat_check`, plus `checks_all_ok` and, on
+a multi-trait run, `p_beat_all_checks` (the probability a progeny beats every
+check at once). `P(beat check)` always uses the run's genuine within-family
+variance (`<trait>_pmv_used`); it never substitutes `parent_distance`, which
+is a relationship distance, not a variance in trait units.
+
+`ng_write_cross_priority_workbook()` adds a `Checks` sheet reporting the
+active check(s) when `trait_checks` was supplied, and
+`ng_plot_priority_score_vs_kinship()` overlays a check reference line on
+whichever axis carries the mean. Use `ng_plot_check_panels()` for per-trait
+small multiples on a multi-trait run.
+
 ## Native var_complex, SimpleMating, And AlphaMate-Style Components
 
 These are native additions to `nextgenCrossDesign`. They do not require the old

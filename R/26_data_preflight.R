@@ -37,6 +37,14 @@ ng_preflight_id_column <- function(x, candidates) {
   if (length(hit)) names_x[[hit[[1L]]]] else NULL
 }
 
+# Canonical alias lists for a breeder's min/max trait threshold columns. Also referenced by
+# ng_multitrait_spec() (R/19_multi_trait_selection.R) so the scorer recognises exactly the same
+# aliases this preflight validates -- a spec using min/max must not pass preflight's "thresholds
+# are consistent" check and then have the scorer silently treat it as unset. If you rename or
+# extend either list, update both sites.
+ng_preflight_min_value_aliases <- c("min_value", "minimum", "min")
+ng_preflight_max_value_aliases <- c("max_value", "maximum", "max")
+
 ng_preflight_table_ids <- function(x, candidates = c("parent", "parent_id", "id", "name", "line", "entry")) {
   if (is.null(x)) return(character())
   if (is.matrix(x)) return(as.character(rownames(x)))
@@ -505,8 +513,8 @@ ng_preflight_input_tables <- function(geno = NULL,
         issues <- ng_preflight_add_issue(issues, "invalid_trait_direction", "blocker", "trait_spec", direction_col, paste("Invalid trait directions:", paste(unique(direction[bad]), collapse = ", ")), sum(bad, na.rm = TRUE))
       }
     }
-    min_col <- ng_preflight_id_column(spec, c("min_value", "minimum", "min"))
-    max_col <- ng_preflight_id_column(spec, c("max_value", "maximum", "max"))
+    min_col <- ng_preflight_id_column(spec, ng_preflight_min_value_aliases)
+    max_col <- ng_preflight_id_column(spec, ng_preflight_max_value_aliases)
     if (!is.null(min_col) && !is.null(max_col)) {
       min_value <- suppressWarnings(as.numeric(spec[[min_col]]))
       max_value <- suppressWarnings(as.numeric(spec[[max_col]]))

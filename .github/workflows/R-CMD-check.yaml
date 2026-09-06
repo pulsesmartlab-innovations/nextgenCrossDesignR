@@ -134,6 +134,11 @@ jobs:
           - {os: ubuntu-latest,  r: 'release'}
           - {os: macos-latest,   r: 'release'}
           - {os: windows-latest, r: 'release'}
+          # The declared floor in DESCRIPTION is R (>= 4.1.0), and nothing else verifies it.
+          # A base function that postdates the floor -- `%||%` arrived in 4.4.0 -- fails
+          # totally on 4.1-4.3 while passing everywhere a developer is likely to look. This
+          # leg is the only thing that turns the DESCRIPTION claim into a tested one.
+          - {os: ubuntu-latest,  r: '4.1'}
     env:
       # This leg does real work when the change touches code AND either it is a
       # Linux leg or the event wants every platform. Otherwise the job still

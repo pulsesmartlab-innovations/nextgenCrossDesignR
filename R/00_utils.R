@@ -1,5 +1,13 @@
 ng_stop <- function(..., call. = FALSE) stop(paste0(...), call. = call.)
 
+# Null-coalescing operator. `%||%` only entered base R in 4.4.0, but DESCRIPTION declares
+# R (>= 4.1.0), and the operator is used across the package -- including R/03_metrics.R, which
+# sits in ng_score_crosses()'s core scoring path. Without this definition the package fails
+# immediately on R 4.1-4.3 and is silently fine on 4.4+, so the breakage is invisible to anyone
+# developing on a current R. Defining it here shadows the base version identically on 4.4+.
+`%||%` <- function(a, b) if (is.null(a)) b else a
+
+
 ng_as_numeric_matrix <- function(x, name = deparse(substitute(x))) {
   x <- as.matrix(x)
   storage.mode(x) <- "double"
@@ -165,4 +173,23 @@ ng_has_optional_pkg <- function(pkg) {
 
 ng_optional_pkg_fun <- function(pkg, fun) {
   get(fun, envir = asNamespace(pkg), mode = "function")
+}
+
+# Set ctx fields WITHOUT losing NULLs. `ctx$key <- NULL` deletes the key, so a stage that later
+# does list2env(ctx, environment()) and reads `key` by bare name gets an unbound-variable error
+# instead of NULL. Bracket assignment with a length-1 list stores the NULL and keeps the key.
+#
+# The first formal is named `.ctx` (not `ctx`) even though every call site passes it
+# positionally as `ng_ctx_put(ctx, ...)`. A bare `ctx` formal placed before `...` is a real
+# partial-matching trap here: R matches named `...` args against un-consumed formals BEFORE
+# positional matching, so a value literally named `c` (a one-letter prefix of "ctx") would bind
+# to the `ctx` formal instead of falling into `...`, silently displacing the real ctx list. The
+# leading dot makes that collision impossible for any plausible field name.
+ng_ctx_put <- function(.ctx, ...) {
+  vals <- list(...)
+  nms <- names(vals)
+  if (is.null(nms) || any(!nzchar(nms))) ng_stop("ng_ctx_put requires named values")
+  ctx <- .ctx
+  for (nm in nms) ctx[nm] <- list(vals[[nm]])
+  ctx
 }

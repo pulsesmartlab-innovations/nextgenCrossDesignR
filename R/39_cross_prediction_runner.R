@@ -616,7 +616,10 @@ ng_run_cp_output_files <- function(output_dir,
                                    write_outputs,
                                    write_figures,
                                    n_crosses,
-                                   include_trait_gebv = FALSE) {
+                                   include_trait_gebv = FALSE,
+                                   trait_check_reference = NULL,
+                                   multi_trait_meta = NULL,
+                                   trait_value_metric = NULL) {
   files <- list()
   if (!isTRUE(write_outputs) && !isTRUE(write_figures)) return(files)
   if (is.null(output_dir) || !nzchar(as.character(output_dir[[1L]]))) {
@@ -626,11 +629,17 @@ ng_run_cp_output_files <- function(output_dir,
   dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
   figures <- NULL
   if (isTRUE(write_figures)) {
+    chk_line <- if (is.null(trait_check_reference)) NA_real_ else
+      ng_check_line_value(trait_check_reference, multi_trait_meta,
+                          candidate_scores = candidate_crosses,
+                          trait_value_metric = trait_value_metric)
     plot_path <- file.path(output_dir, "priority_score_vs_kinship.png")
     ng_plot_priority_score_vs_kinship(
       scored = candidate_crosses,
       selected = selected_crosses,
-      output_path = plot_path
+      output_path = plot_path,
+      check_line = if (is.finite(chk_line)) chk_line else NULL,
+      check_label = if (is.finite(chk_line)) ng_check_line_label(trait_check_reference$active) else NULL
     )
     files$priority_score_vs_kinship_png <- normalizePath(plot_path, winslash = "/", mustWork = TRUE)
     figures <- data.frame(
@@ -638,6 +647,21 @@ ng_run_cp_output_files <- function(output_dir,
       path = files$priority_score_vs_kinship_png,
       stringsAsFactors = FALSE
     )
+    # M1 fix: the main scatter's check line is gated (inside ng_check_line_value()) on
+    # trait_value_metric == "mean" (D4) -- so under the package default ("usefulness") it draws
+    # no line at all. The per-trait panel's y-axis is always <trait>_mean (never the ranking
+    # metric), so it is commensurable with the check under EVERY trait_value_metric and is
+    # exactly the right fallback -- including for a single checked trait, previously excluded by
+    # requiring nrow(active) > 1L (leaving a default single-check run with no check visual
+    # whatsoever). Draw it whenever any check is active, regardless of count.
+    if (!is.null(trait_check_reference) && nrow(trait_check_reference$active) >= 1L) {
+      panel_path <- file.path(output_dir, "check_panels.png")
+      ng_plot_check_panels(candidate_crosses, trait_check_reference, output_path = panel_path)
+      files$check_panels_png <- normalizePath(panel_path, winslash = "/", mustWork = TRUE)
+      figures <- rbind(figures, data.frame(figure = "check_panels",
+                                           path = files$check_panels_png,
+                                           stringsAsFactors = FALSE))
+    }
   }
   if (isTRUE(write_outputs)) {
     workbook_path <- file.path(output_dir, if (is.null(output_file)) "crossing_plan.xlsx" else as.character(output_file[[1L]]))
@@ -650,7 +674,8 @@ ng_run_cp_output_files <- function(output_dir,
       duplicate_pairs = if (!is.null(qc$putative_duplicates)) qc$putative_duplicates$pairs else NULL,
       figures = figures,
       n_crosses_requested = n_crosses,
-      include_trait_gebv = isTRUE(include_trait_gebv)
+      include_trait_gebv = isTRUE(include_trait_gebv),
+      trait_check_reference = trait_check_reference
     )
   }
   files
@@ -789,7 +814,7 @@ ng_cp__stage_qc <- function(ctx) {
   # blocker, exactly as before. The one-shot driver (ng_run_cross_prediction)
   # re-introduces the throw, with this exact message, immediately after this
   # stage returns -- see the stage loop below.
-  ctx$qc <- qc
+  ctx <- ng_ctx_put(ctx, qc = qc)
   if (any(qc$issues$severity == "blocker")) {
     return(ctx)
   }
@@ -815,16 +840,19 @@ ng_cp__stage_qc <- function(ctx) {
     )
   }
   marker_map_std <- ng_run_cp_align_marker_map(geno, cleaned$marker_map)
-  ctx$phenotype_id_col_used <- phenotype_id_col_used
-  ctx$genotype_id_col_used <- genotype_id_col_used
-  ctx$trait_spec <- trait_spec
-  ctx$direction_columns <- direction_columns
-  ctx$direction_canonical <- direction_canonical
-  ctx$marker_map_std <- marker_map_std
-  ctx$qc <- qc
-  ctx$geno <- geno
-  ctx$pheno <- pheno
-  ctx$ids <- ids
+  ctx <- ng_ctx_put(
+    ctx,
+    phenotype_id_col_used = phenotype_id_col_used,
+    genotype_id_col_used = genotype_id_col_used,
+    trait_spec = trait_spec,
+    direction_columns = direction_columns,
+    direction_canonical = direction_canonical,
+    marker_map_std = marker_map_std,
+    qc = qc,
+    geno = geno,
+    pheno = pheno,
+    ids = ids
+  )
   ctx
 }
 
@@ -1020,6 +1048,13 @@ ng_cp__stage_predict <- function(ctx) {
         column = column,
         direction = trait_spec$direction[[i]],
         value_column = paste0(clean_trait, "_value"),
+        # RESERVED, deliberately NA: a PEV-based reliability (accuracy^2 against true breeding
+        # value) is not available in this package. R/02_effects.R:117-119 refuses to populate
+        # one, because the quantities it CAN compute are phenotype predictive diagnostics --
+        # a different thing: CV R^2 is bounded above by h^2, reliability by 1. The honest
+        # measure is the adjacent cv_predictive_r2; do NOT copy it here, that is exactly the
+        # conflation R/02 refuses. This slot is meaningful only if a calibrated reliability
+        # ever enters the package (see the deferred mean_source work).
         marker_effect_reliability = NA_real_,
         cv_predictive_r2 = fit$cv_predictive_r2,
         marker_effect_training_n = as.integer(n_effect_training),
@@ -1044,6 +1079,7 @@ ng_cp__stage_predict <- function(ctx) {
   parallel_cores_used <- attr(trait_results, "n_threads")
   trait_results <- trait_results[order(vapply(trait_results, `[[`, integer(1L), "index"))]
   effect_summary <- vector("list", length(trait_results))
+  trait_mean_source <- list()
 
   for (j in seq_along(trait_results)) {
     item <- trait_results[[j]]
@@ -1057,6 +1093,9 @@ ng_cp__stage_predict <- function(ctx) {
     }
     cross_table[[paste0(clean_trait, "_value")]] <- item$value
     cross_table[[paste0(clean_trait, "_mean")]] <- scored_trait$cross_mean_blend
+    # M6: trait_mean_source is already initialised unconditionally to list() right before this
+    # loop begins, so this guard could never fire.
+    trait_mean_source[[trait]] <- scored_trait$mean_source[[1L]]
     cross_table[[paste0(clean_trait, "_pmv")]] <- scored_trait$pmv
     cross_table[[paste0(clean_trait, "_pmv_fast")]] <- scored_trait$pmv
     cross_table[[paste0(clean_trait, "_pmv_full_posterior")]] <- scored_trait$pmv_full_posterior
@@ -1087,6 +1126,10 @@ ng_cp__stage_predict <- function(ctx) {
   # antagonistic within the family (the classic yield/protein case). The wf_var_/wf_cov_ columns
   # ride the cross table so they survive candidate filtering and allocation by row alignment.
   # Cost scales with T (one kernel pass per trait); the T(T+1)/2 trait pairs are cheap colSums.
+  # Hoisted to NULL so it is always defined -- including for the check-reference joint
+  # probability computed later in ng_cp__stage_index, which falls back to its G_hat proxy
+  # when this is NULL (single-trait runs, or nrow(cross_table) == 0).
+  ctc <- NULL
   if (nrow(trait_spec) > 1L && !is.null(cross_table) && nrow(cross_table) > 0L) {
     betas <- vapply(trait_spec$trait, function(tr) {
       b <- suppressWarnings(as.numeric(effects_list[[tr]]$beta))
@@ -1113,26 +1156,49 @@ ng_cp__stage_predict <- function(ctx) {
     for (cc in setdiff(names(ctc), c("parent1", "parent2"))) cross_table[[cc]] <- ctc[[cc]]
   }
 
-  ctx$ld_pruning_report <- ld_pruning_report
-  ctx$geno <- geno
-  ctx$marker_map_std <- marker_map_std
-  ctx$ids <- ids
-  ctx$training_only_count <- training_only_count
-  ctx$training_ids <- training_ids
-  ctx$effects_list <- effects_list
-  ctx$trait_scores <- trait_scores
-  ctx$posterior_effects_list <- posterior_effects_list
-  ctx$posterior_predictions_list <- posterior_predictions_list
-  ctx$cross_table <- cross_table
-  ctx$parallel_backend <- parallel_backend
-  ctx$parallel_cores_used <- parallel_cores_used
-  ctx$effect_summary <- effect_summary
+  # Carried into ng_cp__stage_index for the check-reference block: the per-trait mean_source
+  # (so a check resolves onto the same scale as the cross means it is compared against) and the
+  # exact within-family cross-trait covariance (for the multi-check joint probability).
+  ctx <- ng_ctx_put(
+    ctx,
+    ld_pruning_report = ld_pruning_report,
+    geno = geno,
+    marker_map_std = marker_map_std,
+    ids = ids,
+    training_only_count = training_only_count,
+    training_ids = training_ids,
+    effects_list = effects_list,
+    trait_scores = trait_scores,
+    posterior_effects_list = posterior_effects_list,
+    posterior_predictions_list = posterior_predictions_list,
+    cross_table = cross_table,
+    trait_mean_source = trait_mean_source,
+    ctc = ctc,
+    parallel_backend = parallel_backend,
+    parallel_cores_used = parallel_cores_used,
+    effect_summary = effect_summary
+  )
   ctx
 }
 
 ng_cp__stage_index <- function(ctx) {
   list2env(ctx, environment())
   direction_canonical <- ctx$direction_canonical
+  # ctc (exact within-family cross-trait covariance, R/39 stage_predict) is deliberately assigned
+  # NULL rather than omitted when it cannot be computed (single-trait runs, or an empty candidate
+  # pool) -- ng_attach_joint_check_probability() below is written to treat NULL as "fall back to
+  # the G_hat proxy". Plain `ctx$ctc <- ctc` would silently DROP the key when ctc is NULL
+  # (assigning NULL into a list element deletes it), so list2env() above would never bind a bare
+  # `ctc` in that case; the upstream write now goes through ng_ctx_put() (R/00_utils.R), which
+  # keeps the key. Read it explicitly via `ctx$` anyway (returns NULL for an absent key, and costs
+  # nothing when the key is present) so this path never regresses to "object 'ctc' not found" if a
+  # future write here is ever done the plain way again.
+  ctc <- ctx$ctc
+  # check_pheno is NULL on almost every run and is never reassigned on ctx by any earlier
+  # stage, so list2env() above already binds it correctly -- but it is read via `ctx$` anyway,
+  # the same defensive pattern as `ctc` just above, since this is exactly the shape of field
+  # ("usually NULL") that has silently gone unbound here before.
+  check_pheno <- ctx$check_pheno
   # Per-cross COST / LOGISTICS: candidate crosses are generated internally, so a breeder who
   # wants cost/budget/logistic-aware allocation supplies cross_cost -- a data frame with
   # parent1/parent2 + one numeric column per factor (e.g. cost, distance). Joined onto the
@@ -1170,6 +1236,15 @@ ng_cp__stage_index <- function(ctx) {
   objective_traits$column <- vapply(objective_traits$trait, function(trait) {
     paste0(ng_run_cp_clean_trait_name(trait), "_value")
   }, character(1L))
+  # DEFECT 1 fix (threshold-fix report): min_value/max_value are trait-unit thresholds a breeder
+  # sets against the family MEAN, not against `column` (the `_value` column, which under the
+  # default trait_value_metric = "usefulness" is mean + i*sqrt(pmv), and under "pmv"/"vpm" is a
+  # variance -- neither is trait units). Point the threshold comparison at `<trait>_mean`, built
+  # around line 1088 above for every trait (including the index_as_trait pseudo-trait
+  # "selection_index", whose column is "selection_index_mean").
+  objective_traits$threshold_column <- vapply(objective_traits$trait, function(trait) {
+    paste0(ng_run_cp_clean_trait_name(trait), "_mean")
+  }, character(1L))
   objective <- ng_breeder_selection_objective(
     trait = objective_traits,
     method = multi_trait_method,
@@ -1187,64 +1262,141 @@ ng_cp__stage_index <- function(ctx) {
       ploidy = marker_ploidy, drop_lethal_carrier_crosses = drop_lethal_carrier_crosses)
   }
 
-  # Per-trait check-threshold veto (Module: trait checks): flag (and optionally exclude) crosses
-  # whose per-trait mid-parent value is on the wrong side of a breeder-chosen check line. Runs
-  # after the lethal guard, on the fully-populated cross_table (parent1/parent2 + all per-trait
-  # value/mean/pmv/... columns already attached above).
-  trait_check_diagnostics <- NULL
+  # Check lines as REFERENCES (Module: check reference). Attaches per-trait reference columns
+  # and never touches the candidate set: no filtering, no penalty, no reordering. Checks are
+  # kept out of geno entirely, so QC, LD, the GRM, and ng_make_pairs() are all untouched and a
+  # run with checks is numerically identical to the same run without them.
+  trait_check_reference <- NULL
   if (!is.null(trait_checks)) {
+    if (is.null(check_geno)) {
+      ng_stop("trait_checks needs check_geno: check lines are supplied in their own genotype ",
+              "matrix, separate from the candidate parents, and are never crossed")
+    }
     if (!identical(prediction_mode, "trait_by_trait")) {
       ng_stop("trait_checks requires prediction_mode = 'trait_by_trait' (checks are keyed by trait)")
     }
     if (!(inherits(trait_checks, "data.frame") && all(c("trait", "check") %in% names(trait_checks)))) {
       ng_stop("trait_checks must be a data.frame with trait + check columns")
     }
-    # Resolve NA per-check directions from the breeding direction map. direction_canonical (built
-    # above from trait_direction/direction_file) carries the RAW increase/decrease strings the
-    # breeder supplied -- trait_spec$direction has already been normalized by ng_multitrait_direction
-    # to maximize/minimize, which ng_trait_check_spec does not understand, so it is NOT the source here.
+    # Progeny per family is the breeder's number, not ours. It scales P(beat check) directly,
+    # so there is no default: a made-up family size would silently drive a reported probability.
+    kp <- if (is.null(check_progeny_size)) NA_integer_ else
+      suppressWarnings(as.integer(check_progeny_size[[1L]]))
+    if (!length(kp) || is.na(kp) || kp < 1L) {
+      ng_stop("check_progeny_size is required with trait_checks: give the number of progeny ",
+              "you will raise per family. It sets P(beat check) -- the chance a cross throws a ",
+              "line beating the check -- so it must be your program's figure, not a default.")
+    }
+    check_geno <- ng_align_check_geno(check_geno, colnames(geno), ploidy = marker_ploidy)
+    clash <- intersect(rownames(check_geno), rownames(geno))
+    if (length(clash)) {
+      ng_stop("check id(s) also a candidate parent: ", paste(clash, collapse = ", "),
+              ". A check is a benchmark, not breeding material; give it a distinct id or ",
+              "remove it from the parent genotypes.")
+    }
     tdir <- stats::setNames(direction_canonical$direction, direction_canonical$trait)
     tc_direction <- if (is.null(trait_checks$direction)) NA else trait_checks$direction
-    tc_basis <- if (is.null(trait_checks$basis)) check_basis else trait_checks$basis
     tc_spec <- ng_trait_check_spec(trait_checks$trait, trait_checks$check,
-                                   direction = tc_direction, basis = tc_basis,
-                                   trait_direction = tdir)
-    # v1 requires each check line to be a genotyped candidate parent (geno = parents); a check
-    # id that isn't among rownames(geno) would otherwise silently make every cross non-evaluable
-    # for that trait (trait_values[[tr]][[basis]][ck] resolves to NA).
-    bad <- which(!(tc_spec$check %in% rownames(geno)))
-    if (length(bad)) {
-      ng_stop(paste(sprintf(
-        "trait check for '%s': check line '%s' is not among the candidate parents (v1 requires the check to be a genotyped parent)",
-        tc_spec$trait[bad], tc_spec$check[bad]), collapse = "; "))
+                                   direction = tc_direction, trait_direction = tdir)
+    # cross_table columns are named with the sanitised trait name; carry it as the lookup key
+    # so a trait like "Days to flower" resolves to Days_to_flower_mean rather than erroring.
+    tc_spec$column_key <- ng_run_cp_clean_trait_name(tc_spec$trait)
+    missing_chk <- setdiff(tc_spec$check, rownames(check_geno))
+    if (length(missing_chk)) {
+      ng_stop("trait_checks names check line(s) absent from check_geno: ",
+              paste(missing_chk, collapse = ", "))
     }
-    # Per-trait per-id value lookups: GEBV is always available (predicted from the fitted marker
-    # effects); phenotype is only available when the trait's raw column is on the input phenotype.
-    trait_values <- list()
+    check_values <- list(); check_source <- character(0)
+    # Resolved LAZILY, only the first time some trait actually needs check_pheno -- see below.
+    check_pheno_id_col <- NULL
     for (tr in unique(tc_spec$trait)) {
-      col <- trait_spec$column[match(tr, trait_spec$trait)]
-      if (is.na(col) || !(tr %in% names(effects_list))) {
+      if (!(tr %in% names(effects_list))) {
         ng_stop("trait_checks references a trait not present in trait_direction/effects: ", tr)
       }
-      gv <- stats::setNames(ng_predict_gebv(geno, effects_list[[tr]]), rownames(geno))
-      pv <- if (col %in% names(pheno)) {
-        stats::setNames(suppressWarnings(as.numeric(pheno[[col]])), rownames(pheno))
-      } else NULL
-      trait_values[[tr]] <- list(gebv = gv, phenotype = pv)
+      # The per-trait mean_source stamped on the scored table is the authority: the check must
+      # land on whatever source produced the cross means for this trait, or the reference line
+      # would sit on a different scale from the axis it is drawn on.
+      src <- as.character(trait_mean_source[[tr]])
+      check_source[[tr]] <- src
+      # Explicit check_records wins where both are supplied: check_pheno only fills in the
+      # per-trait records the caller did NOT already give via check_records. A GEBV source is
+      # never filled from check_pheno -- ng_check_records_from_pheno() itself returns NULL for
+      # a GEBV source, since the value must then come from the check's own markers.
+      recs <- check_records[[tr]]
+      # A GEBV-sourced trait never consults check_pheno at all -- ng_check_records_from_pheno()
+      # returns NULL immediately for a GEBV source (the value comes from the check's own markers
+      # instead) -- so it must never trigger id-column resolution either. Gating on
+      # `is.null(recs)` alone was NOT sufficient: for a GEBV trait `recs` is also NULL (no
+      # check_records supplied), so the branch below still ran, called ng_run_cp_id_col() on
+      # check_pheno, and hard-errored on an unrecognised id column even though nothing in this
+      # trait's evaluation needed check_pheno at all.
+      if (is.null(recs) && !is.null(check_pheno) && !startsWith(src, "GEBV")) {
+        # check_pheno's id column resolves exactly the way every other table's does, and ONLY
+        # once we know some trait actually needs check_pheno (this gate) -- resolving eagerly,
+        # above the loop, would fail a run over a check_pheno table no trait ever consults (e.g.
+        # every trait supplied via check_records, or GEBV-sourced): attaching an input nothing
+        # reads must never turn a working run into a failing one. An explicit id_col passes
+        # through unchanged so a genuinely missing explicit column still hits
+        # ng_check_records_from_pheno()'s own check and its existing message, unaltered; an
+        # omitted id_col auto-detects via ng_run_cp_id_col()'s own candidate list (parent,
+        # parent_id, id, name, line, entry, NAME) -- the SAME list/function phenotype and
+        # genotype use, not a second hand-rolled copy of it. Resolved once (cached in the loop
+        # variable) and reused across every trait that shares this same check_pheno table.
+        if (is.null(check_pheno_id_col)) {
+          check_pheno_id_col <- if (is.null(id_col)) {
+            ng_run_cp_id_col(check_pheno, NULL, "check_pheno")
+          } else {
+            id_col
+          }
+        }
+        col <- trait_spec$column[match(tr, trait_spec$trait)]
+        conv <- ng_check_records_from_pheno(check_pheno, check_pheno_id_col,
+                                            stats::setNames(list(col), tr), src)
+        recs <- if (is.null(conv)) NULL else conv[[tr]]
+      }
+      check_values[[tr]] <- ng_check_reference_value(src, check_geno, effects_list[[tr]],
+                                                     check_records = recs)
     }
-    n_candidates_pre_trait_checks <- nrow(cross_table)
-    cross_table <- ng_apply_trait_checks(cross_table, tc_spec, trait_values,
-                                         exclude = isTRUE(exclude_threshold_violators))
-    trait_check_diagnostics <- attr(cross_table, "trait_check_diagnostics")
-    attr(cross_table, "trait_check_diagnostics") <- NULL
-    # Only attribute the zero-survivors condition to trait checks when exclusion is actually on
-    # AND there were candidates going into this block -- otherwise an already-empty cross_table
-    # (e.g. emptied upstream by the lethal guard) would be misreported as caused by trait checks.
-    if (isTRUE(exclude_threshold_violators) && n_candidates_pre_trait_checks > 0L && !nrow(cross_table)) {
-      ng_stop("trait_checks with exclude_threshold_violators = TRUE removed every candidate ",
-              "cross; relax the check threshold(s) or set exclude_threshold_violators = FALSE ",
-              "to only flag (not drop) violators.")
+    # Design section 5's "not-evaluable rule" promises "NA with a diagnostic" -- until now there
+    # was no diagnostic anywhere in the run: a phenotypic source with no matching check_pheno/
+    # check_records record silently produced NA with no warning at all. Warn once per trait whose
+    # check value came back non-finite, naming the trait, the resolved source, and pointing the
+    # breeder at check_pheno (or check_records) as the fix.
+    for (tr in unique(tc_spec$trait)) {
+      ck <- tc_spec$check[match(tr, tc_spec$trait)]
+      cv <- check_values[[tr]]
+      val <- if (!is.null(cv) && ck %in% names(cv)) cv[[ck]] else NA_real_
+      if (!length(val) || !is.finite(val)) {
+        warning(sprintf(
+          "check reference for trait '%s' (check '%s') is not evaluable: the resolved mean ",
+          tr, ck),
+          sprintf("source '%s' has no record for this check. Supply a matching entry via ",
+                  check_source[[tr]]),
+          "check_pheno (or check_records) so this check can be compared against the cross ",
+          "means; its reference columns and 'checks_all_ok' will report NA for this trait ",
+          "until then.", call. = FALSE)
+      }
     }
+    cross_table <- ng_attach_check_reference(cross_table, tc_spec, trait_values = NULL,
+                                             check_values = check_values,
+                                             k_progeny = kp)
+    # Multi-trait only: P(a progeny beats every check at once). Skipped for a single check,
+    # where p_beat_all_checks would just duplicate the per-trait column.
+    if (nrow(tc_spec) > 1L) {
+      cross_table <- ng_attach_joint_check_probability(
+        cross_table, tc_spec, check_values, k_progeny = kp,
+        cross_trait_cov = ctc)
+    }
+    trait_check_reference <- list(
+      active = tc_spec, values = check_values, source = check_source,
+      progeny_size = kp,
+      diagnostics = attr(cross_table, "check_reference_diagnostics"),
+      # I4: the joint p_beat_all_checks caveat (Monte Carlo draw count + error, diagonal PEV
+      # approximation, clipped to the marginal minimum -- see ng_attach_joint_check_probability(),
+      # R/51) previously lived only in that attribute, which nothing downstream ever read. NULL
+      # for a single-check run, where p_beat_all_checks does not exist.
+      p_beat_all_checks_note = attr(cross_table, "p_beat_all_checks_note"))
+    attr(cross_table, "check_reference_diagnostics") <- NULL
   }
 
   scored_crosses <- ng_score_breeder_objective(
@@ -1261,7 +1413,7 @@ ng_cp__stage_index <- function(ctx) {
   # The index metadata (method + resolved weights / solved coefficients) is what the multi-trait
   # portfolio axes are built from; capture it here because `attr` does not survive the row
   # subsetting the allocator performs on the way to the plan.
-  ctx$multi_trait_meta <- attr(scored_crosses, "multi_trait")
+  ctx <- ng_ctx_put(ctx, multi_trait_meta = attr(scored_crosses, "multi_trait"))
   allocation_criterion_col <- "multi_trait_score"
   if (!is.null(marker_target_spec)) {
     scored_crosses <- ng_apply_marker_management(
@@ -1273,12 +1425,15 @@ ng_cp__stage_index <- function(ctx) {
       allocation_criterion_col <- "marker_adjusted_gain"
     }
   }
-  ctx$cross_table <- cross_table
-  ctx$objective <- objective
-  ctx$n_candidates_pre_lethal <- n_candidates_pre_lethal
-  ctx$trait_check_diagnostics <- trait_check_diagnostics
-  ctx$scored_crosses <- scored_crosses
-  ctx$allocation_criterion_col <- allocation_criterion_col
+  ctx <- ng_ctx_put(
+    ctx,
+    cross_table = cross_table,
+    objective = objective,
+    n_candidates_pre_lethal = n_candidates_pre_lethal,
+    trait_check_reference = trait_check_reference,
+    scored_crosses = scored_crosses,
+    allocation_criterion_col = allocation_criterion_col
+  )
   ctx
 }
 
@@ -1377,7 +1532,7 @@ ng_cp__stage_allocate <- function(ctx) {
   plan_summary <- attr(plan, "summary")
   plan_summary$allocation_method <- allocation_method
   attr(plan, "summary") <- plan_summary
-  ctx$plan <- plan
+  ctx <- ng_ctx_put(ctx, plan = plan)
   ctx
 }
 
@@ -1392,6 +1547,7 @@ ng_cp__stage_rank <- function(ctx) {
     score_weight = priority_score_weight,
     kinship_weight = priority_kinship_weight,
     threshold_weight = priority_threshold_weight,
+    check_weight = priority_check_weight,
     breaks = priority_breaks,
     labels = priority_labels,
     sort = TRUE
@@ -1515,6 +1671,9 @@ ng_cp__stage_rank <- function(ctx) {
           list(trait = trait_spec$trait[[k]],
                direction = trait_spec$direction[[k]],
                weight = unname(ib$w[[k]]),
+               # RESERVED, deliberately NA -- see the note at the effect_summary construction
+               # above. No PEV-based reliability exists here, and the adjacent cv_predictive_r2
+               # is a phenotype diagnostic, not a substitute for it.
                marker_effect_reliability = NA_real_,
                cv_predictive_r2 = unname(pred_r2[[k]]),
                mean_variance_share = unname(var_share[[k]]),
@@ -1613,13 +1772,19 @@ ng_cp__stage_rank <- function(ctx) {
     write_outputs = write_outputs,
     write_figures = write_figures,
     n_crosses = n_crosses,
-    include_trait_gebv = include_trait_gebv
+    include_trait_gebv = include_trait_gebv,
+    trait_check_reference = ctx$trait_check_reference,
+    multi_trait_meta = ctx$multi_trait_meta,
+    trait_value_metric = ctx$trait_value_metric
   )
-  ctx$selected <- selected
-  ctx$scored_crosses <- scored_crosses
-  ctx$priority_risk_diagnostics <- priority_risk_diagnostics
-  ctx$constraint_diagnostics <- constraint_diagnostics
-  ctx$output_files <- output_files
+  ctx <- ng_ctx_put(
+    ctx,
+    selected = selected,
+    scored_crosses = scored_crosses,
+    priority_risk_diagnostics = priority_risk_diagnostics,
+    constraint_diagnostics = constraint_diagnostics,
+    output_files = output_files
+  )
   ctx
 }
 
@@ -1634,13 +1799,14 @@ utils::globalVariables(c(
   "alphamate_lambda_group", "alphamate_max_contributions", "alphamate_mode", "alphamate_n_threads",
   "alphamate_number_of_parents", "alphamate_runtime_path", "alphamate_target_degree", "alphamate_workdir",
   "assume_inbred", "parent_type", "phased_haplotypes", "bp_per_cm", "budget", "burn_in",
-  "check_basis", "committed_crosses", "constraint_diagnostics", "cost_col",
-  "cross_cost", "cross_table", "direction_column_col", "direction_columns",
+  "check_geno", "check_pheno", "check_progeny_size", "check_records",
+  "committed_crosses", "constraint_diagnostics", "cost_col",
+  "cross_cost", "cross_table", "ctc", "direction_column_col", "direction_columns",
   "direction_direction_col", "direction_file", "direction_trait_col", "diversity_emphasis",
   "drop_lethal_carrier_crosses", "duplicate_action", "duplicate_maf_min", "duplicate_max_missing_prop",
   "duplicate_min_compared_markers", "duplicate_threshold", "effect_summary", "effects_list",
   "evol_iterations", "evol_seed", "evol_solutions", "evol_stop",
-  "exclude_threshold_violators", "geno", "genotype", "genotype_file",
+  "geno", "genotype", "genotype_file",
   "genotype_id_col_used", "grm_method", "group_permission", "group_quota",
   "id_col", "ids", "include_trait_gebv", "index_col", "phenotypic_covariance", "genetic_covariance",
   "index_direction", "lambda_cost", "lambda_group", "lambda_logistic",
@@ -1659,13 +1825,14 @@ utils::globalVariables(c(
   "parent_group", "pheno", "phenotype", "phenotype_file",
   "phenotype_id_col_used", "plan", "posterior_effects_list", "posterior_method",
   "posterior_n_draws", "posterior_predictions_list", "prediction_mode", "priority_breaks",
-  "priority_kinship_weight", "priority_labels", "priority_score_weight", "priority_threshold_weight",
+  "priority_check_weight", "priority_kinship_weight", "priority_labels", "priority_score_weight", "priority_threshold_weight",
   "qc", "recomb_model", "ril_mode", "run_posterior_prediction",
   "scored_crosses", "seed", "selected", "selection_prop",
   "strategy", "target", "target_coancestry", "threshold_penalty_autoscale",
   "threshold_penalty_weight", "threshold_policy", "training_genotype", "training_genotype_file",
   "training_genotype_id_col", "training_ids", "training_only_count", "training_phenotype",
-  "training_phenotype_file", "training_phenotype_id_col", "trait_checks", "trait_direction",
+  "training_phenotype_file", "training_phenotype_id_col",
+  "trait_check_reference", "trait_checks", "trait_direction", "trait_mean_source",
   "trait_scores", "trait_spec", "trait_value_metric", "trait_value_metric_input",
   "uc_variance_source_input", "trait_weights",
   "traits_to_use", "uc_variance_source", "use_cpp", "use_ocs",
@@ -1675,7 +1842,7 @@ utils::globalVariables(c(
 ng_cp__assemble_result <- function(ctx) {
   list2env(ctx, environment())
   ld_pruning_report <- ctx$ld_pruning_report
-  trait_check_diagnostics <- ctx$trait_check_diagnostics
+  trait_check_reference <- ctx$trait_check_reference
   priority_risk_diagnostics <- ctx$priority_risk_diagnostics
   result <- list(
     prediction_mode = prediction_mode,
@@ -1716,7 +1883,7 @@ ng_cp__assemble_result <- function(ctx) {
     objective = objective,
     plan_summary = attr(plan, "summary"),
     constraint_diagnostics = constraint_diagnostics,
-    trait_check_diagnostics = trait_check_diagnostics,
+    trait_check_reference = trait_check_reference,
     priority_risk_diagnostics = priority_risk_diagnostics,
     output_files = output_files,
     settings = list(
@@ -1854,8 +2021,10 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
                                     lambda_logistic = 0,
                                     lethal_spec = NULL,
                                     trait_checks = NULL,
-                                    check_basis = "gebv",
-                                    exclude_threshold_violators = FALSE,
+                                    check_geno = NULL,
+                                    check_records = NULL,
+                                    check_pheno = NULL,
+                                    check_progeny_size = NULL,
                                     include_trait_gebv = FALSE,
                                     marker_target_spec = NULL,
                                     lambda_marker = 0,
@@ -1886,6 +2055,7 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
                                     priority_score_weight = 1.0,
                                     priority_kinship_weight = 0.15,
                                     priority_threshold_weight = 1.0,
+                                    priority_check_weight = 0,
                                     output_dir = NULL,
                                     output_file = "crossing_plan.xlsx",
                                     write_outputs = FALSE,

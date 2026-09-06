@@ -368,7 +368,7 @@
     "pev_concentration_note": "index confidence is dominated by 'disease' (100% of the index prediction-error variance), so risk_bin ranks crosses on that trait rather than on the index. Per-trait PEVs are only comparable when their residual variances are; check ridge_lambda and marker_effect_reliability per trait (a lambda at the grid floor interpolates its training rows and reports a near-zero PEV).",
     "portfolio_basis_note": "index method 'auto' combines rank-normalized traits, so no linear index exists in genetic units; cross_level/cross_upside use the trait weights as standardized-unit coefficients and are indicative, not a decomposition of multi_trait_score. Supply economic_weight (or desired_change) per trait for a solved linear index."
   },
-  "trait_check_diagnostics": null,
+  "trait_check_reference": null,
   "candidate_crosses": [
     {
       "parent1": "P01",

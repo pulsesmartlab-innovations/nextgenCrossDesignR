@@ -146,7 +146,11 @@
         {"name": "lambda_marker", "type": "number", "default": 0},
         {"name": "marker_ploidy", "type": "integer", "default": 2},
         {"name": "lethal_spec", "type": "object", "default": null, "desc": "Deleterious recessive locus (ng_lethal_recessive_spec)"},
-        {"name": "drop_lethal_carrier_crosses", "type": "boolean", "default": true}
+        {"name": "drop_lethal_carrier_crosses", "type": "boolean", "default": true},
+        {"name": "check_progeny_size", "type": "integer", "required": false,
+         "desc": "Progeny per family you will raise. Required with trait_checks; sets P(beat check). No default -- it must be your program's figure."},
+        {"name": "check_pheno", "type": "object", "default": null,
+         "desc": "Check phenotype table (rows keyed by id_col, one column per trait) supplying check values on the phenotypic route -- the same shape as the phenotype table itself. Ignored when a trait's resolved mean source is a GEBV variant (the check value then comes from check_geno instead). check_records, if also supplied, wins per trait."}
       ]
     },
     {
@@ -190,7 +194,8 @@
         {"name": "priority_labels", "type": "string[]", "default": ["highly_priority", "priority", "medium_priority", "low_priority"]},
         {"name": "priority_score_weight", "type": "number", "default": 1.0},
         {"name": "priority_kinship_weight", "type": "number", "default": 0.15},
-        {"name": "priority_threshold_weight", "type": "number", "default": 1.0}
+        {"name": "priority_threshold_weight", "type": "number", "default": 1.0},
+        {"name": "priority_check_weight", "type": "number", "default": 0, "desc": "Weight on check_violation (wrong-side-of-check count) in the blended priority index. 0 (default) leaves an existing run's tiers unchanged; positive values let a check-failing cross be deprioritised without excluding it."}
       ]
     },
     {

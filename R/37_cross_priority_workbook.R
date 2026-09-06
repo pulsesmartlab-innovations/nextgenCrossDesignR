@@ -159,6 +159,52 @@ ng_cpw_portfolio_cols <- function(crosses, n) {
   lapply(out, function(v) if (length(v) == n) v else rep(NA, n))
 }
 
+# The `Checks` sheet: the reference itself, one row per trait. Breeders read the check first
+# and the crosses second, so it gets its own sheet rather than being inferred from columns.
+ng_cpw_checks_sheet <- function(trait_check_reference, crosses) {
+  spec <- as.data.frame(trait_check_reference$active, stringsAsFactors = FALSE)
+  if (!nrow(spec)) return(data.frame())
+  # n_wrong_side (R/51_check_reference.R::ng_attach_check_reference) is counted once, over the
+  # full candidate pool, before allocation/selection narrows it down to a crossing plan. Its
+  # denominator must therefore be that SAME pool (diagnostics$n_candidates) -- not nrow(crosses),
+  # which at the workbook layer is typically the much smaller SELECTED plan and would pair a
+  # candidate-pool numerator with a selected-plan denominator. Falls back to nrow(crosses) only
+  # if diagnostics does not carry the count.
+  n_total <- trait_check_reference$diagnostics$n_candidates
+  if (is.null(n_total)) n_total <- nrow(crosses)
+  wrong <- trait_check_reference$diagnostics$n_wrong_side
+  not_eval <- trait_check_reference$diagnostics$n_not_evaluable
+  value <- vapply(seq_len(nrow(spec)), function(k) {
+    suppressWarnings(as.numeric(trait_check_reference$values[[spec$trait[[k]]]][[spec$check[[k]]]]))
+  }, numeric(1))
+  data.frame(
+    trait = spec$trait,
+    check_id = spec$check,
+    direction = ifelse(spec$reject_if == "below", "want above", "want below"),
+    value = value,
+    source = as.character(trait_check_reference$source[spec$trait]),
+    # A check whose own `value` never resolved (NA) was never comparable to ANY cross for this
+    # trait: rendering "0 / N" here would be an affirmative false claim ("0 crosses on the wrong
+    # side") when in truth zero crosses were ever evaluated. "not evaluable" is the only honest
+    # string for that case -- "0 / 66" must be unreachable for a check that was never compared.
+    # When the check itself DID resolve but some individual crosses' own mean/variance did not
+    # (diagnostics$n_not_evaluable > 0 for this trait), that partial gap is surfaced alongside the
+    # wrong/total ratio rather than silently folded into either count.
+    n_crosses_on_wrong_side = vapply(seq_len(nrow(spec)), function(k) {
+      tr <- spec$trait[[k]]
+      if (!is.finite(value[[k]])) return("not evaluable")
+      w <- wrong[[tr]]
+      ne <- not_eval[[tr]]
+      base <- sprintf("%d / %d", if (is.null(w)) NA_integer_ else as.integer(w), n_total)
+      if (!is.null(ne) && length(ne) == 1L && is.finite(ne) && ne > 0) {
+        paste0(base, sprintf(" (%d not evaluable)", as.integer(ne)))
+      } else {
+        base
+      }
+    }, character(1)),
+    stringsAsFactors = FALSE, row.names = NULL)
+}
+
 # Insert named columns immediately before an existing column, preserving order.
 ng_cpw_insert_before <- function(df, before, cols) {
   if (!length(cols)) return(df)
@@ -233,6 +279,22 @@ ng_cpw_make_selected <- function(crosses, trait_info, parent_use, duplicate_pair
     gebv_cols <- ng_cpw_gebv_cols(crosses)
     for (col in gebv_cols) out[[ng_cpw_gebv_label(col)]] <- ng_cpw_numeric(crosses[[col]])
   }
+  # Per-trait check-reference columns (R/51_check_reference.R / R/39 runner): so a breeder
+  # scanning a cross sees its margin against the check without cross-referencing the Checks
+  # sheet. No `keep` vector exists in this function (unlike ng_cpw_candidate_table), so the
+  # check columns are appended the same way trait/GEBV columns above are -- copied straight
+  # from `crosses` when present, absent entirely on a no-checks run.
+  # M5: check_violation and priority_check_component were previously dropped here -- so once a
+  # breeder opts into priority_check_weight > 0 (I2), the workbook showed a moved tier with no
+  # column explaining why. check_violation is the integration wrong-side count
+  # (ng_attach_check_reference(), R/51); priority_check_component is its rank-normalised
+  # contribution to priority_index (ng_rank_cross_priority(), R/36) -- both intersect() away
+  # cleanly on a no-checks or check_weight = 0 run, same as checks_all_ok/p_beat_all_checks above.
+  check_cols <- c(grep("_check_id$|_check_value$|_vs_check$|_check_ok$|_p_beat_check$",
+                       names(crosses), value = TRUE),
+                  intersect(c("checks_all_ok", "p_beat_all_checks", "check_violation",
+                             "priority_check_component"), names(crosses)))
+  for (col in check_cols) out[[col]] <- crosses[[col]]
   out
 }
 
@@ -259,7 +321,14 @@ ng_cpw_candidate_table <- function(scored, selected, include_trait_gebv = FALSE)
   keep <- c("multi_trait_score", "pair_kinship", "multi_trait_threshold_violation", "priority_rank", "priority_tier")
   pred_cols <- grep("^pred_", names(scored), value = TRUE)
   keep <- unique(c(keep, pred_cols))
-  keep <- keep[keep %in% names(scored)]
+  # Per-trait check-reference columns ride along on the candidate table too, same as Selected_All.
+  # M5: check_violation added (it lives on the scored/candidate table, R/51); priority_check_
+  # component does not (priority ranking is computed only on the selected plan, R/36), but
+  # listing it here too is harmless -- intersect() below drops whatever names(scored) lacks.
+  keep <- c(keep, grep("_check_id$|_check_value$|_vs_check$|_check_ok$|_p_beat_check$",
+                       names(scored), value = TRUE),
+            "checks_all_ok", "p_beat_all_checks", "check_violation", "priority_check_component")
+  keep <- intersect(unique(keep), names(scored))
   out <- cbind(out, scored[, keep, drop = FALSE])
   if (isTRUE(include_trait_gebv)) {
     gebv_cols <- ng_cpw_gebv_cols(scored)
@@ -336,7 +405,8 @@ ng_cross_priority_workbook_tables <- function(crosses,
                                               figures = NULL,
                                               n_crosses_requested = NULL,
                                               block_size = 10L,
-                                              include_trait_gebv = FALSE) {
+                                              include_trait_gebv = FALSE,
+                                              trait_check_reference = NULL) {
   crosses <- as.data.frame(crosses, stringsAsFactors = FALSE, check.names = FALSE)
   if (!nrow(crosses)) ng_stop("crosses must contain at least one selected cross")
   if (!all(c("parent1", "parent2") %in% names(crosses))) {
@@ -351,6 +421,9 @@ ng_cross_priority_workbook_tables <- function(crosses,
     Trait_Directions = trait_info,
     Selected_All = selected
   )
+  if (!is.null(trait_check_reference)) {
+    out$Checks <- ng_cpw_checks_sheet(trait_check_reference, selected)
+  }
   tier_order <- c("highly_priority", "priority", "medium_priority", "low_priority")
   for (tier in tier_order) {
     sheet <- ng_cpw_tier_sheet_name(tier)
@@ -403,7 +476,8 @@ ng_write_cross_priority_workbook <- function(output_path,
                                              figures = NULL,
                                              n_crosses_requested = NULL,
                                              block_size = 10L,
-                                             include_trait_gebv = FALSE) {
+                                             include_trait_gebv = FALSE,
+                                             trait_check_reference = NULL) {
   if (!requireNamespace("openxlsx", quietly = TRUE)) {
     ng_stop("openxlsx is required to write cross priority workbooks")
   }
@@ -419,7 +493,8 @@ ng_write_cross_priority_workbook <- function(output_path,
     figures = figures,
     n_crosses_requested = n_crosses_requested,
     block_size = block_size,
-    include_trait_gebv = include_trait_gebv
+    include_trait_gebv = include_trait_gebv,
+    trait_check_reference = trait_check_reference
   )
   wb <- openxlsx::createWorkbook(creator = "nextgenCrossDesign")
   for (sheet in names(tables)) {

@@ -22,22 +22,16 @@
                               mean = mu, sigma = Sigma))
 }
 
-ng_p_superior_progeny_multitrait <- function(mu, Sigma_c, tau_lower, tau_upper,
-                                              k_progeny) {
-  mu <- as.numeric(mu)
-  tau_lower <- as.numeric(tau_lower)
-  tau_upper <- as.numeric(tau_upper)
-  k_progeny <- as.numeric(k_progeny)
-  t <- length(mu)
-  if (t == 0L) ng_stop("mu must have length >= 1")
-  if (length(tau_lower) != t || length(tau_upper) != t) {
-    ng_stop("tau_lower and tau_upper must have length(mu) = ", t)
-  }
+# M3: Sigma_c's own validation (finiteness, symmetry, eigen decomposition, PSD repair) is a pure
+# function of Sigma_c alone -- it never reads mu, tau_lower/tau_upper, or k_progeny. Split out of
+# ng_p_superior_progeny_multitrait() so a caller evaluating MANY mu values against the SAME
+# Sigma_c (ng_p_superior_progeny_multitrait_pev()'s per-draw Monte Carlo loop, below) can run this
+# ONCE instead of re-running eigen() and the PSD repair on every draw -- this was measured to be
+# nearly all of the D7 Monte Carlo's cost (see the fix report's M3 benchmark). Returns the
+# repaired Sigma_c; identical numerically to what the inline block used to leave `Sigma_c` as.
+.ng_validate_repair_sigma_c <- function(Sigma_c, t) {
   if (!is.matrix(Sigma_c) || nrow(Sigma_c) != t || ncol(Sigma_c) != t) {
     ng_stop("Sigma_c must be a t x t matrix matching length(mu) = ", t)
-  }
-  if (any(!is.finite(mu)) || any(is.na(tau_lower)) || any(is.na(tau_upper))) {
-    ng_stop("mu must be finite and threshold bounds must not be missing")
   }
   if (any(!is.finite(Sigma_c))) ng_stop("Sigma_c contains non-finite entries")
   asym <- max(abs(Sigma_c - t(Sigma_c)))
@@ -56,11 +50,18 @@ ng_p_superior_progeny_multitrait <- function(mu, Sigma_c, tau_lower, tau_upper,
     Sigma_c <- Sigma_c * outer(scale, scale)
     diag(Sigma_c) <- requested_diag
   }
-  if (!is.finite(k_progeny) || k_progeny < 1 ||
-      abs(k_progeny - round(k_progeny)) > 1e-8) {
-    ng_stop("k_progeny must be a positive integer")
-  }
-  k_progeny <- as.integer(round(k_progeny))
+  Sigma_c
+}
+
+# M3: the remainder of ng_p_superior_progeny_multitrait()'s body, given an ALREADY-VALIDATED-AND-
+# REPAIRED Sigma_c (via .ng_validate_repair_sigma_c(), immediately above) and already-numeric,
+# already-length-checked mu/tau_lower/tau_upper/k_progeny. This is the mu-DEPENDENT part (the
+# zero-variance-trait branch reads mu, and of course the final pmvnorm call does too) -- it is
+# what a per-draw Monte Carlo loop must still repeat, just without Sigma_c's own validation.
+# `t` is length(mu) (equivalently nrow(Sigma_c)), passed in rather than recomputed per call.
+.ng_p_superior_progeny_multitrait_given_sigma <- function(mu, Sigma_c, tau_lower, tau_upper,
+                                                          k_progeny, t) {
+  if (any(!is.finite(mu))) ng_stop("mu must be finite and threshold bounds must not be missing")
   if (any(tau_upper <= tau_lower)) return(0)
   diag_var <- diag(Sigma_c)
   if (any(diag_var <= 0)) {
@@ -72,6 +73,9 @@ ng_p_superior_progeny_multitrait <- function(mu, Sigma_c, tau_lower, tau_upper,
     # all traits are deterministic (Sigma diagonal = 0) and all fall inside
     # their intervals (verified above) -> probability is 1.
     if (!length(keep)) return(1)
+    # A reduced dimension needs its OWN Sigma_c validation (the submatrix's own symmetry/PSD are
+    # not guaranteed by the full matrix's), so this recurses into the PUBLIC function rather than
+    # calling this internal one directly -- exactly the original (pre-M3) recursion, unchanged.
     return(ng_p_superior_progeny_multitrait(
       mu = mu[keep],
       Sigma_c = Sigma_c[keep, keep, drop = FALSE],
@@ -86,6 +90,157 @@ ng_p_superior_progeny_multitrait <- function(mu, Sigma_c, tau_lower, tau_upper,
   one_minus_p_max <- exp(k_progeny * log_complement)
   out <- 1 - one_minus_p_max
   max(0, min(1, out))
+}
+
+ng_p_superior_progeny_multitrait <- function(mu, Sigma_c, tau_lower, tau_upper,
+                                              k_progeny) {
+  mu <- as.numeric(mu)
+  tau_lower <- as.numeric(tau_lower)
+  tau_upper <- as.numeric(tau_upper)
+  k_progeny <- as.numeric(k_progeny)
+  t <- length(mu)
+  if (t == 0L) ng_stop("mu must have length >= 1")
+  if (length(tau_lower) != t || length(tau_upper) != t) {
+    ng_stop("tau_lower and tau_upper must have length(mu) = ", t)
+  }
+  if (!is.matrix(Sigma_c) || nrow(Sigma_c) != t || ncol(Sigma_c) != t) {
+    ng_stop("Sigma_c must be a t x t matrix matching length(mu) = ", t)
+  }
+  if (any(!is.finite(mu)) || any(is.na(tau_lower)) || any(is.na(tau_upper))) {
+    ng_stop("mu must be finite and threshold bounds must not be missing")
+  }
+  Sigma_c <- .ng_validate_repair_sigma_c(Sigma_c, t)
+  if (!is.finite(k_progeny) || k_progeny < 1 ||
+      abs(k_progeny - round(k_progeny)) > 1e-8) {
+    ng_stop("k_progeny must be a positive integer")
+  }
+  k_progeny <- as.integer(round(k_progeny))
+  .ng_p_superior_progeny_multitrait_given_sigma(mu, Sigma_c, tau_lower, tau_upper, k_progeny, t)
+}
+
+# ---- D7: joint P(beat every check) under SHARED posterior effect uncertainty ---------------
+#
+# ng_p_superior_progeny_multitrait() above is CONDITIONAL on the point-estimated marker effects
+# (delta = 0): Sigma_c is VPM, the independent-across-progeny within-family covariance, and mu is
+# taken as exactly known. That is no longer consistent with the (D1-fixed) per-trait marginals
+# ng_p_superior_progeny_pev() (R/30_posterior_prediction.R) computes, which integrate a SHARED
+# per-trait effect deviation delta ~ N(0, PEV) across the whole family before raising the
+# within-family tail probability to the k-th power. Because beating every check is a subset of
+# beating any one of them, p_beat_all_checks can never exceed any single p_beat_check under a
+# CONSISTENT model -- but with two different models (joint conditional on delta = 0, marginals
+# integrated over delta) that subset relationship is not guaranteed, and empirically fails on real
+# data (see docs/design and the fix report for the worked case). The fix: integrate the SAME
+# shared delta in the joint too, only now delta is a per-checked-trait VECTOR (one shared
+# deviation per trait, not a scalar), and the covariance among (mu + delta) draws stays exactly
+# Sigma_c = VPM (unchanged) at every draw -- only the MEAN vector shifts, mirroring the marginals.
+#
+# delta ~ N(0, diag(pev)): no cross-trait POSTERIOR EFFECT UNCERTAINTY covariance is estimated
+# anywhere in this package (ng_p_superior_progeny_pev() itself only ever sees one trait's PEV at a
+# time), so a diagonal is used here -- a documented approximation, not a claim that posterior
+# marker-effect uncertainty is independent across traits. If a cross-trait PEV covariance ever
+# becomes available it can replace this diagonal without changing the calling convention (pev
+# would become a covariance matrix rather than a vector).
+#
+# Multivariate Gauss-Hermite is impractical beyond a couple of traits (tensor-product nodes scale
+# as n_nodes^t_n), so this integrates by MONTE CARLO instead, with a FIXED, SEEDED number of
+# draws so the result is reproducible run to run: ng_fixed_seed_normal_matrix() saves/restores
+# .Random.seed around a single seeded draw for the delta vector `z` itself. That alone is NOT
+# sufficient: ng_p_superior_progeny_multitrait() below calls mvtnorm::pmvnorm(), which at
+# dimension >= 2 traits is a deterministic closed form but at dimension >= 3 switches to the
+# randomised GenzBretz lattice rule -- it both draws from AND advances the ambient .Random.seed,
+# once per pmvnorm() call (so up to n_draws times per row here). Left unguarded, that would make
+# this function (a) a function of whatever the ambient RNG state happens to be when it is called,
+# so its own result is not reproducible run to run at >= 3 traits, and (b) a consumer of the
+# caller's random stream, breaking a with-checks run's numerical identity to a without-checks run
+# on everything downstream that also draws from the ambient stream (tests/check_reference_invariant.R's
+# 3-trait case; see I1 in the fix report). ng_add_p_superior_progeny_multitrait() (below) closes
+# both gaps by wrapping its ENTIRE body -- not just the `z` draw -- in ng_with_rng_seed(mc_seed, ...),
+# so every pmvnorm() call in a given invocation draws from the same fixed, seeded stream and the
+# caller's ambient .Random.seed is restored on exit. The same n_draws x t_n standard-normal matrix
+# `z` is reused across every row of a call (common random numbers), scaled per row by that row's
+# own sqrt(pev); this is both cheap (one seeded draw per call, not per row) and keeps cross-row
+# comparisons free of independent MC noise.
+#
+# EXACT collapse: wherever pev is non-positive/non-finite for every trait, every draw's delta is
+# exactly 0 (scaling standard normal by sd = 0 gives exactly 0, not approximately), so this
+# returns EXACTLY ng_p_superior_progeny_multitrait(mu, ...) with no Monte Carlo cost at all -- the
+# cheapest and most important correctness check on this function (see
+# tests/check_reference_joint_pev.R).
+NG_JOINT_PEV_MC_SEED <- 20260904L
+NG_JOINT_PEV_MC_DRAWS <- 150L
+
+# Antithetic pairing (z and -z): delta's distribution is exactly symmetric about 0, so pairing
+# each draw with its negation is a variance-reduction trick that costs nothing extra (still
+# n_draws total evaluations) and materially tightens the joint-vs-marginal comparison relative to
+# plain iid draws -- see the fix report's Monte-Carlo-error table for the measured effect. Odd
+# n_draws drops the last unpaired draw's mirror so the returned matrix still has exactly n_draws
+# rows.
+ng_fixed_seed_normal_matrix <- function(n_draws, t_n, seed = NG_JOINT_PEV_MC_SEED,
+                                        antithetic = TRUE) {
+  had_seed <- exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+  old_seed <- if (had_seed) get(".Random.seed", envir = .GlobalEnv, inherits = FALSE) else NULL
+  on.exit({
+    if (had_seed) {
+      assign(".Random.seed", old_seed, envir = .GlobalEnv, inherits = FALSE)
+    } else if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+      rm(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+    }
+  })
+  set.seed(seed)
+  n_draws <- as.integer(n_draws); t_n <- as.integer(t_n)
+  if (!isTRUE(antithetic)) {
+    return(matrix(stats::rnorm(n_draws * t_n), nrow = n_draws, ncol = t_n))
+  }
+  half <- ceiling(n_draws / 2)
+  z_half <- matrix(stats::rnorm(half * t_n), nrow = half, ncol = t_n)
+  rbind(z_half, -z_half)[seq_len(n_draws), , drop = FALSE]
+}
+
+ng_p_superior_progeny_multitrait_pev <- function(mu, Sigma_c, tau_lower, tau_upper, k_progeny,
+                                                  pev, z = NULL, n_draws = NG_JOINT_PEV_MC_DRAWS,
+                                                  seed = NG_JOINT_PEV_MC_SEED) {
+  mu <- as.numeric(mu)
+  pev <- as.numeric(pev)
+  t_n <- length(mu)
+  if (length(pev) != t_n) ng_stop("pev must have length(mu) = ", t_n)
+  has_pev <- any(is.finite(pev) & pev > 0)
+  if (!has_pev) {
+    return(ng_p_superior_progeny_multitrait(mu, Sigma_c, tau_lower, tau_upper, k_progeny))
+  }
+  if (is.null(z)) z <- ng_fixed_seed_normal_matrix(n_draws, t_n, seed = seed)
+  if (ncol(z) != t_n) ng_stop("z must have t_n = ", t_n, " columns")
+
+  # M3: Sigma_c is FIXED across every draw (only mu shifts per draw) -- validate/repair it, and
+  # validate the equally-fixed tau_lower/tau_upper/k_progeny, ONCE here rather than once per draw
+  # inside ng_p_superior_progeny_multitrait(). This is the actual performance fix: symmetry
+  # checking, eigen(), and PSD repair on the SAME t_n x t_n matrix dominated the runtime at 150
+  # draws/row (~150x more per-cross cost than the pre-D7 closed form; see the fix report's M3
+  # benchmark for the measured before/after).
+  tau_lower <- as.numeric(tau_lower)
+  tau_upper <- as.numeric(tau_upper)
+  if (length(tau_lower) != t_n || length(tau_upper) != t_n) {
+    ng_stop("tau_lower and tau_upper must have length(mu) = ", t_n)
+  }
+  if (any(is.na(tau_lower)) || any(is.na(tau_upper))) {
+    ng_stop("mu must be finite and threshold bounds must not be missing")
+  }
+  Sigma_c <- .ng_validate_repair_sigma_c(Sigma_c, t_n)
+  k_progeny <- as.numeric(k_progeny)
+  if (!is.finite(k_progeny) || k_progeny < 1 ||
+      abs(k_progeny - round(k_progeny)) > 1e-8) {
+    ng_stop("k_progeny must be a positive integer")
+  }
+  k_progeny <- as.integer(round(k_progeny))
+
+  sd_vec <- sqrt(pmax(pev, 0))
+  nd <- nrow(z)
+  acc <- 0
+  for (j in seq_len(nd)) {
+    mu_j <- mu + z[j, ] * sd_vec
+    acc <- acc + .ng_p_superior_progeny_multitrait_given_sigma(
+      mu_j, Sigma_c, tau_lower, tau_upper, k_progeny, t_n)
+  }
+  max(0, min(1, acc / nd))
 }
 
 # Build a cross-level trait covariance Sigma_c from per-trait within-family
@@ -286,12 +441,35 @@ ng_multitrait_exact_sigma_list <- function(scores, trait_order, cross_trait_cov)
 # ng_cross_trait_within_family_cov(). When supplied, Sigma_c per cross is taken directly from it
 # (recombination-aware a_t' R a_s), overriding both var_col and the G_hat population-correlation
 # proxy -- the statistically correct within-family covariance for the progeny distribution.
+#
+# pev_mat (optional, D7): an nrow(scores) x nrow(trait_specs) matrix of per-cross, per-trait
+# posterior effect variance (PEV = PMV - VPM), in the SAME trait order as trait_specs. When
+# supplied, each row's probability integrates a shared delta ~ N(0, diag(pev_mat[i, ])) via
+# ng_p_superior_progeny_multitrait_pev() instead of conditioning on delta = 0 -- see that
+# function's docstring for the model and the Monte Carlo scheme. NULL (the default) reproduces
+# the pre-D7 behaviour exactly.
 ng_add_p_superior_progeny_multitrait <- function(scores, trait_specs,
                                                   tau_lower, tau_upper,
                                                   k_progeny = 100L,
                                                   G_hat = NULL,
                                                   cross_trait_cov = NULL,
+                                                  pev_mat = NULL,
+                                                  n_mc_draws = NG_JOINT_PEV_MC_DRAWS,
+                                                  mc_seed = NG_JOINT_PEV_MC_SEED,
                                                   out_col = "p_superior_progeny_mt") {
+  # I1 fix: at dimension >= 3, mvtnorm::pmvnorm() (called by every ng_p_superior_progeny_multitrait()
+  # invocation below, directly or per-draw via ng_p_superior_progeny_multitrait_pev()) switches to
+  # the randomised GenzBretz lattice rule, which both DRAWS FROM and ADVANCES .Random.seed -- unlike
+  # the dimension-2 case (bivariate normal CDF), which is a deterministic closed form. Wrapping the
+  # whole body in ng_with_rng_seed(mc_seed, ...) (R/00_utils.R) makes every pmvnorm call in this
+  # function draw from the SAME fixed, seeded stream every time (reproducible run to run) and
+  # restores the caller's ambient .Random.seed on exit (never perturbs it) -- the same guarantee
+  # ng_fixed_seed_normal_matrix() already gives its own single seeded draw, now extended to cover
+  # pmvnorm's internal randomness too. This is what keeps a with-checks run's non-check columns
+  # (including anything downstream that consumes the ambient RNG, e.g. optimizer = "evolution" with
+  # evol_seed = NULL) numerically identical to a without-checks run -- see
+  # tests/check_reference_invariant.R's 3-trait case.
+  ng_with_rng_seed(mc_seed, {
   scores <- as.data.frame(scores, stringsAsFactors = FALSE)
   trait_specs <- as.data.frame(trait_specs, stringsAsFactors = FALSE)
   required <- c("trait", "mean_col", "var_col")
@@ -314,14 +492,46 @@ ng_add_p_superior_progeny_multitrait <- function(scores, trait_specs,
   exact_sigma <- if (!is.null(cross_trait_cov)) {
     ng_multitrait_exact_sigma_list(scores, trait_specs$trait, cross_trait_cov)
   } else NULL
+  if (!is.null(pev_mat)) {
+    pev_mat <- as.matrix(pev_mat)
+    if (nrow(pev_mat) != nrow(scores) || ncol(pev_mat) != t_n) {
+      ng_stop("pev_mat must be nrow(scores) x ", t_n, " (one column per trait_specs row)")
+    }
+    storage.mode(pev_mat) <- "double"
+  }
+  # One seeded draw for the WHOLE call (not per row): cheap, and every row reuses the same
+  # standard-normal shocks (common random numbers), scaled by that row's own sqrt(pev). Skipped
+  # entirely when pev_mat is NULL or carries no positive entry anywhere -- the exact-collapse
+  # gate, so a checks-supplied-but-PEV-unavailable run costs nothing extra.
+  z <- if (!is.null(pev_mat) && any(is.finite(pev_mat) & pev_mat > 0)) {
+    ng_fixed_seed_normal_matrix(n_mc_draws, t_n, seed = mc_seed)
+  } else NULL
   out <- numeric(nrow(scores))
   for (i in seq_len(nrow(scores))) {
+    # D6: <trait>_mean is a mid-parent of phenotypes; a parent missing a phenotype for even one
+    # checked trait produces a non-finite mean for this row. The single-trait path
+    # (ng_attach_check_reference(), R/51) already guards this and returns NA per trait; without an
+    # equivalent guard here, ng_p_superior_progeny_multitrait() hard-errors on the very first
+    # non-finite mu (R/33:39-41) and aborts the whole run. NA_real_ for this row only, matching
+    # the per-trait behaviour, never a hard stop.
+    if (any(!is.finite(mean_mat[i, ]))) {
+      out[[i]] <- NA_real_
+      next
+    }
     Sigma_i <- if (!is.null(exact_sigma)) exact_sigma[[i]] else
       ng_build_cross_trait_covariance(per_trait_var = var_mat[i, ], G_hat = G_hat)
-    out[[i]] <- ng_p_superior_progeny_multitrait(
-      mu = mean_mat[i, ], Sigma_c = Sigma_i,
-      tau_lower = tau_lower, tau_upper = tau_upper, k_progeny = k_progeny
-    )
+    out[[i]] <- if (!is.null(z)) {
+      ng_p_superior_progeny_multitrait_pev(
+        mu = mean_mat[i, ], Sigma_c = Sigma_i,
+        tau_lower = tau_lower, tau_upper = tau_upper, k_progeny = k_progeny,
+        pev = pev_mat[i, ], z = z
+      )
+    } else {
+      ng_p_superior_progeny_multitrait(
+        mu = mean_mat[i, ], Sigma_c = Sigma_i,
+        tau_lower = tau_lower, tau_upper = tau_upper, k_progeny = k_progeny
+      )
+    }
   }
   scores[[out_col]] <- out
   attr(scores, "p_superior_progeny_mt") <- list(
@@ -329,7 +539,10 @@ ng_add_p_superior_progeny_multitrait <- function(scores, trait_specs,
     var_cols = trait_specs$var_col, tau_lower = tau_lower,
     tau_upper = tau_upper, k_progeny = k_progeny,
     G_hat_supplied = !is.null(G_hat),
-    exact_cross_trait_cov = !is.null(cross_trait_cov), out_col = out_col
+    exact_cross_trait_cov = !is.null(cross_trait_cov),
+    pev_integrated = !is.null(z), n_mc_draws = if (!is.null(z)) n_mc_draws else NA_integer_,
+    out_col = out_col
   )
   scores
+  })
 }

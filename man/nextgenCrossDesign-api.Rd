@@ -12,7 +12,15 @@
 \alias{ng_lethal_recessive_spec}
 \alias{ng_lethal_recessive_cross_risk}
 \alias{ng_trait_check_spec}
-\alias{ng_apply_trait_checks}
+\alias{ng_align_check_geno}
+\alias{ng_check_reference_value}
+\alias{ng_attach_check_reference}
+\alias{ng_check_tau_bounds}
+\alias{ng_attach_joint_check_probability}
+\alias{ng_check_records_from_pheno}
+\alias{ng_plot_check_panels}
+\alias{ng_plot_check_reference_line}
+\alias{ng_check_line_value}
 \alias{ng_frontier_export_payload}
 \alias{ng_write_frontier_json}
 \alias{ng_write_progeny_inbreeding_histogram_json}
@@ -240,6 +248,44 @@ editable because final rationale differs by breeding program.
 Use \code{ng_plot_priority_score_vs_kinship()} to show all candidate crosses in
 score-versus-relatedness space and overlay the selected crossing plan colored by
 priority tier.
+
+A check is a benchmark genotype (a released variety or commercial check) that is
+never crossed and contributes one scalar reference value per trait; it is
+reference-only and never filters or reorders candidate crosses. Supply
+\code{ng_run_cross_prediction(trait_checks = ng_trait_check_spec(...),
+check_geno = ..., check_progeny_size = ...)}, with the check's own genotype
+matrix kept separate from the candidate parents. \code{check_progeny_size} is
+required whenever \code{trait_checks} is supplied and has no default, because
+progeny per family scales P(beat check) directly. Which input the check value
+is read from -- predicted from \code{check_geno} versus read from
+\code{check_pheno}/\code{check_records} -- is decided by the run's own
+resolved \code{mean_source} per trait, not by the caller, so the reference is
+always on the same scale as the cross means it is compared against. Use
+\code{ng_check_records_from_pheno()} to convert a phenotype-shaped
+\code{check_pheno} table into the \code{check_records} structure consumed by
+\code{ng_check_reference_value()}, and \code{ng_align_check_geno()} to verify
+\code{check_geno} carries the same marker set, order, and dosage coding as the
+fitted effects. \code{ng_attach_check_reference()} adds per-trait
+\code{<trait>_check_value}, \code{<trait>_vs_check} (direction-aware: positive
+always means better), \code{<trait>_check_ok}, and
+\code{<trait>_p_beat_check} columns plus \code{checks_all_ok}, without
+changing \code{nrow(scores)} or its order. \code{ng_attach_joint_check_probability()}
+(built on \code{ng_check_tau_bounds()}) adds \code{p_beat_all_checks}, the
+probability a progeny beats every check at once. Where any checked trait's
+posterior effect variance (PEV) is available, this is a fixed, seeded
+150-draw Monte Carlo estimate (typical error up to about 0.03), computed
+under a diagonal (independent-across-traits) approximation to the
+cross-trait posterior effect covariance, and clipped to the row-wise
+minimum of the per-trait marginals -- see \code{trait_check_reference$
+p_beat_all_checks_note} on a completed run's return value for this same
+caveat attached to the specific run. A completed run reports the
+check in a \code{Checks} workbook sheet and, on the score-versus-kinship plot,
+as a reference line on whichever axis carries the mean; use
+\code{ng_plot_check_panels()} for per-trait small multiples in multi-trait
+runs, \code{ng_check_line_value()} to compute where that line falls on a
+scored table's axis for a given trait, and \code{ng_plot_check_reference_line()}
+to draw it -- as a horizontal or vertical line, via \code{mean_axis = "y"} or
+\code{"x"} -- on any plot of your own that carries the trait mean on one axis.
 
 Use \code{ng_run_stage()} to drive the cross-prediction pipeline one stage at a
 time (\code{qc}, \code{predict}, \code{index}, \code{allocate}, \code{rank}),
