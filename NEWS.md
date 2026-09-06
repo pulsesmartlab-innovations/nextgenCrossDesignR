@@ -1,3 +1,18 @@
+# nextgenCrossDesign 0.24.1
+
+## Bug fixes
+
+* `ng_posterior_multitrait_cross_predict()`'s multivariate threshold path (`tau_lower_vec`/
+  `tau_upper_vec`) no longer consumes or perturbs the caller's ambient random-number stream.
+  `mvtnorm::pmvnorm()`, called once per (posterior draw, cross pair) at 3 or more traits,
+  switches to a randomised algorithm that both draws from and advances `.Random.seed`; left
+  unguarded, this could shift anything a caller does with the RNG after the call (a second,
+  unscoped call site of the same bug fixed for the check-reference path in 0.24.0 -- see I1
+  above). `p_superior_progeny_mt_post_mean`/`_lower`/`_upper` move by ~1e-5 to ~1e-4 at >= 3
+  traits versus the unfixed code (measured on a fixed-seed probe), reflecting genuinely different
+  Monte Carlo lattice noise rather than a bug in the new number; the 2-trait case (where pmvnorm
+  is a deterministic closed form) is bit-identical before and after.
+
 # nextgenCrossDesign 0.24.0
 
 ## Breaking
