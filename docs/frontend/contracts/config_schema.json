@@ -159,7 +159,11 @@
         {"name": "run_posterior_prediction", "type": "boolean", "default": false},
         {"name": "posterior_method", "type": "enum", "allowed": ["mcmc", "closed_form"], "default": "mcmc"},
         {"name": "n_iter", "type": "integer", "default": 5000},
-        {"name": "burn_in", "type": "integer", "default": 500}
+        {"name": "burn_in", "type": "integer", "default": 500},
+        {"name": "ci_level", "type": "number", "default": 0.95,
+         "note": "Probability mass of the REPORTED posterior credible interval (<gain>_post_lower / _post_upper). Does not affect allocation."},
+        {"name": "robustness_quantile", "type": "number", "default": null,
+         "note": "Tail probability a later ng_optimize_robust_mating_plan() optimises against. Cached as its own empirical quantile of the same draws (both q and 1-q, so either trait direction is served exactly). Leaves ci_level, and therefore the reported interval, untouched."}
       ]
     },
     {

@@ -542,6 +542,20 @@ ng_run_cp_trait_value <- function(scored_trait,
   mean_value + sign * ng_selection_intensity(selection_prop) * sqrt(pmax(suppressWarnings(as.numeric(scored_trait[[var_col]])), 0))
 }
 
+# Orientation of the value ng_run_cp_trait_value() returns above: "maximize" when a HIGHER
+# value is the better cross. This is NOT always the trait's breeding direction. The mean and
+# usefulness metrics carry the trait's own units, so a minimize trait (disease, lodging) is
+# lower-is-better there. The pure-variance and parent-distance metrics are direction-agnostic
+# -- more within-family variance / more parental divergence is better whichever way the trait
+# points -- so they are always "maximize". Anything that ranks or takes a conservative tail of
+# the `_value` column (posterior top-N, robust mate allocation) must use THIS, not the raw
+# direction; see ng_optimize_robust_mating_plan() in R/30.
+ng_run_cp_value_orientation <- function(direction, trait_value_metric = "usefulness") {
+  metric <- trimws(tolower(as.character(trait_value_metric[[1L]])))
+  if (metric %in% c("vpm", "pmv", "parent_distance", "le")) return("maximize")
+  ng_run_cp_direction(direction)[[1L]]
+}
+
 ng_run_cp_clean_trait_name <- function(x) {
   out <- make.names(as.character(x))
   out <- gsub("[.]+", "_", out)
@@ -741,6 +755,24 @@ ng_cp__build_ctx <- function(config) {
   ctx$n_iter <- ng_run_cp_integer(ctx$n_iter, "n_iter", min_value = 1L)
   ctx$burn_in <- ng_run_cp_integer(ctx$burn_in, "burn_in", min_value = 0L)
   ctx$posterior_n_draws <- max(1L, ctx$n_iter - ctx$burn_in)
+  # ci_level governs ONLY the reported posterior credible interval (the _post_lower /
+  # _post_upper columns). robustness_quantile governs ONLY the tail a robust mate allocation
+  # is later optimised against, and is cached as its own empirical quantile of the same draws.
+  # They are kept apart on purpose: bending ci_level to reach a robust tail would silently
+  # relabel a reported "95% credible interval" as something else. Same validation rule as
+  # ng_posterior_cross_predict() applies to both.
+  ctx$ci_level <- suppressWarnings(as.numeric(ctx$ci_level))
+  if (length(ctx$ci_level) != 1L || !is.finite(ctx$ci_level) ||
+      ctx$ci_level <= 0 || ctx$ci_level >= 1) {
+    ng_stop("ci_level must be one finite probability in (0, 1)")
+  }
+  if (!is.null(ctx$robustness_quantile)) {
+    rq <- suppressWarnings(as.numeric(ctx$robustness_quantile))
+    if (length(rq) != 1L || !is.finite(rq) || rq <= 0 || rq >= 1) {
+      ng_stop("robustness_quantile must be one finite probability in (0, 1)")
+    }
+    ctx$robustness_quantile <- rq
+  }
   ctx$n_crosses <- ng_run_cp_integer(ctx$n_crosses, "n_crosses", min_value = 1L)
   ctx
 }
@@ -987,6 +1019,15 @@ ng_cp__stage_predict <- function(ctx) {
         recomb_model = recomb_model,
         use_cpp = use_cpp,
         parent_type = parent_type,
+        ci_level = ci_level,
+        # Cache the breeder's robustness quantile from these same draws so a later
+        # ng_optimize_robust_mating_plan() is exact at that quantile without touching
+        # ci_level (which owns the reported interval) and without a normal approximation.
+        robustness_quantile = robustness_quantile,
+        # Orientation of the ranked `_value`, which is what the posterior top-N counts and the
+        # robust tail must follow. Not the raw trait direction: a pure-variance metric is
+        # higher-is-better even for a minimize trait (ng_run_cp_value_orientation above).
+        direction = ng_run_cp_value_orientation(trait_spec$direction[[i]], trait_value_metric),
         # Summarize the SELECTED metric, not the hardcoded usefulness column: a posterior
         # interval computed on usefulness must never be presented as the uncertainty of a
         # `mean` / `var_complex` run (design doc F2).
@@ -1800,6 +1841,7 @@ utils::globalVariables(c(
   "alphamate_number_of_parents", "alphamate_runtime_path", "alphamate_target_degree", "alphamate_workdir",
   "assume_inbred", "parent_type", "phased_haplotypes", "bp_per_cm", "budget", "burn_in",
   "check_geno", "check_pheno", "check_progeny_size", "check_records",
+  "ci_level", "robustness_quantile",
   "committed_crosses", "constraint_diagnostics", "cost_col",
   "cross_cost", "cross_table", "ctc", "direction_column_col", "direction_columns",
   "direction_direction_col", "direction_file", "direction_trait_col", "diversity_emphasis",
@@ -1900,6 +1942,8 @@ ng_cp__assemble_result <- function(ctx) {
       n_iter = n_iter,
       burn_in = burn_in,
       posterior_n_draws = if (isTRUE(run_posterior_prediction)) posterior_n_draws else 0L,
+      ci_level = ci_level,
+      robustness_quantile = if (is.null(robustness_quantile)) NA_real_ else robustness_quantile,
       use_parallel = use_parallel,
       parallel_backend = parallel_backend,
       n_threads = parallel_cores_used,
@@ -1978,6 +2022,8 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
                                     posterior_method = c("mcmc", "closed_form"),
                                     n_iter = 5000L,
                                     burn_in = 500L,
+                                    ci_level = 0.95,
+                                    robustness_quantile = NULL,
                                     use_parallel = FALSE,
                                     n_threads = NULL,
                                     duplicate_action = c("remove", "report", "none"),

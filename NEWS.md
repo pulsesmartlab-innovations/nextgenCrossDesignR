@@ -1,3 +1,63 @@
+# nextgenCrossDesign 0.25.0
+
+## New features
+
+* `ng_run_cross_prediction()` gains `ci_level` (default `0.95`) and `robustness_quantile`
+  (default `NULL`). They are separate controls on purpose. `ci_level` owns the REPORTED
+  posterior credible interval (`<gain>_post_lower` / `_post_upper`); `robustness_quantile`
+  owns the tail a robust mate allocation is optimised against. Previously only the CI tails
+  (0.025 / 0.975 at the fixed `ci_level = 0.95`) were cached, so
+  `ng_optimize_robust_mating_plan()` correctly refused every other quantile -- which is every
+  quantile a caller like the Shiny frontend's robustness slider actually requests -- and robust
+  allocation produced no plan in practice. Serving it by bending `ci_level` to `1 - 2q` would
+  have silently relabelled a reported "95% credible interval" as, say, a 50% one, so the
+  requested quantile is instead extracted from the SAME posterior draws as an extra empirical
+  quantile. `ng_posterior_cross_predict()` gains the matching `robustness_quantile` argument and
+  caches `<gain_col>_post_q<prob>` columns (both `q` and `1 - q`, so one run serves either trait
+  direction), recorded in the `"posterior"` metadata attribute. No extra sampling, no
+  approximation, and the reported interval is bit-for-bit unchanged.
+* `ng_optimize_robust_mating_plan()` prefers that exact cached column ahead of its lower/upper
+  CI matching, so the normal-approximation path (`allow_normal_approximation = TRUE`) is now a
+  genuine last resort rather than the only route to a non-default quantile. The refusal and its
+  opt-in are unchanged; the error message now points at `robustness_quantile` instead of
+  `ci_level`. The plan summary records `robust_tail_probability` and `robust_quantile_source`.
+
+## Bug fixes
+
+* `ng_optimize_robust_mating_plan()` gains `direction` (`"maximize"` / `"minimize"`, default
+  `"maximize"`, accepting the package's usual direction vocabulary) and is now direction-correct.
+  The ranked value is not normalised to higher-is-better: `ng_run_cp_trait_value()` returns the
+  raw mean for `trait_value_metric = "mean"` and `mean + sign * i * sqrt(var)` for usefulness,
+  with the sign applied only to the `i*SD` term, so for a minimize trait (disease, lodging) a
+  LOWER value is better. The allocator treated `<gain_col>_post_lower` as the conservative value
+  unconditionally, which for a minimize trait is the OPTIMISTIC tail -- it would have selected
+  crosses on their best case and labelled the plan robust. The conservative tail is now `q` under
+  `maximize` and `1 - q` under `minimize`, and because `ng_optimize_mating_plan()` maximizes the
+  sum of the gain column, a minimize objective enters negated so the optimiser prefers LOWER
+  robust values. This was latent: robust allocation never ran before this release.
+* `ng_posterior_cross_predict()` gains the matching `direction` argument and now orients
+  `posterior_topn_prob_<N>` by it: under `minimize` the stable top-N is the N SMALLEST ranked
+  values, not the largest. `ng_run_cross_prediction()` derives the orientation per trait with the
+  new internal `ng_run_cp_value_orientation()`, which is the trait's direction for the mean and
+  usefulness metrics but always `"maximize"` for the pure-variance and parent-distance metrics
+  (more within-family variance is more opportunity whichever way the trait points, and
+  `ng_run_cp_trait_value()` applies no sign there). For a decrease trait scored on mean or
+  usefulness, `posterior_topn_prob_<N>` -- and therefore `<trait>_post_topn` /
+  `prob_top_tier` in the cross-priority risk layer -- previously ranked the WORST crosses as the
+  most stable; those numbers change for such runs. Maximize traits and pure-variance metrics are
+  unaffected. `ng_optimize_robust_mating_plan()` refuses a `posterior_topn_prob` objective whose
+  plan direction disagrees with the direction the top-N column was built under.
+
+## Documentation
+
+* The robust objective's aggregation approximation is now stated where it is defined and recorded
+  in the plan summary (`robustness_quantile_aggregation`, `..._note`): it sums per-cross
+  posterior quantiles, which is not the quantile of the plan's total. Quantiles are additive only
+  under comonotonicity; here the crosses' posteriors are positively but imperfectly correlated
+  through the shared marker-effect draws, so the summed objective is a conservative bound on the
+  plan total's quantile rather than a plan-level coverage statement. Computing a joint
+  plan-level quantile remains out of scope.
+
 # nextgenCrossDesign 0.24.1
 
 ## Bug fixes
