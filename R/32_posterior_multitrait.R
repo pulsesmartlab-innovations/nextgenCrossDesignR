@@ -28,6 +28,27 @@
 #   uses `cross_mean + i * sigma_t` per trait per draw, where sigma_t is the
 #   per-trait posterior PMV under the BCM beta draws. This path requires
 #   per-draw cross-scoring and is much slower; document the cost and warn.
+#
+# I2 fix: when tau_lower_vec/tau_upper_vec are supplied (do_threshold = TRUE), the per-draw,
+# per-pair loop below calls ng_p_superior_progeny_multitrait() (R/33_threshold_probability_
+# multitrait.R), which calls mvtnorm::pmvnorm(). At dimension >= 3 traits pmvnorm() switches
+# from a deterministic closed form to the randomised GenzBretz lattice rule, which both DRAWS
+# FROM and ADVANCES the ambient .Random.seed -- once per (draw, pair) call, so up to
+# n_draws * n_pairs times per invocation. Left unguarded, this function would (a) perturb
+# whatever the caller's ambient RNG stream happens to be at >= 3 traits, and (b) not be
+# reproducible run to run on its own account, since its result would depend on that ambient
+# state too. Guarded below by wrapping the ENTIRE per-draw loop -- not a per-call or per-draw
+# reset, which would restart pmvnorm's lattice-shift sequence from the same point on every
+# call/draw instead of letting it evolve continuously -- in a single ng_with_rng_seed(mt_pmvnorm_seed,
+# ...) (R/00_utils.R) call that spans every pmvnorm() invocation this function makes. Nothing
+# else in the loop consumes the ambient RNG (the posterior beta draws are already deterministic,
+# precomputed columns of ng_fit_ridge_effects_posterior()'s beta_draws matrix, indexed -- not
+# resampled -- per s), so this also makes p_superior_progeny_mt_post_* reproducible run to run at
+# >= 3 traits, which it was not before. This DOES change the posterior threshold probabilities
+# numerically at >= 3 traits vs. the unfixed code (the MC lattice noise it now integrates from is
+# different) -- see the fix report for the measured size of that shift. At <= 2 traits pmvnorm is
+# deterministic, so the seed is inert and output is bit-identical before/after.
+NG_POSTERIOR_MT_THRESHOLD_PMVNORM_SEED <- 20260906L
 
 ng_posterior_multitrait_cross_predict <- function(geno,
                                                   Y,
@@ -223,6 +244,12 @@ ng_posterior_multitrait_cross_predict <- function(geno,
   }
   ci_alpha <- (1 - ci_level) / 2
 
+  # I2 fix: see the header comment above ng_posterior_multitrait_cross_predict() for why this
+  # scopes the WHOLE loop (every pmvnorm() call this function makes) under one fixed seed rather
+  # than resetting per draw or per pair. mt_pmvnorm_seed is NULL (a documented no-op for
+  # ng_with_rng_seed()) unless do_threshold is TRUE, since no pmvnorm() call happens otherwise.
+  mt_pmvnorm_seed <- if (do_threshold) NG_POSTERIOR_MT_THRESHOLD_PMVNORM_SEED else NULL
+  ng_with_rng_seed(mt_pmvnorm_seed, {
   for (s in seq_len(n_draws)) {
     # Per-trait posterior cross prediction.
     trait_cross_value <- matrix(NA_real_, nrow = n_pairs, ncol = n_traits)
@@ -317,6 +344,7 @@ ng_posterior_multitrait_cross_predict <- function(geno,
       }
     }
   }
+  })
 
   # ---- Aggregate across draws ---------------------------------------------
   q_lower <- ci_alpha

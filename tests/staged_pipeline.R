@@ -106,6 +106,78 @@ for (nm in names(configs)) {
   cat(sprintf("%-8s identical=TRUE\n", nm))
 }
 
+# --- 1b. equivalence with check lines configured -------------------------
+# The loop above never exercises trait_checks/check_geno/check_records, so it cannot see a
+# defect in how ng_run_stage()'s saveRDS()/readRDS() round trip carries the check-reference
+# ctx fields across the stage boundary: check_geno (a matrix -- rownames carry the check
+# identities), check_records (a nested list), trait_checks (a data.frame) all come from the
+# ORIGINAL config and must still be intact when ng_cp__stage_index (R/39) reads them back out
+# of the persisted predict.rds ctx; ctc (the exact within-family cross-trait covariance) is
+# COMPUTED in stage_predict and must itself survive that same round trip into stage_index.
+# Two checked traits (yield, disease, each with its own distinct check line) so p_beat_all_checks
+# (the joint Monte Carlo over BOTH checks at once, R/51 + R/33) and ctc both actually participate
+# -- a single checked trait would leave p_beat_all_checks absent entirely and never touch ctc.
+set.seed(20240805L)
+chk_ids <- c("CHK_A", "CHK_B")
+chk_geno <- matrix(sample(c(0L, 2L), length(chk_ids) * m, replace = TRUE),
+                   nrow = length(chk_ids), dimnames = list(chk_ids, snps))
+trait_checks_df <- data.frame(trait = c("yield", "disease"), check = c("CHK_A", "CHK_B"),
+                              stringsAsFactors = FALSE)
+# adjusted_pheno records: the default ridge fit here never stamps a calibrated reliability, so
+# ng_choose_mean_source() resolves both traits onto the phenotypic "adjusted_pheno" source (same
+# reasoning as tests/check_reference_invariant.R) -- these are the records actually consulted.
+chk_records <- list(
+  yield   = list(adjusted_pheno = c(CHK_A = 0.3, CHK_B = -0.2)),
+  disease = list(adjusted_pheno = c(CHK_A = -0.1, CHK_B = 0.4))
+)
+config_checks <- ng_test_full_config(c(base, list(
+  phenotype = I$pheno,
+  trait_direction = I$dir,
+  multi_trait_method = "auto",
+  trait_checks = trait_checks_df,
+  check_geno = chk_geno,
+  check_progeny_size = 200L,
+  check_records = chk_records
+)))
+
+cat("checks-configured: driving staged pipeline...\n")
+driven_checks <- drive(config_checks)
+cat("checks-configured: computing one-shot gold...\n")
+gold_checks <- do.call(ng_run_cross_prediction, config_checks)
+
+ok_checks <- identical(stab(driven_checks$result), stab(gold_checks))
+if (!ok_checks) {
+  cat("MISMATCH for config: checks\n")
+  print(all.equal(stab(driven_checks$result), stab(gold_checks)))
+}
+stopifnot(ok_checks)
+cat("checks   identical=TRUE\n")
+
+# Named, specific assertions on the check-bearing pieces -- so a future regression here names
+# exactly which field diverged rather than just "not identical" (the requirement's ask).
+cc_driven <- driven_checks$result$candidate_crosses
+cc_gold   <- gold_checks$candidate_crosses
+check_cols <- as.vector(outer(c("yield", "disease"),
+                              c("_check_value", "_vs_check", "_check_ok", "_p_beat_check"),
+                              paste0))
+for (cn in c(check_cols, "checks_all_ok", "check_violation", "p_beat_all_checks")) {
+  stopifnot(cn %in% names(cc_driven))
+  stopifnot(cn %in% names(cc_gold))
+  stopifnot(isTRUE(all.equal(cc_driven[[cn]], cc_gold[[cn]], tolerance = 0)))
+}
+
+tcr_driven <- driven_checks$result$trait_check_reference
+tcr_gold   <- gold_checks$trait_check_reference
+stopifnot(!is.null(tcr_driven), !is.null(tcr_gold))
+stopifnot(isTRUE(all.equal(tcr_driven$active, tcr_gold$active, tolerance = 0)))
+stopifnot(isTRUE(all.equal(tcr_driven$values, tcr_gold$values, tolerance = 0)))
+stopifnot(identical(tcr_driven$source, tcr_gold$source))
+stopifnot(identical(tcr_driven$progeny_size, tcr_gold$progeny_size))
+
+cat(sprintf(
+  "checks-configured equivalence ok: %d per-trait/global check columns + trait_check_reference (active/values/source/progeny_size) identical across staged and one-shot\n",
+  length(check_cols) + 3L))
+
 # --- 2. QC blocker gate --------------------------------------------------
 # A genotype with a duplicated parent ID makes ng_preflight_input_tables
 # flag a blocker-severity issue. ng_cp__stage_qc (R/39) does NOT throw on a
