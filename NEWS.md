@@ -1,3 +1,62 @@
+# nextgenCrossDesign 0.27.0
+
+## Safety: user-supplied P and G
+
+The phenotypic (P) and additive-genetic (G) covariance matrices that the
+`economic_index` (Smith-Hazel) and `desired_gain` (Pesek-Baker) selection
+indices require can now arrive from a GUI over a JSON bridge. Three changes make
+that safe.
+
+* **The covariance transform is now label-aware.** `ng_multitrait_cov_to_value_z()`
+  applied each trait's direction sign and value scale by row/column ORDER and
+  never consulted `dimnames`, and `ng_add_multitrait_score()` fell back to a
+  POSITIONAL read whenever the supplied dimnames did not happen to contain every
+  trait -- so a matrix carrying a misspelled trait label, or labels on one
+  dimension only, was silently accepted in whatever order it arrived and produced
+  a plausible but wrong index. (`jsonlite::fromJSON(jsonlite::toJSON(M))` returns
+  an unnamed matrix, so this is not hypothetical for a GUI.) A labelled matrix is
+  now REORDERED BY NAME and must name the trait set exactly: a missing, extra,
+  misspelled or one-sided label is a hard error that names the offending labels.
+  An unlabelled matrix is still accepted and is documented as POSITIONAL, in
+  `traits$trait` order. `ng_posterior_multitrait_cross_predict()` no longer stamps
+  trait names onto a user-supplied P positionally; it aligns by name too.
+  Results for a correctly-ordered P/G are bit-identical.
+* **`desired_gain` no longer requires P.** The Pesek-Baker coefficient solve is
+  `b = G^{-1} d` with `target_matrix = G` and `projection = NULL`: P never enters
+  it. `desired_gain` now solves with G alone. P is used solely to standardise the
+  REPORTED predicted response by the index SD `sqrt(b' P b)`, so without P the
+  coefficients and the emitted index are unchanged and only
+  `desired_gain_predicted_response` degrades to `NA`, with
+  `desired_gain_unavailable` / `..._unavailable_reason` naming what is missing and
+  why. `economic_index` still requires BOTH P and G (`b = P^{-1} G a` genuinely
+  needs P), and the refusal to substitute candidate-cross score covariance for
+  quantitative-genetic covariance is unchanged for both methods.
+* **`ng_estimate_genetic_covariance()` documents and guards its `Y` contract.**
+  `Y` must be phenotypes or BLUEs. BLUPs are invalid as supplied
+  (`Var(BLUP) = sigma2_g - PEV`, so REML sees too little genetic variance and
+  almost no residual: sigma2_g biased LOW, h2 pushed toward 1, genetic
+  correlations distorted when reliabilities differ) and must be deregressed first
+  (Garrick-Taylor-Dekkers) or corrected by `sqrt(r_t * r_s)`. GEBVs are worse and
+  circular: they are a linear function of the same markers the GRM is built from,
+  so the residual goes to ~0, h2 -> 1, and G-hat becomes the covariance of
+  PREDICTIONS rather than of true breeding values. A new engine-independent guard
+  fits a per-trait profile REML heritability against the GRM and WARNS (never
+  errors) when the residual variance is at or near zero or the implied h2 is at or
+  near 1. The returned G-hat gains provenance attributes: `traits`, `n_markers`,
+  `y_input_contract`, `genetic_variance`, `residual_variance`,
+  `implied_heritability` (+ `_method` / `_note`), `reml_genetic_variance`,
+  `reml_residual_variance`, `shrunk_input_suspected` and `shrunk_input_traits`.
+
+## Tests
+
+* New `tests/user_supplied_pg_contract.R` (20 checks) covers all three changes:
+  permuted-but-labelled P/G give a bit-identical index, mislabelled/incomplete/
+  one-sided-label matrices error by name, unlabelled matrices still work
+  positionally, `desired_gain` succeeds with G alone and errors informatively
+  without it, `economic_index` still requires both, and the shrunk-input guard
+  fires on GEBV-like `Y` through both estimator engines while staying silent on
+  phenotypes.
+
 # nextgenCrossDesign 0.26.0
 
 ## New features

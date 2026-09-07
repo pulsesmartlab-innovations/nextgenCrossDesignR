@@ -188,12 +188,32 @@ conversion.
 
 Ridge \code{cv_predictive_r2} is out-of-fold phenotype predictive ability, not
 breeding-value reliability or accuracy squared. Native fits therefore report
-uncalibrated reliability as missing. Formal \code{economic_index} and
-\code{desired_gain} scoring requires both a phenotypic covariance matrix P and
-an additive-genetic covariance matrix G; candidate-cross score covariance is
-not used as a substitute. \code{ng_estimate_genetic_covariance(method="auto")}
-requires the sommer multivariate REML engine. The explicit
-\code{two_stage_ridge} option is a warned diagnostic heuristic.
+uncalibrated reliability as missing. Formal \code{economic_index} scoring
+(Smith-Hazel, \eqn{b = P^{-1} G a}) requires both a phenotypic covariance
+matrix P and an additive-genetic covariance matrix G. Formal
+\code{desired_gain} scoring (Pesek-Baker, \eqn{b = G^{-1} d}) requires only G;
+P never enters that solve and is used solely to standardise the reported
+predicted response by the index standard deviation, which is returned as
+\code{NA} when P is absent. Candidate-cross score covariance is not used as a
+substitute for either matrix under any method.
+
+A caller-supplied P or G carrying dimnames is REORDERED BY NAME to the trait
+order and must name the trait set exactly; a missing, extra, misspelled or
+one-sided label is an error. A matrix with no dimnames is interpreted
+POSITIONALLY, in trait order. Send dimnames whenever column order cannot be
+guaranteed -- a JSON matrix round trip drops them.
+
+\code{ng_estimate_genetic_covariance(method="auto")} requires the sommer
+multivariate REML engine. The explicit \code{two_stage_ridge} option is a
+warned diagnostic heuristic. Its \code{Y} argument must contain phenotypes or
+BLUEs. BLUPs are already shrunk toward the mean
+(\eqn{Var(BLUP) = \sigma^2_g - PEV}) and must be deregressed
+(Garrick-Taylor-Dekkers) before use; GEBVs must not be used at all, being a
+linear function of the same markers the GRM is built from. A guard warns when
+the supplied \code{Y} shows essentially no residual variation against the GRM,
+and the returned matrix carries provenance attributes
+(\code{method}, \code{formal_variance_component_estimate},
+\code{implied_heritability}, \code{shrunk_input_suspected}, and others).
 The legacy \code{cross_mean_blend} column is retained for compatibility but is
 now exactly the midpoint of the explicitly selected mean source; it is not an
 uncalibrated phenotype/GEBV interpolation.

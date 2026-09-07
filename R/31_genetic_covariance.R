@@ -197,7 +197,126 @@ ng_genetic_cov_sommer_remml <- function(geno, Y) {
   }
   dimnames(G_hat) <- list(trait_names, trait_names)
   G_hat <- (G_hat + t(G_hat)) / 2
-  list(G_hat = ng_genetic_cov_project_psd(G_hat))
+  # Residual (units) covariance: needed to imply per-trait h2 for the
+  # already-shrunk-input guard in ng_estimate_genetic_covariance(). sommer puts
+  # the rcov term last in fit$sigma. Missing/odd shapes are not fatal -- the
+  # guard simply reports NA heritability for that engine.
+  R_hat <- tryCatch({
+    sigma <- fit$sigma
+    r <- as.matrix(sigma[[length(sigma)]])
+    if (all(dim(r) == c(length(trait_names), length(trait_names)))) {
+      dimnames(r) <- list(trait_names, trait_names)
+      (r + t(r)) / 2
+    } else {
+      NULL
+    }
+  }, error = function(e) NULL)
+  list(G_hat = ng_genetic_cov_project_psd(G_hat), R_hat = R_hat)
+}
+
+# --- already-shrunk-input guard ---------------------------------------------
+#
+# Per-trait REML heritability of Y against the GRM, computed ONLY as an input
+# sanity check (it is never used to build G-hat). This is the EMMA-style
+# eigen-decomposition profile REML for
+#     y = 1 mu + g + e,   Var(y) = sigma_g2 K + sigma_e2 I,
+# profiled over delta = sigma_e2 / sigma_g2 on one eigen(K). It is deliberately
+# engine-independent: the two_stage_ridge sigma_e2 is an in-sample ridge
+# residual at a CV-selected lambda, which does NOT collapse to zero on shrunk
+# input, so it cannot serve as the trigger.
+#
+# The guard is skipped (all NA, with a stated reason) for very small n, where
+# the estimate is too erratic to act on, and for very large n, where the n x n
+# eigen decomposition would stop being cheap.
+ng_genetic_cov_grm_reml_h2 <- function(geno, Y, min_n = 100L, max_n = 2000L) {
+  trait_names <- colnames(Y)
+  n_traits <- ncol(Y)
+  n <- nrow(Y)
+  na_vec <- function() stats::setNames(rep(NA_real_, n_traits), trait_names)
+  out <- list(h2 = na_vec(), sigma_g2 = na_vec(), sigma_e2 = na_vec(),
+              method = NA_character_, note = NA_character_)
+  if (n < min_n) {
+    out$note <- paste0("skipped: n = ", n, " < ", min_n,
+                       " complete-case rows (REML heritability too erratic to act on)")
+    return(out)
+  }
+  if (n > max_n) {
+    out$note <- paste0("skipped: n = ", n, " > ", max_n,
+                       " (n x n eigen decomposition is no longer a cheap guard)")
+    return(out)
+  }
+  K <- tryCatch(ng_parent_kinship(geno), error = function(e) NULL)
+  ev <- if (is.null(K)) NULL else tryCatch(eigen(K, symmetric = TRUE), error = function(e) NULL)
+  if (is.null(ev)) {
+    out$note <- "skipped: the GRM eigen decomposition failed"
+    return(out)
+  }
+  U <- ev$vectors
+  d <- pmax(ev$values, 1e-10)
+  k_bar <- mean(d)
+  U1 <- crossprod(U, rep(1, n))
+  for (j in seq_len(n_traits)) {
+    Uy <- crossprod(U, as.numeric(Y[, j]))
+    neg_reml <- function(log_delta) {
+      delta <- exp(log_delta)
+      w <- 1 / (d + delta)
+      A <- sum(U1 * w * U1)
+      mu <- sum(U1 * w * Uy) / A
+      r <- Uy - mu * U1
+      s2 <- sum(w * r * r) / (n - 1)
+      if (!is.finite(s2) || s2 <= 0) return(Inf)
+      0.5 * ((n - 1) * log(s2) + sum(log(d + delta)) + log(A))
+    }
+    opt <- tryCatch(stats::optimize(neg_reml, c(log(1e-9), log(1e9))), error = function(e) NULL)
+    if (is.null(opt)) next
+    delta <- exp(opt$minimum)
+    w <- 1 / (d + delta)
+    A <- sum(U1 * w * U1)
+    mu <- sum(U1 * w * Uy) / A
+    r <- Uy - mu * U1
+    s2 <- sum(w * r * r) / (n - 1)
+    out$sigma_g2[[j]] <- s2 * k_bar
+    out$sigma_e2[[j]] <- s2 * delta
+    out$h2[[j]] <- k_bar / (k_bar + delta)
+  }
+  out$method <- "grm_profile_reml"
+  out
+}
+
+# Cheap, non-invasive check for Y that is not phenotypes/BLUEs. Both BLUPs and
+# GEBVs have had the residual removed before they reach this function, so a
+# variance-component fit sees (almost) no residual and the implied heritability
+# collapses onto 1. That is the signature this looks for. It WARNS and never
+# errors: a user may knowingly supply near-h2 = 1 data (e.g. a simulated
+# noiseless trait) and still want the covariance structure.
+ng_genetic_cov_shrunk_input_guard <- function(h2, residual_variance,
+                                              observed_variance, trait_names,
+                                              h2_tol = 0.99, resid_frac_tol = 0.01) {
+  resid_frac <- residual_variance / observed_variance
+  names(h2) <- names(resid_frac) <- trait_names
+  flagged <- (is.finite(h2) & h2 >= h2_tol) |
+    (is.finite(resid_frac) & resid_frac <= resid_frac_tol)
+  flagged[is.na(flagged)] <- FALSE
+  if (any(flagged)) {
+    bad <- trait_names[flagged]
+    warning(
+      "ng_estimate_genetic_covariance(): Y appears to contain ALREADY-SHRUNK predictions ",
+      "(BLUPs or GEBVs) rather than phenotypes or BLUEs for trait(s): ",
+      paste(bad, collapse = ", "), ". ",
+      sprintf("Implied heritability %s and residual/observed variance ratio %s. ",
+              paste(sprintf("%s=%.4f", bad, h2[flagged]), collapse = ", "),
+              paste(sprintf("%s=%.2e", bad, resid_frac[flagged]), collapse = ", ")),
+      "Var(BLUP) = sigma2_g - PEV, so REML sees too little genetic variance and almost no ",
+      "residual: sigma2_g is biased LOW and h2 is pushed toward 1. GEBVs are worse and ",
+      "circular -- they are a linear function of the same markers the GRM is built from, so ",
+      "G-hat becomes the covariance of PREDICTIONS, understating sigma2_g by roughly the ",
+      "reliability. Remedies: deregress BLUPs before use (Garrick-Taylor-Dekkers 2009), or ",
+      "correct genetic correlations by dividing by sqrt(r_t * r_s), or supply a validated G ",
+      "directly. Not an error: G-hat is returned, and is biased low.",
+      call. = FALSE)
+  }
+  list(implied_heritability = h2, residual_fraction = resid_frac,
+       suspected = any(flagged), traits = trait_names[flagged])
 }
 
 # --- public estimator -------------------------------------------------------
@@ -208,6 +327,58 @@ ng_genetic_cov_sommer_remml <- function(geno, Y) {
 # estimator is retained only as an explicit diagnostic heuristic; correlated
 # residuals can induce correlated univariate marker-effect estimates and hence
 # masquerade as genetic covariance.
+#
+# =====================================================================
+# WHAT `Y` MUST CONTAIN  (read this before supplying anything but raw
+# phenotypes -- BLUEs, BLUPs and GEBVs are NOT interchangeable here)
+# =====================================================================
+#
+# `Y` is an n x t matrix of PHENOTYPIC observations, one column per trait, with
+# row names matching `geno`. Both engines below are variance-component fits:
+# they need input that still carries residual variation, because that is exactly
+# what separates sigma2_g from sigma2_e.
+#
+#   BLUEs  -- VALID. This is the standard two-stage genomic analysis: stage-one
+#             BLUEs enter stage two as the response, and REML splits the genetic
+#             variance from the BLUE estimation error. On unbalanced data the
+#             BLUEs ideally enter WEIGHTED by their inverse squared standard
+#             errors; this function fits them unweighted, so treat unbalanced
+#             stage-one designs as an approximation.
+#
+#   BLUPs  -- INVALID AS SUPPLIED. A BLUP is already shrunk toward the mean:
+#             Var(BLUP) = sigma2_g - PEV. REML therefore sees too little genetic
+#             variance AND almost no residual, so sigma2_g is biased LOW while
+#             the implied h2 is pushed toward 1. Genetic CORRELATIONS are also
+#             distorted whenever reliabilities differ across traits, because
+#             each column is shrunk by a different factor.
+#             Remedy: DEREGRESS the BLUPs before use (Garrick, Taylor & Dekkers
+#             2009, Genet. Sel. Evol. 41:55), or correct the estimated genetic
+#             correlation between traits t and s by dividing by sqrt(r_t * r_s)
+#             with r the respective reliabilities, or supply a validated G to
+#             the index functions directly and skip this estimator.
+#
+#   GEBVs  -- WORST, AND CIRCULAR. GEBVs are a linear function of the very
+#             marker matrix the GRM is built from, so they lie in its span. The
+#             residual goes to ~0, h2 -> 1, and G-hat becomes the covariance of
+#             the PREDICTIONS rather than of the true breeding values --
+#             understating sigma2_g by roughly the reliability. Do not use.
+#
+# A cheap guard below WARNS (never errors) when the REML residual variance
+# against the GRM is at or near zero, or the implied h2 is at or near 1, because
+# that is the signature of already-shrunk input. It is an ENGINE-INDEPENDENT
+# profile REML computed only for this check and never used to build G-hat; see
+# ng_genetic_cov_grm_reml_h2() and ng_genetic_cov_shrunk_input_guard(). It is
+# skipped, with a stated reason in `implied_heritability_note`, for n < 100
+# (too erratic) and n > 2000 (no longer cheap).
+#
+# Provenance attributes on the returned G-hat (for a caller to report):
+#   method, requested_method, formal_variance_component_estimate,
+#   genetic_correlation, n_used, n_markers, traits, y_input_contract,
+#   genetic_variance, residual_variance          (from the fitting engine),
+#   implied_heritability, implied_heritability_method, implied_heritability_note,
+#   reml_genetic_variance, reml_residual_variance (from the guard),
+#   shrunk_input_suspected, shrunk_input_traits
+#   (and `diagnostics` when return_diagnostics = TRUE).
 ng_estimate_genetic_covariance <- function(geno,
                                            Y,
                                            method = c("auto", "two_stage_ridge", "sommer_remml"),
@@ -244,6 +415,11 @@ ng_estimate_genetic_covariance <- function(geno,
   }
 
   diag_list <- list()
+  n_traits <- ncol(Y)
+  genetic_variance <- stats::setNames(rep(NA_real_, n_traits), colnames(Y))
+  residual_variance <- stats::setNames(rep(NA_real_, n_traits), colnames(Y))
+  observed_variance <- stats::setNames(
+    apply(Y, 2L, function(col) stats::var(col, na.rm = TRUE)), colnames(Y))
   if (resolved_method == "sommer_remml") {
     sommer_out <- ng_genetic_cov_sommer_remml(geno, Y)
     if (!is.null(sommer_out$error)) {
@@ -252,6 +428,9 @@ ng_estimate_genetic_covariance <- function(geno,
     } else {
       G_hat <- sommer_out$G_hat
       diag_list$engine <- "sommer_remml"
+      genetic_variance[] <- diag(as.matrix(G_hat))
+      if (!is.null(sommer_out$R_hat)) residual_variance[] <- diag(sommer_out$R_hat)
+      diag_list$residual_covariance <- sommer_out$R_hat
     }
   }
   if (resolved_method == "two_stage_ridge") {
@@ -268,6 +447,8 @@ ng_estimate_genetic_covariance <- function(geno,
     diag_list$sigma_e2 <- ts$sigma_e2
     diag_list$sigma_g2 <- ts$sigma_g2
     diag_list$denom <- ts$denom
+    genetic_variance[] <- as.numeric(ts$sigma_g2)
+    residual_variance[] <- as.numeric(ts$sigma_e2)
     if (return_diagnostics) {
       diag_list$beta_hat <- ts$beta_hat
       diag_list$R_beta <- ts$R_beta
@@ -276,11 +457,33 @@ ng_estimate_genetic_covariance <- function(geno,
   }
 
   dimnames(G_hat) <- list(colnames(Y), colnames(Y))
+  # Guard: warn (never error) when Y looks like already-shrunk predictions.
+  reml_h2 <- ng_genetic_cov_grm_reml_h2(geno, Y)
+  guard <- ng_genetic_cov_shrunk_input_guard(
+    h2 = reml_h2$h2,
+    residual_variance = reml_h2$sigma_e2,
+    observed_variance = observed_variance,
+    trait_names = colnames(Y))
   attr(G_hat, "genetic_correlation") <- ng_genetic_cov_to_correlation(G_hat)
   attr(G_hat, "n_used") <- nrow(Y)
   attr(G_hat, "method") <- diag_list$engine
   attr(G_hat, "requested_method") <- method
   attr(G_hat, "formal_variance_component_estimate") <- identical(diag_list$engine, "sommer_remml")
+  # Provenance a caller needs to report what this G-hat actually is.
+  attr(G_hat, "traits") <- colnames(Y)
+  attr(G_hat, "n_markers") <- ncol(geno)
+  attr(G_hat, "y_input_contract") <-
+    "Y must be phenotypes or BLUEs; BLUPs must be deregressed first and GEBVs must not be used"
+  attr(G_hat, "genetic_variance") <- genetic_variance
+  attr(G_hat, "residual_variance") <- residual_variance
+  # Guard quantities (independent of the engine that built G-hat).
+  attr(G_hat, "implied_heritability") <- guard$implied_heritability
+  attr(G_hat, "implied_heritability_method") <- reml_h2$method
+  attr(G_hat, "implied_heritability_note") <- reml_h2$note
+  attr(G_hat, "reml_genetic_variance") <- reml_h2$sigma_g2
+  attr(G_hat, "reml_residual_variance") <- reml_h2$sigma_e2
+  attr(G_hat, "shrunk_input_suspected") <- guard$suspected
+  attr(G_hat, "shrunk_input_traits") <- guard$traits
   if (return_diagnostics) attr(G_hat, "diagnostics") <- diag_list
   G_hat
 }

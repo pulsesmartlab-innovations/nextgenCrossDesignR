@@ -227,8 +227,12 @@ ng_posterior_multitrait_cross_predict <- function(geno,
   if (is.null(phenotypic_covariance)) {
     P_hat <- ng_estimate_phenotypic_covariance(Y, shrinkage = "auto")
   } else {
-    P_hat <- as.matrix(phenotypic_covariance)
-    dimnames(P_hat) <- list(trait_names, trait_names)
+    # 0.27.0: this used to STAMP dimnames positionally, which silently relabelled a
+    # user matrix whose rows/columns were in a different order (and defeated the
+    # by-name alignment downstream). Align by name instead; an unlabelled matrix is
+    # still read positionally in traits$trait order. See ng_multitrait_align_cov().
+    P_hat <- ng_multitrait_align_cov(phenotypic_covariance, trait_names,
+                                     "phenotypic_covariance")
   }
 
   # ---- Pre-compute per-parent intercept and marker_mean -------------------

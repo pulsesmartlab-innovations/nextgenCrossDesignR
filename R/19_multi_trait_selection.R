@@ -346,9 +346,100 @@ ng_multitrait_diag_col <- function(trait, suffix) {
   paste0("multi_trait_", make.names(as.character(trait)), "_", suffix)
 }
 
-# Build the covariance matrices used to solve a formal selection index. Both
-# caller-supplied P and G are required. Candidate-cross score covariance is not
-# a substitute for phenotypic or additive-genetic covariance.
+# --- Label-aware alignment of caller-supplied trait x trait matrices ---------
+#
+# SAFETY (0.27.0). P and G can now arrive from a GUI over a JSON bridge, and a
+# jsonlite matrix round trip DROPS dimnames: jsonlite::fromJSON(toJSON(M))
+# returns an unnamed matrix. Every internal use of P/G is positional -- both the
+# index solve and the value_z rescaling L = diag(sign / scale) applied by
+# ng_multitrait_cov_to_value_z() -- so a matrix whose rows/columns are ordered
+# differently from `traits` would silently get the wrong direction sign and the
+# wrong scale applied to every element and still return a plausible index.
+#
+# Contract:
+#   * LABELLED input (dimnames on BOTH dimensions) is REORDERED BY NAME into the
+#     internal trait order and must name exactly the trait set. A missing, extra
+#     or misspelled label is a hard error that names the offending labels.
+#     Labels on only one dimension are a hard error too, because the unlabelled
+#     dimension cannot be checked against anything.
+#   * UNLABELLED input (no dimnames at all) is INTERPRETED POSITIONALLY in
+#     `traits$trait` order, and only when the dimension matches. This is the
+#     documented behaviour for the JSON bridge; a caller that cannot guarantee
+#     column order MUST send dimnames.
+ng_multitrait_align_cov <- function(M, trait_names, name) {
+  if (is.null(M)) return(NULL)
+  M <- as.matrix(M)
+  trait_names <- as.character(trait_names)
+  p <- length(trait_names)
+  rn <- rownames(M)
+  cn <- colnames(M)
+  if (is.null(rn) && is.null(cn)) {
+    if (nrow(M) != p || ncol(M) != p) {
+      ng_stop(name, " must be a ", p, " x ", p, " matrix (one row/column per trait); an ",
+              "unlabelled matrix is interpreted POSITIONALLY in trait order: ",
+              paste(trait_names, collapse = ", "))
+    }
+    dimnames(M) <- list(trait_names, trait_names)
+    return(M)
+  }
+  if (is.null(rn) || is.null(cn)) {
+    ng_stop(name, " has dimnames on only one dimension; supply trait names on BOTH ",
+            "rownames and colnames, or on neither (positional interpretation)")
+  }
+  check_side <- function(labels, side) {
+    dups <- unique(labels[duplicated(labels)])
+    if (length(dups)) {
+      ng_stop(name, " has duplicated ", side, " label(s): ", paste(dups, collapse = ", "))
+    }
+    missing <- setdiff(trait_names, labels)
+    extra <- setdiff(labels, trait_names)
+    if (length(missing) || length(extra)) {
+      ng_stop(name, " ", side, " labels do not match the trait set. Missing: ",
+              if (length(missing)) paste(missing, collapse = ", ") else "<none>",
+              "; unexpected: ", if (length(extra)) paste(extra, collapse = ", ") else "<none>",
+              ". Expected exactly: ", paste(trait_names, collapse = ", "))
+    }
+  }
+  check_side(rn, "row")
+  check_side(cn, "column")
+  M <- M[trait_names, trait_names, drop = FALSE]
+  dimnames(M) <- list(trait_names, trait_names)
+  M
+}
+
+# Label-aware alignment PLUS the covariance-matrix validity checks: finite,
+# symmetric within tolerance, positive diagonal variances, and positive
+# semidefinite by eigenvalue.
+ng_multitrait_validate_cov <- function(M, trait_names, name) {
+  M <- ng_multitrait_align_cov(M, trait_names, name)
+  if (is.null(M)) return(NULL)
+  if (any(!is.finite(M))) ng_stop(name, " contains non-finite entries")
+  asym <- max(abs(M - t(M)))
+  if (!is.finite(asym) || asym > 1e-8) ng_stop(name, " must be symmetric")
+  keep <- dimnames(M)
+  M <- (M + t(M)) / 2
+  dimnames(M) <- keep
+  if (any(diag(M) <= 0)) ng_stop(name, " must have positive diagonal variances")
+  ev <- eigen(M, symmetric = TRUE, only.values = TRUE)$values
+  tol <- 1e-8 * max(1, max(abs(ev)))
+  if (min(ev) < -tol) ng_stop(name, " must be positive semidefinite")
+  M
+}
+
+# Build the covariance matrices used to solve a formal selection index.
+#
+# economic_index (Smith-Hazel, b = P^{-1} G a) genuinely requires BOTH P and G.
+#
+# desired_gain (Pesek-Baker, b = G^{-1} d) requires ONLY G. P never enters the
+# coefficient solve: for this purpose target_matrix = G and projection = NULL,
+# so ng_multitrait_solve_index() forms b from G and the desired-gain target
+# alone. P is used solely to standardise the REPORTED predicted response by the
+# index standard deviation sqrt(b' P b). When P is absent the coefficients and
+# the emitted index are unchanged and the reported predicted response is NA;
+# the names of the unavailable quantities are returned in `unavailable`.
+#
+# Candidate-cross score covariance is never a substitute for either matrix and
+# is not inferred from the scores under any purpose.
 ng_multitrait_index_covariance <- function(value_z, traits,
                                            phenotypic_covariance = NULL,
                                            genetic_covariance = NULL,
@@ -356,36 +447,32 @@ ng_multitrait_index_covariance <- function(value_z, traits,
   purpose <- match.arg(purpose)
   value_z <- as.matrix(value_z)
   p <- ncol(value_z)
-  ensure_pxp <- function(M, name) {
-    if (is.null(M)) return(NULL)
-    M <- as.matrix(M)
-    if (nrow(M) != p || ncol(M) != p) {
-      ng_stop(name, " must be a ", p, " x ", p, " matrix")
-    }
-    if (any(!is.finite(M))) ng_stop(name, " contains non-finite entries")
-    asym <- max(abs(M - t(M)))
-    if (!is.finite(asym) || asym > 1e-8) ng_stop(name, " must be symmetric")
-    M <- (M + t(M)) / 2
-    if (any(diag(M) <= 0)) ng_stop(name, " must have positive diagonal variances")
-    ev <- eigen(M, symmetric = TRUE, only.values = TRUE)$values
-    tol <- 1e-8 * max(1, max(abs(ev)))
-    if (min(ev) < -tol) ng_stop(name, " must be positive semidefinite")
-    M
+  trait_names <- as.character(traits$trait)
+  if (length(trait_names) != p) {
+    ng_stop("internal error: value_z has ", p, " columns but the trait spec has ",
+            length(trait_names), " traits")
   }
-  G <- ensure_pxp(genetic_covariance, "genetic_covariance")
-  P <- ensure_pxp(phenotypic_covariance, "phenotypic_covariance")
-  if (is.null(G) || is.null(P)) {
-    ng_stop(purpose, " requires both phenotypic_covariance (P) and genetic_covariance (G); ",
-            "candidate-score covariance is not a substitute for quantitative-genetic covariance")
-  }
+  G <- ng_multitrait_validate_cov(genetic_covariance, trait_names, "genetic_covariance")
+  P <- ng_multitrait_validate_cov(phenotypic_covariance, trait_names, "phenotypic_covariance")
   if (identical(purpose, "economic_index")) {
+    if (is.null(G) || is.null(P)) {
+      ng_stop(purpose, " requires both phenotypic_covariance (P) and genetic_covariance (G) ",
+              "for the Smith-Hazel solve b = P^{-1} G a; ",
+              "candidate-score covariance is not a substitute for quantitative-genetic covariance")
+    }
     return(list(target_matrix = P, projection = G,
                 response_G = G, response_P = P,
-                source = "smith_hazel", solve_form = "b = P^{-1} G a"))
+                source = "smith_hazel", solve_form = "b = P^{-1} G a",
+                unavailable = character(0)))
+  }
+  if (is.null(G)) {
+    ng_stop(purpose, " requires genetic_covariance (G) for the Pesek-Baker solve b = G^{-1} d; ",
+            "candidate-score covariance is not a substitute for quantitative-genetic covariance")
   }
   list(target_matrix = G, projection = NULL,
        response_G = G, response_P = P,
-       source = "pesek_baker", solve_form = "b = G^{-1} d")
+       source = "pesek_baker", solve_form = "b = G^{-1} d",
+       unavailable = if (is.null(P)) "predicted_response" else character(0))
 }
 
 # Single-ridge solve: solve_mat = target_matrix + ridge * diag_scale * I.
@@ -426,15 +513,26 @@ ng_multitrait_solve_index <- function(target, cov_info, ridge = 1e-6) {
     ng_stop("selection-index target has no estimable component in the covariance column space")
   }
   coefficients <- coefficients / sum(abs(coefficients))
-  sigma_i <- sqrt(max(as.numeric(crossprod(
-    coefficients, cov_info$response_P %*% coefficients)), 0))
-  predicted <- if (is.finite(sigma_i) && sigma_i > 0) {
+  # The predicted response is reported in index-SD units, sigma_I = sqrt(b' P b).
+  # P is REQUIRED for that scaling but never for the coefficients: the
+  # Pesek-Baker branch (projection = NULL, target_matrix = G) solves b = G^{-1} d
+  # without ever touching P. When P is absent the coefficients are unchanged and
+  # the predicted response degrades to NA rather than failing the whole solve.
+  sigma_i <- if (is.null(cov_info$response_P)) {
+    NA_real_
+  } else {
+    sqrt(max(as.numeric(crossprod(
+      coefficients, cov_info$response_P %*% coefficients)), 0))
+  }
+  predicted <- if (is.na(sigma_i)) {
+    rep(NA_real_, p)
+  } else if (is.finite(sigma_i) && sigma_i > 0) {
     as.numeric(cov_info$response_G %*% coefficients) / sigma_i
   } else {
     rep(0, p)
   }
-  predicted[!is.finite(predicted)] <- 0
-  list(coefficients = coefficients, predicted = predicted)
+  if (!anyNA(predicted)) predicted[!is.finite(predicted)] <- 0
+  list(coefficients = coefficients, predicted = predicted, index_sd = sigma_i)
 }
 
 ng_multitrait_desired_gain_fit <- function(value_z, traits, value_scales, ridge = 1e-6,
@@ -480,7 +578,11 @@ ng_multitrait_desired_gain_fit <- function(value_z, traits, value_scales, ridge 
     economic_weights = economic,
     covariance = cov_info$target_matrix,
     cov_source = cov_info$source,
-    cov_solve_form = cov_info$solve_form
+    cov_solve_form = cov_info$solve_form,
+    index_sd = solved$index_sd,
+    # Quantities that could not be computed from the covariance matrices that
+    # were actually supplied (empty when everything was available).
+    unavailable = cov_info$unavailable
   )
 }
 
@@ -488,12 +590,26 @@ ng_multitrait_desired_gain_fit <- function(value_z, traits, value_scales, ridge 
 # applied to: value_z = sign*(raw - center)/scale, so a raw covariance M maps as M_z = L M L with
 # L = diag(sign/scale). Without this, raw-unit index weights multiply standardized/oriented values,
 # distorting per-trait weights and flipping minimize-trait cross-covariance signs.
+# `M` is aligned to `traits$trait` BY NAME when it carries dimnames, and is
+# interpreted POSITIONALLY (in traits$trait order) only when it carries none --
+# see ng_multitrait_align_cov() for the full contract and for why a positional-
+# only transform is unsafe for GUI/JSON input.
 ng_multitrait_cov_to_value_z <- function(M, traits, value_scales) {
   if (is.null(M)) return(NULL)
+  trait_names <- as.character(traits$trait)
+  M <- ng_multitrait_align_cov(M, trait_names, "covariance matrix")
+  scales <- as.numeric(value_scales)
+  # value_scales is built in traits$trait order upstream; when it is named, take
+  # the same by-name route so scale and sign can never disagree with M.
+  if (!is.null(names(value_scales)) && all(trait_names %in% names(value_scales))) {
+    scales <- as.numeric(value_scales[trait_names])
+  }
   signs <- ifelse(traits$direction == "maximize", 1, -1)
-  L <- signs / pmax(as.numeric(value_scales), 1e-8)
+  L <- signs / pmax(scales, 1e-8)
   L[!is.finite(L)] <- 1
-  as.matrix(M) * outer(L, L)
+  out <- as.matrix(M) * outer(L, L)
+  dimnames(out) <- list(trait_names, trait_names)
+  out
 }
 
 ng_multitrait_economic_index_fit <- function(value_z, traits, ridge = 1e-6,
@@ -536,7 +652,11 @@ ng_multitrait_economic_index_fit <- function(value_z, traits, ridge = 1e-6,
     economic_weights = economic,
     covariance = cov_info$target_matrix,
     cov_source = cov_info$source,
-    cov_solve_form = cov_info$solve_form
+    cov_solve_form = cov_info$solve_form,
+    index_sd = solved$index_sd,
+    # Quantities that could not be computed from the covariance matrices that
+    # were actually supplied (empty when everything was available).
+    unavailable = cov_info$unavailable
   )
 }
 
@@ -587,27 +707,15 @@ ng_add_multitrait_score <- function(scores,
   if (!is.finite(threshold_penalty_weight) || threshold_penalty_weight < 0) threshold_penalty_weight <- 1.0
   # Validate optional caller-supplied covariance matrices and align them with the
   # ordering of traits used internally (value_z columns are in traits$trait order).
-  ng_multitrait_check_cov <- function(M, name) {
-    if (is.null(M)) return(NULL)
-    M <- as.matrix(M)
-    if (!is.null(dimnames(M)) && all(traits$trait %in% rownames(M)) &&
-        all(traits$trait %in% colnames(M))) {
-      M <- M[traits$trait, traits$trait, drop = FALSE]
-    } else if (nrow(M) != nrow(traits) || ncol(M) != nrow(traits)) {
-      ng_stop(name, " must be square with rows/cols equal to the number of traits (", nrow(traits), ")")
-    }
-    if (any(!is.finite(M))) ng_stop(name, " contains non-finite entries")
-    asym <- max(abs(M - t(M)))
-    if (!is.finite(asym) || asym > 1e-8) ng_stop(name, " must be symmetric")
-    M <- (M + t(M)) / 2
-    if (any(diag(M) <= 0)) ng_stop(name, " must have positive diagonal variances")
-    ev <- eigen(M, symmetric = TRUE, only.values = TRUE)$values
-    tol <- 1e-8 * max(1, max(abs(ev)))
-    if (min(ev) < -tol) ng_stop(name, " must be positive semidefinite")
-    M
-  }
-  phenotypic_covariance <- ng_multitrait_check_cov(phenotypic_covariance, "phenotypic_covariance")
-  genetic_covariance <- ng_multitrait_check_cov(genetic_covariance, "genetic_covariance")
+  # 0.27.0: this used to fall through to a POSITIONAL read whenever the supplied
+  # dimnames did not happen to contain every trait -- so a matrix carrying a
+  # misspelled trait, or labels on one dimension only, was silently accepted in
+  # whatever order it arrived. ng_multitrait_validate_cov() reorders by name and
+  # hard-errors on any label mismatch instead.
+  phenotypic_covariance <- ng_multitrait_validate_cov(phenotypic_covariance, traits$trait,
+                                                      "phenotypic_covariance")
+  genetic_covariance <- ng_multitrait_validate_cov(genetic_covariance, traits$trait,
+                                                   "genetic_covariance")
 
   z <- matrix(0, nrow = nrow(scores), ncol = nrow(traits))
   value_z <- matrix(0, nrow = nrow(scores), ncol = nrow(traits))
@@ -755,6 +863,19 @@ ng_add_multitrait_score <- function(scores,
     attr(scores, "multi_trait")$desired_gain_covariance <- desired_gain$covariance
     attr(scores, "multi_trait")$desired_gain_cov_source <- desired_gain$cov_source
     attr(scores, "multi_trait")$desired_gain_cov_solve_form <- desired_gain$cov_solve_form
+    attr(scores, "multi_trait")$desired_gain_index_sd <- desired_gain$index_sd
+    # Pesek-Baker never needs P for the coefficients; when P was not supplied the
+    # scoring is complete but any P-scaled REPORTED quantity is NA and named here.
+    attr(scores, "multi_trait")$desired_gain_unavailable <- desired_gain$unavailable
+    attr(scores, "multi_trait")$desired_gain_unavailable_reason <-
+      if (length(desired_gain$unavailable)) {
+        paste0(paste(desired_gain$unavailable, collapse = ", "),
+               " unavailable: reporting it requires phenotypic_covariance (P) for the ",
+               "index standard deviation sqrt(b' P b). The desired_gain coefficients ",
+               "(b = G^{-1} d) and the emitted index are unaffected.")
+      } else {
+        NA_character_
+      }
   }
   if (!is.null(economic_index)) {
     attr(scores, "multi_trait")$economic_index_coefficients <- economic_index$coefficients
@@ -764,6 +885,8 @@ ng_add_multitrait_score <- function(scores,
     attr(scores, "multi_trait")$economic_index_covariance <- economic_index$covariance
     attr(scores, "multi_trait")$economic_index_cov_source <- economic_index$cov_source
     attr(scores, "multi_trait")$economic_index_cov_solve_form <- economic_index$cov_solve_form
+    attr(scores, "multi_trait")$economic_index_index_sd <- economic_index$index_sd
+    attr(scores, "multi_trait")$economic_index_unavailable <- economic_index$unavailable
   }
   scores
 }
@@ -774,6 +897,8 @@ ng_multitrait_add_desired_summary <- function(summary, meta) {
     summary$multitrait_desired_gain_target <- meta$desired_gain_target
     summary$multitrait_desired_gain_predicted_response <- meta$desired_gain_predicted_response
     summary$multitrait_economic_weights <- meta$economic_weights
+    summary$multitrait_desired_gain_unavailable <- meta$desired_gain_unavailable
+    summary$multitrait_desired_gain_unavailable_reason <- meta$desired_gain_unavailable_reason
   }
   if (!is.null(meta$economic_index_coefficients)) {
     summary$multitrait_economic_index_coefficients <- meta$economic_index_coefficients
