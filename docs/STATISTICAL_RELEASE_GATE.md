@@ -1,9 +1,9 @@
 # Statistical Release Gate
 
-Generated: 2026-09-06 22:19:46 CDT
-Package: `nextgenCrossDesign 0.28.0`
-Installed namespace: `/private/tmp/ngcd_lib_028/nextgenCrossDesign`
-Source Git commit: `52c63a5cf56d` (working tree dirty: `TRUE`)
+Generated: 2026-09-07 00:18:33 CDT
+Package: `nextgenCrossDesign 0.29.0`
+Installed namespace: `/private/tmp/ngcd_lib_029/nextgenCrossDesign`
+Source Git commit: `a42dda6c0f79` (working tree dirty: `TRUE`)
 R: `R version 4.6.1 (2026-06-24)`
 Compiled LD backend available: `TRUE`
 

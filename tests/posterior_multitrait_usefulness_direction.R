@@ -48,12 +48,17 @@ res <- suppressWarnings(ng_posterior_multitrait_cross_predict(
 ))
 
 # ---- Rebuild the single draw the function used, outside the package -------------------------
-# Same call shape R/32 makes for trait j = 1: seed = seed + j.
+# Same call shape R/32 makes for trait j = 1. 0.28.0 changed that per-trait seed from
+# `seed + j` (the trait's ROW POSITION) to ng_trait_rng_seed(seed, trait_name) (the trait's
+# IDENTITY) but left this reconstruction on the old `SEED + 1L`, so the comparison below has
+# been reconstructing a DIFFERENT draw stream than R/32 uses ever since -- the assertion has
+# been failing since 0.28.0, independently of the direction property it is meant to test.
+# Mirror R/32's current key here.
 intensity <- ng_selection_intensity(0.10)
 post_d <- ng_fit_ridge_effects_posterior(geno = geno, y = as.numeric(Y[, 1L]),
                                          ids = rownames(geno), lambda = NULL, kfold = 5L,
                                          n_draws = N_DRAWS, method = "closed_form",
-                                         seed = SEED + 1L)
+                                         seed = ng_trait_rng_seed(SEED, "disease"))
 beta_s <- post_d$beta_draws[, 1L]
 map_s <- ng_prepare_marker_map(marker_map, colnames(geno), model = "haldane")
 sorted <- ng_sort_by_map(geno, beta_s, rep(0, ncol(geno)), marker_map = map_s)

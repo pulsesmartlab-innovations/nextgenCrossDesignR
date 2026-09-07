@@ -203,6 +203,42 @@ one-sided label is an error. A matrix with no dimnames is interpreted
 POSITIONALLY, in trait order. Send dimnames whenever column order cannot be
 guaranteed -- a JSON matrix round trip drops them.
 
+A caller-supplied P or G is validated and INVALID INPUT IS REFUSED, never
+warned about, because an invalid covariance propagates into the index weights,
+the cross ranking, the allocation and the joint probabilities alike. Every
+tolerance is RELATIVE to the scale of the matrix being checked
+(\eqn{10^{-8} \times \max(1, \mathrm{scale})}), because a covariance carries the
+square of the trait's unit and its magnitude therefore says nothing about
+validity. The checks are: finite entries; symmetry, judged against the largest
+element magnitude; strictly positive diagonal variances; every implied
+correlation \eqn{|M_{ts}| \le \sqrt{M_{tt} M_{ss}}} inside \eqn{[-1, 1]},
+reported as a correlation; and positive semidefiniteness by eigenvalue.
+
+When BOTH P and G are supplied, \eqn{P - G} must itself be positive
+semidefinite. Since \eqn{P = G + R}, the residual covariance \eqn{R = P - G} is
+a covariance matrix; this is the multivariate generalisation of
+\eqn{0 \le h^2 \le 1}, and a violation means some trait contrast is assigned
+more genetic than phenotypic variance. The per-trait special case
+\eqn{\mathrm{diag}(G) \le \mathrm{diag}(P)} is reported first, naming the trait
+and its implied \eqn{h^2}; otherwise the offending eigenvalue and the trait
+contrast that realises it are reported. The check runs after by-name alignment,
+so trait order cannot affect it. Note that
+\code{ng_estimate_genetic_covariance(method = "two_stage_ridge")} frequently
+produces a \code{G} that fails this check against
+\code{ng_estimate_phenotypic_covariance()}, because its lambda-inversion
+diagonal is not a calibrated genetic variance.
+
+The matrix a formal index INVERTS must additionally be positive DEFINITE, not
+merely semidefinite: P for \code{economic_index}, G for \code{desired_gain}.
+Numerically singular input, or a condition number above \eqn{10^{8}}, is
+refused rather than passed to the index ridge, which would return coefficients
+determined by the regulariser instead of by the supplied matrix. The threshold
+is the point at which the default ridge stops being a rounding correction; mild
+ill-conditioning below it is accepted, and raising \code{ridge} does not lift
+it. A merely semidefinite matrix is NOT refused for a method that does not
+invert it -- a singular G is accepted under \code{economic_index}, where G
+enters only as the forward projection \eqn{G a}.
+
 \code{ng_estimate_genetic_covariance(method="auto")} requires the sommer
 multivariate REML engine. The explicit \code{two_stage_ridge} option is a
 warned diagnostic heuristic. Its \code{Y} argument must contain phenotypes or

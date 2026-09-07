@@ -1,3 +1,234 @@
+# nextgenCrossDesign 0.29.0
+
+## Blocking validity guards for user-supplied covariance matrices
+
+`phenotypic_covariance` (P) and `genetic_covariance` (G) can arrive from a GUI
+over a JSON bridge, from a spreadsheet, or from another package's output. An
+invalid one is not a local problem: it propagates into the index weights, the
+cross ranking, the robust allocation and the joint probabilities, and every
+number downstream looks plausible. All four checks below are therefore HARD
+ERRORS, not warnings, and every message names the offending trait(s), gives the
+offending number, and states the principle that was violated so a reviewer can
+check the objection independently.
+
+**A pair that satisfies every guard is numerically untouched.** Verified against
+a pristine 0.28.0 tree at `tolerance = 0` for the `economic_index` and
+`desired_gain` scores, the index coefficients, the index SDs and the selected
+crossing plan (`tests/covariance_guards_bit_identity.R`).
+
+### Guard 1 -- the symmetry tolerance is now RELATIVE
+
+The symmetry test was ABSOLUTE (`max|M - M'| > 1e-8`) while the positive
+semidefinite test six lines below it was already RELATIVE. Covariances carry the
+square of the trait's unit, so magnitude is a property of the breeder's unit
+choice and not of validity: yield in kg/ha gives covariances of order 1e6, where
+agreement to 1e-8 absolute is unreachable for any hand-entered or
+spreadsheet-rounded matrix; the same yield in t/ha gives order 1, where it is
+trivial. Same principle, two conventions.
+
+Symmetry is now judged against the largest element magnitude -- the right
+reference for an ELEMENTWISE comparison, as the spectral radius is for an
+EIGENVALUE comparison -- through one shared helper, so the package applies a
+single convention: `tol = 1e-8 * max(1, scale)`. The `max(1, .)` floor keeps the
+rule absolute for small matrices, which makes this a strict relaxation and never
+a tightening: nothing that passed before can fail now.
+
+The message now names both cells and the discrepancy, e.g.
+
+> `genetic_covariance must be symmetric: cov(yield, protein) = 1.7 but cov(protein, yield) = 1.2, a discrepancy of 0.5 against a tolerance of 9e-08`
+
+### Guard 2 -- `P - G` must be positive semidefinite
+
+Since `P = G + R`, the residual covariance `R = P - G` is itself a covariance
+matrix and must be PSD. This is the multivariate generalisation of
+`0 <= h2 <= 1`: a negative eigenvalue of `P - G` means some linear combination of
+the traits is assigned more GENETIC than PHENOTYPIC variance. It is the signature
+of P and G having come from different sources, scales or units -- the mistake a
+GUI with two upload boxes makes easy.
+
+The check runs whenever both matrices are supplied, AFTER by-name alignment, so
+trait order can never confound it or launder an invalid pair.
+
+The elementwise special case `diag(G) <= diag(P)` (per-trait `h2 <= 1`) is tested
+first, because it yields a far clearer message:
+
+> `genetic variance exceeds phenotypic variance, which implies a heritability above 1 and is impossible: trait 'protein' has genetic_covariance variance 6 exceeding its phenotypic_covariance variance 5, implying h2 = 1.2`
+
+The general eigenvalue case catches what no per-trait check can see -- every
+individual `h2` legal, but a trait CONTRAST with `h2 > 1` -- and reports the
+offending eigenvalue together with the contrast that realises it and that
+contrast's genetic and phenotypic variance.
+
+**This guard fires on the package's own estimator.** `two_stage_ridge` `G_hat`
+paired with `ng_estimate_phenotypic_covariance()` `P_hat` implies `h2 > 1` on 87%
+of datasets from the simulation in `tests/genetic_covariance_estimator.R`
+(measured over 200 independent draws), because the GBLUP lambda-inversion
+diagonal overshoots. Before 0.29.0 that pair was accepted and solved, producing
+Smith-Hazel weights from a `P = G + R` decomposition that does not exist.
+
+### Guard 3 -- positive DEFINITE for the matrix the index inverts
+
+`economic_index` (Smith-Hazel) solves `b = P^{-1} G a` and inverts **P**;
+`desired_gain` (Pesek-Baker) solves `b = G^{-1} d` and inverts **G**. Only PSD was
+checked, which permits a singular matrix, and `ng_multitrait_solve_index()`
+carries `ridge = 1e-6` that would quietly produce weights from it.
+
+Measured on a rank-2 `G`: the un-guarded solve returned an index lying **entirely
+in G's null space** (`|cos| = 1.000000` to the null eigenvector, `b' G b = 0`),
+because LAPACK reports the zero eigenvalue as ~5e-15 -- just above the routine's
+own keep-tolerance -- so that direction receives a coefficient of order 1/5e-15
+and survives normalisation as the whole index. The coefficients, sign included,
+were fixed by floating-point noise, and the index carried no genetic variance at
+all. Silently ridging a singular matrix is worse than refusing it.
+
+The inverted matrix must now be positive definite: not numerically singular, and
+condition number at most 1e8. That threshold is set by the ridge, not chosen
+freely. The solve runs on `M + r I` with `r = ridge * mean(eigenvalues)`, and
+using `mean(eigenvalues) >= lambda_max / p`, the default ridge reaches
+`lambda_min` once `kappa >= p * 1e6`, i.e. `kappa ~ 1e8` for a realistic
+multi-trait index. Below it the ridge is a rounding correction -- the MILD
+ill-conditioning it exists to absorb, which is not blocked. Above it the ridge
+supplies the answer. (It is also the classical numerical limit:
+`1e8 * .Machine$double.eps ~ 2e-8`, so more than half the significant digits in
+`b` are already gone.) The threshold deliberately does not scale with a caller's
+`ridge`: more shrinkage does not make a rank-deficient matrix more informative.
+
+A merely semidefinite matrix is NOT blocked for a method that does not invert it
+-- a singular `G` still runs under `economic_index`, where `G` enters only as the
+forward projection `G a`.
+
+### Guard 4 -- implied correlations inside `[-1, 1]`
+
+`|M_ts| <= sqrt(M_tt M_ss)` is implied by PSD (it is the 2x2 principal-minor
+condition), so this adds no mathematical content. It exists entirely for the
+message, and runs BEFORE the eigenvalue test so the actionable objection wins:
+
+> `genetic_covariance implies a correlation outside [-1, 1] ...: yield vs protein: implied correlation 1.31`
+
+points at the two cells to fix; "must be positive semidefinite" does not. A
+correlation of exactly +/-1 is on the boundary and is not refused.
+
+## `R/31_genetic_covariance.R`: per-trait seeds are identity-derived
+
+0.28.0 fixed position-derived per-trait seeds in the runner (`R/39`) and the
+multi-trait posterior (`R/32`) but left the same `seed + j` pattern in `R/31`,
+on the premise that the file had no non-test caller. That premise was wrong in
+one direction and right in another, and both are recorded here.
+
+The Shiny frontend does call `ng_estimate_genetic_covariance()` directly
+(`inst/app/tools/run_cross_prediction_json.R`), as the second rung of the
+cross-trait covariance ladder behind the exact within-family columns. However,
+it calls it with the default `method = "auto"`, which resolves to `sommer_remml`
+and never enters the per-trait loop. The defective sites are reachable only via
+an explicit `method = "two_stage_ridge"`, or via `ng_posterior_genetic_covariance()`
+under `allow_heuristic = TRUE`. Both are exported, documented, user-callable
+paths, so they are fixed regardless.
+
+Four sites, treated the same way as 0.28.0 treated the equivalent sites:
+
+* **Lambda-CV fold splits** (`ng_genetic_cov_two_stage_ridge()`, and the
+  per-trait fit inside the parametric bootstrap): every trait now shares ONE
+  partition, the base `seed` unmodified. Folds are a nuisance parameter of lambda
+  selection, not a source of innovation -- given lambda, `beta_j` is a
+  deterministic function of `y_j` alone -- so a shared split cannot couple the
+  traits, and it makes per-trait `cv_predictive_r2` comparisons paired.
+* **Posterior draws** (`ng_posterior_genetic_covariance(method = "beta_posterior")`):
+  streams stay DISTINCT per trait, keyed on the trait NAME via
+  `ng_trait_rng_seed()`. A shared stream would give identical innovations and
+  manufacture cross-trait correlation in exactly the `R_beta_b` being computed.
+* **Parametric-bootstrap residual draws**: these were a single `set.seed(seed)`
+  outside both loops, with one shared stream consumed in COLUMN ORDER -- so trait
+  `j` got whatever remained after traits `1..j-1` had drawn theirs. Each
+  `(trait, draw)` now gets its own identity-derived stream, scoped by
+  `ng_with_rng_seed()` so the caller's global RNG state is restored.
+
+`tests/genetic_covariance_trait_order_invariance.R` permutes the columns of `Y`,
+reorders the answer back by name, and requires: per-trait lambda, CV r2,
+`sigma_e2`, `sigma_g2`, the marker effects, the beta correlation matrix and the
+raw `G` all identical at `tolerance = 0`; every posterior draw of both methods
+invariant. The one quantity that is not bit-identical is `G_hat` after the PSD
+projection, which differs by ~9e-16 RELATIVE -- LAPACK reassociation inside
+`eigen()`/`nearPD` on a permuted matrix, not seed dependence. It is asserted
+below 1e-12 relative and documented rather than hidden.
+
+## `tests/genetic_covariance_estimator.R`: a criterion that passed by luck is withdrawn
+
+The file asserted `||G_hat - G_true||_F / ||G_true||_F <= 0.5` at one hard-coded
+seed. Measured over 200 independently simulated datasets from that exact
+generating model, the criterion is met by **12%** of them (mean 1.88, sd 2.06,
+median 1.26, max 19.3). Seed 2026 passed by chance -- and the `R/31` seed fix
+above is itself a reseeding, which moves that seed's ratio from 0.374 to 1.112.
+The criterion was not tightened to a new lucky seed.
+
+Diagnosis splits the estimator cleanly in two, as `R/31`'s own comments predict:
+
+* **Off-diagonals** are the Pearson correlation of the per-trait ridge beta
+  vectors, which is invariant to per-trait multiplicative shrinkage and so
+  survives the ridge attenuation. Relative Frobenius error of the genetic
+  CORRELATION matrix over the same 200 datasets: mean 0.226, sd 0.067, max 0.479.
+* **Diagonals** are the GBLUP lambda inversion
+  `sigma_g2 = sigma_e2 * denom / lambda`, and that is where all the error lives:
+  the worst per-trait genetic variance is out by a factor of ~6 on average and by
+  up to ~1000. It also overshoots often enough that `G_hat` exceeds `P_hat` on 87%
+  of datasets (Guard 2 above).
+
+The file now ASSERTS the correlation-structure property, which genuinely holds,
+with a bound (0.6) justified by that 200-dataset measurement and checked over 8
+independent datasets rather than one; CHARACTERISES the covariance-scale error by
+printing it under a collapse-only ceiling; and asserts that the 0.29.0 `P - G`
+guard refuses the `(G_hat, P_hat)` pair. The Smith-Hazel integration check is
+re-pointed at the generating model's own `G_true` / `P_true`, since what it tests
+is that a valid pair reaches the Smith-Hazel solve, not the estimator's accuracy.
+
+Users should read this as: `two_stage_ridge` is usable for the SHAPE of the
+genetic correlation structure and not for the SCALE of genetic variance, which is
+consistent with the warning it already emits. It remains an opt-in heuristic;
+`sommer_remml` remains the default and the only formal variance-component route.
+
+## Test-suite consequences
+
+`ng_fit_ridge_effects_posterior()` uses ONE `seed` for two jobs that need
+opposite treatment -- the lambda-CV fold split and the posterior innovations.
+`ng_posterior_genetic_covariance(method = "beta_posterior")` therefore now
+selects lambda up front on the shared partition and passes it in explicitly, so
+the identity-derived seed governs only the draws. This preserves that function's
+documented invariant that its `G_mean` diagonals equal the point
+`ng_estimate_genetic_covariance()` diagonals exactly (measured gap 1.65e-15);
+without the separation the two routines chose different lambdas and the gap was
+1.31.
+
+Three test fixtures were corrected rather than the guards weakened:
+
+* `tests/posterior_multitrait_rng_scoping.R` and
+  `tests/threshold_probability_multitrait.R` passed an arbitrary identity `G`
+  (unit genetic variance) against phenotypes of variance ~0.2 and ~0.95, i.e.
+  implied `h2` of 4.65 / 7.60 and 1.083 / 1.026.
+  `ng_posterior_multitrait_cross_predict()` pairs a caller's `G` with a `P`
+  estimated from `Y`, so the new `P - G` guard refuses both -- correctly; neither
+  was ever a possible `P = G + R`, and neither test's property depends on `G`'s
+  scale. Both now use `G = 0.5 * P_hat` on the rows the run uses.
+* `tests/posterior_genetic_covariance.R` asserted per-pair off-diagonal
+  attenuation at a flat `1e-3` slack. Attenuation is an expectation statement, so
+  a pair whose point correlation is already ~0 has nothing to attenuate and the
+  posterior mean's Monte Carlo error moves it either way (measured range
+  `[-0.004, +0.010]` over 10 posterior seeds, against `-0.26 .. -0.38` for the
+  materially-correlated pair). It now asserts the aggregate attenuation plus a
+  per-pair bound of 0.05, ~5x the largest Monte Carlo excess observed.
+
+Two failures found in the same sweep were PRE-EXISTING, verified against a
+pristine 0.28.0 tree, and fixed here because both are one-line stale fixtures:
+
+* `tests/posterior_multitrait_usefulness_direction.R` reconstructs R/32's
+  per-trait posterior draw with `seed = SEED + 1L`. 0.28.0 changed R/32's key to
+  `ng_trait_rng_seed(seed, trait)` and left this behind, so the file has been
+  comparing against a different draw stream -- and failing -- since 0.28.0,
+  independently of the direction property it exists to test.
+* `tests/metric_name_normalization.R` builds a minimal `cfg` for
+  `ng_cp__build_ctx()`, which validates a COMPLETE config (defaults live in
+  `ng_run_cross_prediction()`'s formals, not the builder). A later release added
+  a `ci_level` validation the fixture never supplied, so it died before reaching
+  a single metric assertion.
+
 # nextgenCrossDesign 0.28.0
 
 ## Reproducibility: a trait's result no longer depends on its row position

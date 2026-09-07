@@ -99,13 +99,28 @@ ng_genetic_cov_two_stage_ridge <- function(geno, Y, ridge_lambda = NULL,
 
   for (j in seq_len(t)) {
     y_j <- Y[, j]
+    # SEED (0.29.0): the base seed itself, NOT `seed + j`.
+    #
+    # This seed reaches ng_choose_ridge_lambda() -> set.seed(seed); sample(...),
+    # i.e. it picks the k-fold CV partition behind ridge-lambda selection. Keying
+    # it to `j` -- the trait's COLUMN POSITION in Y -- made every element of G_hat
+    # depend on the order the caller happened to bind the phenotype columns in: a
+    # different split can select a different lambda, which changes beta_j, which
+    # changes both sigma_g2_j (via the lambda inversion below) and the Pearson
+    # correlation of the beta vectors that supplies every off-diagonal.
+    #
+    # The fix matches ng_cp__stage_predict() (R/39, 0.28.0): all traits share ONE
+    # fold partition. Folds are a nuisance parameter of lambda selection, not a
+    # source of innovation -- given lambda, beta_j is a deterministic function of
+    # y_j alone -- so a shared split cannot couple the traits, and it makes the
+    # per-trait cv_predictive_r2 comparisons paired.
     fit_j <- ng_fit_ridge_effects(
       geno = geno,
       y = setNames(y_j, rownames(geno)),
       ids = rownames(geno),
       lambda = ridge_lambda,
       kfold = kfold,
-      seed = seed + j
+      seed = seed
     )
     Beta[, j] <- fit_j$beta
     cv_predictive_r2[[j]] <- fit_j$cv_predictive_r2
@@ -616,11 +631,37 @@ ng_posterior_genetic_covariance <- function(geno,
     for (j in seq_len(n_traits)) {
       y_j <- as.numeric(Y[, j])
       names(y_j) <- ids
+      # SEED (0.29.0). ng_fit_ridge_effects_posterior() uses ONE `seed` for two
+      # different jobs: the k-fold CV partition that selects lambda, and the
+      # posterior innovations. Those jobs need opposite treatments (see
+      # ng_genetic_cov_two_stage_ridge() above), so they are separated here by
+      # selecting lambda first and passing it in, which removes lambda selection
+      # from the seed's remit entirely.
+      #
+      #   lambda -- chosen on the SHARED fold partition (the base `seed`), which
+      #     is both the order-invariant choice and the one that preserves this
+      #     function's documented invariant: because sigma_g2 = sigma_e2 * denom /
+      #     lambda is hyperparameter-conditional and fixed across draws, the
+      #     beta_posterior diagonals equal the point ng_estimate_genetic_covariance()
+      #     diagonals EXACTLY. Letting the posterior pick lambda on a different
+      #     partition from the point estimator broke that by 1.3 in testing.
+      #   innovations -- DISTINCT per trait and keyed on the trait NAME. A shared
+      #     stream would give every trait identical draws and manufacture
+      #     cross-trait correlation in exactly the R_beta_b computed below.
+      #     `seed + j` kept them distinct but keyed to the trait's COLUMN
+      #     POSITION, so permuting Y moved every trait onto a different stream.
+      lambda_j <- ridge_lambda
+      if (is.null(lambda_j)) {
+        lambda_j <- ng_fit_ridge_effects(
+          geno = geno, y = y_j, ids = ids,
+          lambda = NULL, kfold = kfold, seed = seed
+        )$lambda
+      }
       post_j <- ng_fit_ridge_effects_posterior(
         geno = geno, y = y_j, ids = ids,
-        lambda = ridge_lambda, kfold = kfold,
+        lambda = lambda_j, kfold = kfold,
         n_draws = n_draws, method = "closed_form",
-        seed = seed + j
+        seed = ng_trait_rng_seed(seed, trait_names[[j]])
       )
       sigma_g2[[j]] <- post_j$fit$sigma_e2 * denom / max(post_j$fit$lambda, 1e-12)
       if (!is.finite(sigma_g2[[j]]) || sigma_g2[[j]] <= 0) sigma_g2[[j]] <- 1e-8
@@ -650,20 +691,39 @@ ng_posterior_genetic_covariance <- function(geno,
     for (j in seq_len(n_traits)) {
       y_j <- as.numeric(Y[, j])
       names(y_j) <- ids
+      # SEED (0.29.0): shared fold partition, as in ng_genetic_cov_two_stage_ridge()
+      # above -- this is the lambda-CV seed, not an innovation stream.
       fit_j <- ng_fit_ridge_effects(
         geno = geno, y = y_j, ids = ids,
-        lambda = ridge_lambda, kfold = kfold, seed = seed + j
+        lambda = ridge_lambda, kfold = kfold, seed = seed
       )
       fits[[j]] <- fit_j
       ok_j <- is.finite(y_j)
       ok_list[[j]] <- ok_j
       fitted_list[[j]] <- as.numeric(ng_predict_gebv(geno[ok_j, , drop = FALSE], fit_j))
     }
-    set.seed(seed)
+    # RESIDUAL DRAWS (0.29.0): one identity-derived stream per (trait, draw).
+    #
+    # The previous code did a single set.seed(seed) outside both loops and then
+    # consumed one shared stream in COLUMN ORDER, so trait j's bootstrap
+    # residuals were whatever the stream happened to hold after traits 1..j-1 had
+    # taken theirs. Permuting the columns of Y therefore handed every trait a
+    # different residual sample -- the same position dependence as the seeds
+    # above, just expressed through stream position instead of a seed offset.
+    #
+    # Each (trait, draw) now gets its own stream keyed on the trait NAME. `salt`
+    # multiplies the draw index by a large prime so that the (name hash + salt)
+    # sums of two different (trait, draw) pairs cannot coincide except by an
+    # astronomically improbable hash collision, which would otherwise give two
+    # traits identical residuals in some draw and manufacture correlation.
+    # ng_with_rng_seed() restores the caller's global RNG state afterwards.
+    salt_stride <- 1000003
     for (b in seq_len(n_draws)) {
       Y_b <- Y
       for (j in seq_len(n_traits)) {
-        eps_j <- stats::rnorm(sum(ok_list[[j]]), sd = sqrt(fits[[j]]$sigma_e2))
+        eps_j <- ng_with_rng_seed(
+          ng_trait_rng_seed(seed, trait_names[[j]], salt = b * salt_stride),
+          stats::rnorm(sum(ok_list[[j]]), sd = sqrt(fits[[j]]$sigma_e2)))
         Y_b[ok_list[[j]], j] <- fitted_list[[j]] + eps_j
       }
       out_b <- ng_genetic_cov_two_stage_ridge(

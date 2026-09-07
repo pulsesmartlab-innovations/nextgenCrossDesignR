@@ -18,7 +18,13 @@ cfg <- list(trait_value_metric = "var_complex", uc_variance_source = "vpm",
             lambda_parent_use_mode = "absolute", alphamate_mode = "ModeOptTarget1",
             progeny = "DH", optimizer = "ocs", allocation_method = "ocs",
             run_posterior_prediction = FALSE, use_parallel = FALSE,
-            n_iter = 100L, burn_in = 10L, n_crosses = 5L)
+            n_iter = 100L, burn_in = 10L, n_crosses = 5L,
+            # ng_cp__build_ctx() validates a COMPLETE config -- defaults live in
+            # ng_run_cross_prediction()'s formals, not in the builder -- so every key a
+            # later release added a validation for must appear here. This one was added
+            # after the file was written and left it failing on `ci_level must be one
+            # finite probability in (0, 1)` before the metric assertions were reached.
+            ci_level = 0.95)
 ctx <- ng_cp__build_ctx(cfg)
 stopifnot(ctx$trait_value_metric == "usefulness", ctx$uc_variance_source == "pmv")
 
