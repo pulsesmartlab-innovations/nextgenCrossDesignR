@@ -36,7 +36,16 @@ make_case <- function(n_traits) {
                                economic_weight = rep(1, n_traits))
   pair_ids <- ids[seq_len(8L)]
   pairs <- ng_make_pairs(pair_ids)
-  G <- diag(n_traits); dimnames(G) <- list(trait_names, trait_names)
+  # 0.29.0: this used to be diag(n_traits) -- unit genetic variance per trait,
+  # against phenotypes whose variance is ~0.2. ng_posterior_multitrait_cross_predict()
+  # pairs the caller's G with a P estimated from Y when no P is supplied, so that
+  # G implied h2 = 4.6 and 7.6 and is now refused by the P - G guard. It always
+  # was an impossible pair; nothing here depended on it. Take G as half the
+  # phenotypic covariance of the same rows the run uses, i.e. a uniform h2 of 0.5,
+  # which makes R = P - G = 0.5 P positive definite by construction.
+  Y_sub <- Y[pair_ids, , drop = FALSE]
+  G <- 0.5 * as.matrix(ng_estimate_phenotypic_covariance(Y_sub, shrinkage = "auto"))
+  dimnames(G) <- list(trait_names, trait_names)
   list(geno = geno[pair_ids, , drop = FALSE], Y = Y[pair_ids, , drop = FALSE],
        traits = traits, marker_map = mk, ids = pair_ids, pairs = pairs, G = G,
        n_traits = n_traits)

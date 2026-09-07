@@ -193,3 +193,42 @@ ng_ctx_put <- function(.ctx, ...) {
   for (nm in nms) ctx[nm] <- list(vals[[nm]])
   ctx
 }
+
+
+# ---- Order-independent per-trait RNG seeds ---------------------------------------------------
+#
+# A trait's scientific result must never depend on WHERE the breeder happened to list it in the
+# direction file. Before 0.28.0 the per-trait loops derived their seeds from the trait's ROW
+# POSITION (`seed + i - 1L`, `seed + j`), so permuting the direction file gave a trait a
+# different CV fold split -> a different ridge lambda -> different marker effects -> a different
+# progeny variance. The observed spread on a 24-parent / 40-marker panel was seven orders of
+# magnitude in `<trait>_vpm`, and it changed the selected crossing plan.
+#
+# `ng_name_hash32()` maps a trait NAME to a stable non-negative integer. It is written out in
+# plain R arithmetic on the string's UTF-8 bytes precisely so that it does NOT depend on any
+# hashing internal that R, a platform or a locale is free to change: `enc2utf8()` fixes the byte
+# sequence, and every intermediate (max 131 * (2^31 - 2) + 255 ~= 2.8e11) is exactly
+# representable in a double, so the result is bit-identical on every platform and R version.
+ng_name_hash32 <- function(x) {
+  modulus <- 2147483647            # 2^31 - 1, keeps the result inside integer range
+  vapply(as.character(x), function(s) {
+    if (is.na(s)) s <- "NA"
+    bytes <- as.integer(charToRaw(enc2utf8(s)))
+    h <- 0
+    for (b in bytes) h <- (h * 131 + b) %% modulus
+    h
+  }, numeric(1L), USE.NAMES = FALSE)
+}
+
+# Seed for a per-trait RNG stream: identity-derived, never position-derived. `salt` separates
+# independent uses of the same trait within one run (e.g. the posterior draw stream vs anything
+# else keyed off the same base seed). Returns a value in [0, 2^31 - 2], safe for set.seed().
+ng_trait_rng_seed <- function(base_seed, trait, salt = 0L) {
+  modulus <- 2147483647
+  base <- suppressWarnings(as.numeric(base_seed))
+  if (length(base) != 1L || !is.finite(base)) base <- 0
+  salt <- suppressWarnings(as.numeric(salt))
+  if (length(salt) != 1L || !is.finite(salt)) salt <- 0
+  h <- ng_name_hash32(trait)
+  as.integer((base %% modulus + salt %% modulus + h) %% modulus)
+}

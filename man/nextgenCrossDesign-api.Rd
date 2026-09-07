@@ -59,6 +59,7 @@
 \alias{ng_detect_putative_duplicates}
 \alias{ng_build_cross_trait_covariance}
 \alias{ng_cross_trait_within_family_cov}
+\alias{ng_estimate_genetic_correlation}
 \alias{ng_estimate_genetic_covariance}
 \alias{ng_estimate_phenotypic_covariance}
 \alias{ng_posterior_genetic_covariance}
@@ -188,12 +189,89 @@ conversion.
 
 Ridge \code{cv_predictive_r2} is out-of-fold phenotype predictive ability, not
 breeding-value reliability or accuracy squared. Native fits therefore report
-uncalibrated reliability as missing. Formal \code{economic_index} and
-\code{desired_gain} scoring requires both a phenotypic covariance matrix P and
-an additive-genetic covariance matrix G; candidate-cross score covariance is
-not used as a substitute. \code{ng_estimate_genetic_covariance(method="auto")}
-requires the sommer multivariate REML engine. The explicit
-\code{two_stage_ridge} option is a warned diagnostic heuristic.
+uncalibrated reliability as missing. Formal \code{economic_index} scoring
+(Smith-Hazel, \eqn{b = P^{-1} G a}) requires both a phenotypic covariance
+matrix P and an additive-genetic covariance matrix G. Formal
+\code{desired_gain} scoring (Pesek-Baker, \eqn{b = G^{-1} d}) requires only G;
+P never enters that solve and is used solely to standardise the reported
+predicted response by the index standard deviation, which is returned as
+\code{NA} when P is absent. Candidate-cross score covariance is not used as a
+substitute for either matrix under any method.
+
+A caller-supplied P or G carrying dimnames is REORDERED BY NAME to the trait
+order and must name the trait set exactly; a missing, extra, misspelled or
+one-sided label is an error. A matrix with no dimnames is interpreted
+POSITIONALLY, in trait order. Send dimnames whenever column order cannot be
+guaranteed -- a JSON matrix round trip drops them.
+
+A caller-supplied P or G is validated and INVALID INPUT IS REFUSED, never
+warned about, because an invalid covariance propagates into the index weights,
+the cross ranking, the allocation and the joint probabilities alike. Every
+tolerance is RELATIVE to the scale of the matrix being checked
+(\eqn{10^{-8} \times \max(1, \mathrm{scale})}), because a covariance carries the
+square of the trait's unit and its magnitude therefore says nothing about
+validity. The checks are: finite entries; symmetry, judged against the largest
+element magnitude; strictly positive diagonal variances; every implied
+correlation \eqn{|M_{ts}| \le \sqrt{M_{tt} M_{ss}}} inside \eqn{[-1, 1]},
+reported as a correlation; and positive semidefiniteness by eigenvalue.
+
+When BOTH P and G are supplied, \eqn{P - G} must itself be positive
+semidefinite. Since \eqn{P = G + R}, the residual covariance \eqn{R = P - G} is
+a covariance matrix; this is the multivariate generalisation of
+\eqn{0 \le h^2 \le 1}, and a violation means some trait contrast is assigned
+more genetic than phenotypic variance. The per-trait special case
+\eqn{\mathrm{diag}(G) \le \mathrm{diag}(P)} is reported first, naming the trait
+and its implied \eqn{h^2}; otherwise the offending eigenvalue and the trait
+contrast that realises it are reported. The check runs after by-name alignment,
+so trait order cannot affect it. Note that
+\code{ng_estimate_genetic_covariance(method = "two_stage_ridge")} frequently
+produces a \code{G} that fails this check against
+\code{ng_estimate_phenotypic_covariance()}, because its lambda-inversion
+diagonal is not a calibrated genetic variance.
+
+The matrix a formal index INVERTS must additionally be positive DEFINITE, not
+merely semidefinite: P for \code{economic_index}, G for \code{desired_gain}.
+Numerically singular input, or a condition number above \eqn{10^{8}}, is
+refused rather than passed to the index ridge, which would return coefficients
+determined by the regulariser instead of by the supplied matrix. The threshold
+is the point at which the default ridge stops being a rounding correction; mild
+ill-conditioning below it is accepted, and raising \code{ridge} does not lift
+it. A merely semidefinite matrix is NOT refused for a method that does not
+invert it -- a singular G is accepted under \code{economic_index}, where G
+enters only as the forward projection \eqn{G a}.
+
+\code{ng_estimate_genetic_covariance(method="auto")} requires the sommer
+multivariate REML engine. The explicit \code{two_stage_ridge} option is a
+warned diagnostic heuristic. Its \code{Y} argument must contain phenotypes or
+BLUEs. BLUPs are already shrunk toward the mean
+(\eqn{Var(BLUP) = \sigma^2_g - PEV}) and must be deregressed
+(Garrick-Taylor-Dekkers) before use; GEBVs must not be used at all, being a
+linear function of the same markers the GRM is built from. A guard warns when
+the supplied \code{Y} shows essentially no residual variation against the GRM,
+and the returned matrix carries provenance attributes
+(\code{method}, \code{formal_variance_component_estimate},
+\code{implied_heritability}, \code{shrunk_input_suspected}, and others).
+
+\code{ng_estimate_genetic_covariance()} additionally REFUSES ITS OWN OUTPUT,
+for both engines, when that output is impossible for the data it was fitted to.
+The returned \eqn{\hat{G}} is compared against the per-trait sample variance of
+the same complete-case rows the fit used, and an implied
+\eqn{h^2 = \mathrm{diag}(\hat{G}) / \mathrm{diag}(\mathrm{var}(Y))} above 1 --
+beyond the package's relative covariance tolerance -- is an error naming the
+traits and the numbers, because \eqn{h^2} is a ratio of a part to the whole and
+cannot exceed 1. Nothing is rescaled, clamped or projected: a silently
+corrected \eqn{\hat{G}} would yield index weights that cannot be traced back to
+anything. The rule is engine-independent because \code{desired_gain} inverts G
+and never sees P, so the pair check above never runs on that route. In practice
+\code{two_stage_ridge} is refused on about 86\% of datasets from a
+\eqn{h^2 = 0.5} simulation and \code{sommer_remml} on under 1\%; a refused REML
+fit should be read as a fit that did not succeed. Where only the genetic
+CORRELATION structure is wanted, \code{ng_estimate_genetic_correlation()}
+returns it: a correlation matrix has a unit diagonal, makes no claim about
+genetic variance, and is the half of \code{two_stage_ridge} that is estimated
+acceptably (relative Frobenius error mean 0.226, max 0.479 over 200 simulated
+datasets). It is not a route back to a refused covariance.
+
 The legacy \code{cross_mean_blend} column is retained for compatibility but is
 now exactly the midpoint of the explicitly selected mean source; it is not an
 uncalibrated phenotype/GEBV interpolation.

@@ -409,6 +409,16 @@ ng_add_p_superior_progeny <- function(scores,
 
 # ---- Posterior cross prediction --------------------------------------------
 
+# Column name for one extra empirical quantile of the ranked value, cached next to the
+# credible-interval tails. The probability is embedded with its decimal point replaced by "_"
+# so the name survives make.names() unchanged and 0.25 / 0.025 stay distinguishable
+# ("usefulness_pmv_gebv_post_q0_25" vs "..._post_q0_025"). formatC() at 10 significant digits
+# collapses the floating-point noise in expressions like (1 - 0.95) / 2 = 0.02500000000000002.
+ng_posterior_quantile_col <- function(gain_col, prob) {
+  txt <- formatC(as.numeric(prob), format = "fg", digits = 10L)
+  paste0(gain_col, "_post_q", gsub(".", "_", trimws(txt), fixed = TRUE))
+}
+
 # Given posterior draws of beta (and matching sigma_e2/lambda draws), compute
 # per-cross posterior summaries by running the cross-scoring kernel once per
 # draw. Returns the point-estimate score table from ng_score_crosses() plus
@@ -420,6 +430,18 @@ ng_add_p_superior_progeny <- function(scores,
 #                                            posterior CI on P(max progeny >= tau)
 #   - posterior_topn_prob_<N>                fraction of draws in which the
 #                                            cross is in the top-N by usefulness
+#   - <gain_col>_post_q<prob>                extra empirical quantile(s) of the
+#                                            ranked value, one per requested
+#                                            `robustness_quantile`
+#
+# `ci_level` and `robustness_quantile` are deliberately SEPARATE controls.
+# `ci_level` owns the REPORTED credible interval (the _post_lower / _post_upper
+# columns a breeder reads as "a 95% interval"). `robustness_quantile` owns the
+# tail an allocation is optimised against. Serving a 0.25 robust quantile by
+# setting ci_level = 0.5 would silently relabel every reported interval as a 50%
+# one, so the robust tail is instead extracted from the SAME draws as an extra
+# empirical quantile -- no extra sampling, no approximation, and the reported
+# interval is untouched.
 #
 # Uses the existing ng_score_crosses() pipeline per draw, swapping in the
 # posterior beta. The C++ kernel makes this practical for Haldane DH at
@@ -444,6 +466,8 @@ ng_posterior_cross_predict <- function(geno,
                                        use_cpp = TRUE,
                                        assume_inbred = NULL,
                                        ci_level = 0.95,
+                                       robustness_quantile = NULL,
+                                       direction = c("maximize", "minimize"),
                                        gain_col = "usefulness_pmv_gebv",
                                        var_col = "pmv",
                                        value_fun = NULL,
@@ -481,6 +505,21 @@ ng_posterior_cross_predict <- function(geno,
   ci_level <- suppressWarnings(as.numeric(ci_level))
   if (length(ci_level) != 1L || !is.finite(ci_level) || ci_level <= 0 || ci_level >= 1) {
     ng_stop("ci_level must be one finite probability in (0, 1)")
+  }
+  # `direction` is the orientation of the RANKED value, not necessarily the trait's breeding
+  # direction: ng_run_cp_trait_value() (R/39) returns the raw mean for metric = "mean" and
+  # mean + sign * i * sd for usefulness, so a minimize trait is lower-is-better -- but a
+  # pure-variance metric ("pmv" / "vpm" / "parent_distance") is higher-is-better whatever the
+  # trait direction. It affects only the top-N orientation below; the cached quantiles
+  # themselves are quantiles of the raw value and carry no orientation.
+  direction <- ng_multitrait_direction(direction)[[1L]]
+  robust_probs <- numeric(0)
+  if (!is.null(robustness_quantile)) {
+    robust_probs <- suppressWarnings(as.numeric(robustness_quantile))
+    if (!length(robust_probs) || any(!is.finite(robust_probs)) ||
+        any(robust_probs <= 0) || any(robust_probs >= 1)) {
+      ng_stop("robustness_quantile must be finite probabilities in (0, 1)")
+    }
   }
   S <- ncol(beta_draws)
   if (S < 1L) ng_stop("posterior_effects$beta_draws has no draws")
@@ -576,6 +615,24 @@ ng_posterior_cross_predict <- function(geno,
   })
   base$ranked_value_post_mean <- rowMeans(uc_mat, na.rm = TRUE)
 
+  # Extra empirical quantile(s) of the ranked value, taken from the SAME uc_mat draws that
+  # produced the credible interval above. This is what makes ng_optimize_robust_mating_plan()
+  # exact at an arbitrary robustness quantile without borrowing ci_level (which owns the
+  # reported interval) and without a normal approximation. Both q and 1 - q are cached: the
+  # conservative tail is q when higher is better and 1 - q when lower is better, and one
+  # prediction run should serve a robust allocation in either orientation.
+  quantile_probs <- if (length(robust_probs)) sort(unique(c(robust_probs, 1 - robust_probs))) else numeric(0)
+  posterior_quantiles <- NULL
+  if (length(quantile_probs)) {
+    quantile_cols <- vapply(quantile_probs, function(p) ng_posterior_quantile_col(gain_col, p),
+                            character(1L))
+    for (jj in seq_along(quantile_probs)) {
+      base[[quantile_cols[[jj]]]] <- row_quantile(uc_mat, quantile_probs[[jj]])
+    }
+    posterior_quantiles <- data.frame(prob = quantile_probs, column = quantile_cols,
+                                      stringsAsFactors = FALSE)
+  }
+
   if (!is.null(tau_superior)) {
     tau <- as.numeric(tau_superior)
     k <- as.numeric(k_progeny)
@@ -599,12 +656,16 @@ ng_posterior_cross_predict <- function(geno,
   }
 
   # Posterior top-N stability: for each N in top_n_targets, count fraction of
-  # draws in which the cross is in the top-N by usefulness.
+  # draws in which the cross is in the top-N by the ranked value. "Top" follows
+  # `direction`: the ranked value is not normalised to higher-is-better, so under
+  # a minimize orientation the top-N set is the N SMALLEST values, not the largest.
+  topn_decreasing <- identical(direction, "maximize")
   for (N in as.integer(top_n_targets)) {
     if (!is.finite(N) || N < 1L || N >= n_pairs) next
     in_topn <- apply(uc_mat, 2L, function(col) {
-      th <- sort(col, decreasing = TRUE, na.last = NA)[N]
-      as.integer(col >= th & is.finite(col))
+      th <- sort(col, decreasing = topn_decreasing, na.last = NA)[N]
+      if (topn_decreasing) as.integer(col >= th & is.finite(col)) else
+        as.integer(col <= th & is.finite(col))
     })
     base[[paste0("posterior_topn_prob_", N)]] <- rowMeans(in_topn, na.rm = TRUE)
   }
@@ -614,7 +675,10 @@ ng_posterior_cross_predict <- function(geno,
     gain_col = gain_col, var_col = var_col,
     ranked_value = if (is.null(value_fun)) gain_col else "value_fun",
     ci_level = ci_level, selection_intensity = i_intensity,
-    top_n_targets = as.integer(top_n_targets)
+    top_n_targets = as.integer(top_n_targets),
+    direction = direction,
+    robustness_quantile = if (length(robust_probs)) robust_probs else NA_real_,
+    posterior_quantiles = posterior_quantiles
   )
   base
 }
@@ -624,16 +688,45 @@ ng_posterior_cross_predict <- function(geno,
 # Optimize the mating plan against a robustness quantile of the posterior
 # usefulness instead of the point estimate. The NULL default uses the exact
 # empirical lower credible bound already cached by ng_posterior_cross_predict().
-# A different quantile requires a matching CI level in that prediction call;
-# reconstructing it under a normal approximation is available only by explicit
-# opt-in. Setting `objective = "posterior_topn_prob"` instead maximizes the sum
-# of marginal per-cross top-N inclusion probabilities: the expected overlap
-# with the posterior top-N set, not a joint probability for the whole plan.
+# Any other quantile is served exactly whenever ng_posterior_cross_predict() was
+# given the same `robustness_quantile` (it caches that empirical quantile from
+# the draws, alongside -- not instead of -- the reported credible interval);
+# reconstructing it under a normal approximation stays available only by
+# explicit opt-in and is now a genuine last resort. Setting
+# `objective = "posterior_topn_prob"` instead maximizes the sum of marginal
+# per-cross top-N inclusion probabilities: the expected overlap with the
+# posterior top-N set, not a joint probability for the whole plan.
+#
+# DIRECTION. `direction` is the orientation of `gain_col`: "maximize" when a
+# higher value is better. The ranked value is NOT normalised to higher-is-better
+# (ng_run_cp_trait_value(), R/39, returns the raw mean for metric = "mean" and
+# mean + sign * i * sd for usefulness, with the sign applied only to the i*SD
+# term), so for a minimize trait -- disease, lodging -- a LOWER value is better
+# and the pessimistic case is the UPPER posterior tail. Selecting on the lower
+# tail there would rank crosses by their BEST case while calling the result
+# robust. Pure-variance metrics ("pmv" / "vpm" / "parent_distance") are
+# higher-is-better whatever the trait's breeding direction, so they stay
+# "maximize"; see ng_run_cp_value_orientation() in R/39, which is what the
+# runner uses to derive this argument.
+#
+# AGGREGATION CAVEAT (deliberate, documented, not fixed here). The objective is
+# a SUM of per-cross quantiles, which is not the quantile of the plan's total.
+# Quantiles are not additive: equality holds only when the per-cross posteriors
+# are comonotonic (perfectly rank-correlated). Here they are positively but
+# imperfectly correlated, through the shared marker-effect draws. Under the
+# approximately jointly Gaussian posterior this layer produces, the plan total's
+# q-quantile is mean_total + z * sd_total with sd_total <= sum(sd_i), so the
+# summed objective sits on the pessimistic side of the plan's true quantile in
+# both orientations: it is a conservative bound, not a plan-level coverage
+# statement. Computing a joint plan-level quantile is a larger design change and
+# is out of scope; the plan summary records the approximation the same way it
+# records the normal-approximation fallback.
 ng_optimize_robust_mating_plan <- function(posterior_scores,
                                            n_crosses,
                                            parent_kinship = NULL,
                                            gain_col = "usefulness_pmv_gebv",
                                            robustness_quantile = NULL,
+                                           direction = c("maximize", "minimize"),
                                            allow_normal_approximation = FALSE,
                                            objective = c("posterior_quantile", "posterior_topn_prob"),
                                            top_n_target = NULL,
@@ -649,6 +742,8 @@ ng_optimize_robust_mating_plan <- function(posterior_scores,
                                            local_iter = 2000,
                                            ocs_iter = 5L) {
   objective <- match.arg(objective)
+  direction <- ng_multitrait_direction(direction)[[1L]]
+  maximize <- identical(direction, "maximize")
   if (!is.logical(allow_normal_approximation) ||
       length(allow_normal_approximation) != 1L || is.na(allow_normal_approximation)) {
     ng_stop("allow_normal_approximation must be TRUE or FALSE")
@@ -661,8 +756,13 @@ ng_optimize_robust_mating_plan <- function(posterior_scores,
     ng_stop("posterior_scores must retain posterior metadata from ng_posterior_cross_predict()")
   }
   posterior_meta$ci_level <- posterior_ci
+  posterior_direction <- if (is.null(posterior_meta$direction)) NA_character_ else
+    ng_multitrait_direction(posterior_meta$direction)[[1L]]
   robust_col <- ".robust_gain"
+  robust_value_col <- ".robust_gain_value"
   quantile_approximation <- FALSE
+  quantile_source <- NA_character_
+  tail_probability <- NA_real_
   if (identical(objective, "posterior_quantile")) {
     if (is.null(robustness_quantile)) {
       # Exact-by-default: use the lower tail already computed from the actual
@@ -677,14 +777,40 @@ ng_optimize_robust_mating_plan <- function(posterior_scores,
     lower_col <- paste0(gain_col, "_post_lower")
     upper_col <- paste0(gain_col, "_post_upper")
     tail_prob <- (1 - posterior_meta$ci_level) / 2
-    if (abs(robustness_quantile - tail_prob) <= 1e-12 &&
-        lower_col %in% names(posterior_scores)) {
-      # Reuse the cached lower CI when the user requested the same quantile.
-      posterior_scores[[robust_col]] <- posterior_scores[[lower_col]]
-    } else if (abs(robustness_quantile - (1 - tail_prob)) <= 1e-12 &&
+    # The conservative tail depends on which way the ranked value points. Under "maximize"
+    # the pessimistic case is the LOWER tail at q. Under "minimize" a lower value is better,
+    # so the pessimistic case is the UPPER tail at 1 - q; taking the lower tail there would
+    # select crosses on their best case and label the plan robust.
+    tail_probability <- if (maximize) robustness_quantile else 1 - robustness_quantile
+    cached <- posterior_meta$posterior_quantiles
+    cached_col <- NULL
+    if (is.data.frame(cached) && nrow(cached) &&
+        all(c("prob", "column") %in% names(cached))) {
+      hit <- which(abs(suppressWarnings(as.numeric(cached$prob)) - tail_probability) <= 1e-10)
+      for (h in hit) {
+        cn <- as.character(cached$column[[h]])
+        if (cn %in% names(posterior_scores)) { cached_col <- cn; break }
+      }
+    }
+    if (is.null(cached_col)) {
+      # Fall back to the column name convention when the metadata predates it.
+      cn <- ng_posterior_quantile_col(gain_col, tail_probability)
+      if (cn %in% names(posterior_scores)) cached_col <- cn
+    }
+    if (!is.null(cached_col)) {
+      # Exact: this quantile was computed from the same posterior draws as the CI.
+      posterior_scores[[robust_value_col]] <- posterior_scores[[cached_col]]
+      quantile_source <- cached_col
+    } else if (abs(tail_probability - tail_prob) <= 1e-12 &&
+               lower_col %in% names(posterior_scores)) {
+      # Reuse the cached lower CI when the requested tail coincides with it.
+      posterior_scores[[robust_value_col]] <- posterior_scores[[lower_col]]
+      quantile_source <- lower_col
+    } else if (abs(tail_probability - (1 - tail_prob)) <= 1e-12 &&
                upper_col %in% names(posterior_scores)) {
       # The corresponding upper empirical quantile is cached as well.
-      posterior_scores[[robust_col]] <- posterior_scores[[upper_col]]
+      posterior_scores[[robust_value_col]] <- posterior_scores[[upper_col]]
+      quantile_source <- upper_col
     } else {
       # User asked for a different quantile; we need raw draws to recompute.
       # If not available on the table, fit a symmetric normal scale to the
@@ -692,13 +818,14 @@ ng_optimize_robust_mating_plan <- function(posterior_scores,
       mean_col <- paste0(gain_col, "_post_mean")
       if (all(c(mean_col, lower_col, upper_col) %in% names(posterior_scores))) {
         if (!isTRUE(allow_normal_approximation)) {
-          matching_ci <- abs(1 - 2 * robustness_quantile)
           ng_stop(
-            "Requested robustness_quantile is not an empirical tail quantile cached in ",
-            "posterior_scores. Re-run ng_posterior_cross_predict() with ci_level = ",
-            if (matching_ci > 0) format(matching_ci, digits = 8) else
-              "a value whose empirical tail is the desired probability",
-            " so that quantile is computed from draws, or explicitly set ",
+            "Requested robustness_quantile is not an empirical quantile cached in ",
+            "posterior_scores (needed tail probability ",
+            format(tail_probability, digits = 8), " for direction = '", direction, "'). ",
+            "Re-run ng_posterior_cross_predict() / ng_run_cross_prediction() with ",
+            "robustness_quantile = ", format(robustness_quantile, digits = 8),
+            " so that quantile is computed from the draws -- this leaves ci_level, and ",
+            "therefore the reported credible interval, untouched -- or explicitly set ",
             "allow_normal_approximation = TRUE."
           )
         }
@@ -708,16 +835,35 @@ ng_optimize_robust_mating_plan <- function(posterior_scores,
           call. = FALSE
         )
         quantile_approximation <- TRUE
-        z_target <- stats::qnorm(robustness_quantile)
+        quantile_source <- "normal_approximation"
+        z_target <- stats::qnorm(tail_probability)
         z_upper  <- stats::qnorm(1 - tail_prob)
         spread   <- (posterior_scores[[upper_col]] - posterior_scores[[lower_col]]) /
           (2 * z_upper)
-        posterior_scores[[robust_col]] <- posterior_scores[[mean_col]] + z_target * spread
+        posterior_scores[[robust_value_col]] <- posterior_scores[[mean_col]] + z_target * spread
       } else {
         ng_stop("posterior_quantile objective requires *_post_* columns from ng_posterior_cross_predict()")
       }
     }
+    # ng_optimize_mating_plan() MAXIMIZES the sum of gain_col (via .linear_gain, R/04). A
+    # minimize orientation therefore enters as the negated conservative value, so that
+    # maximizing the objective prefers LOWER robust values. The un-negated conservative
+    # value stays on the table as `.robust_gain_value` so the plan is still readable.
+    posterior_scores[[robust_col]] <- (if (maximize) 1 else -1) *
+      suppressWarnings(as.numeric(posterior_scores[[robust_value_col]]))
   } else {
+    # posterior_topn_prob is the one objective whose cached column bakes in an orientation:
+    # ng_posterior_cross_predict() counts the top-N by the ranked value under ITS `direction`.
+    # A minimize-oriented plan built on a maximize-oriented top-N column would target the
+    # worst crosses, so refuse rather than silently invert the meaning.
+    if (!is.na(posterior_direction) && !identical(posterior_direction, direction)) {
+      ng_stop(
+        "objective = 'posterior_topn_prob' needs a top-N column computed in the same ",
+        "direction as the plan: posterior_scores was built with direction = '",
+        posterior_direction, "' but this call requests direction = '", direction,
+        "'. Re-run ng_posterior_cross_predict() with direction = '", direction, "'."
+      )
+    }
     if (is.null(top_n_target)) ng_stop("posterior_topn_prob objective requires top_n_target")
     top_n_num <- suppressWarnings(as.numeric(top_n_target))
     if (length(top_n_num) != 1L || !is.finite(top_n_num) || top_n_num < 1 ||
@@ -756,6 +902,32 @@ ng_optimize_robust_mating_plan <- function(posterior_scores,
   s$robustness_quantile_is_normal_approximation <- quantile_approximation
   s$robust_top_n_target <- if (identical(objective, "posterior_topn_prob")) as.integer(top_n_target) else NA_integer_
   s$robust_gain_col <- gain_col
+  s$robust_direction <- direction
+  s$robust_posterior_direction <- posterior_direction
+  # Which tail was actually used, and where it came from: the exact cached empirical quantile,
+  # one of the CI tails, or the opt-in normal approximation.
+  s$robust_tail_probability <- tail_probability
+  s$robust_quantile_source <- quantile_source
+  if (identical(objective, "posterior_quantile")) {
+    # total_gain / mean_gain in the summary are sums of the OPTIMISED column, which is negated
+    # under a minimize orientation. Report the conservative value on its native scale too, so a
+    # reader never has to know about the sign convention.
+    rv <- suppressWarnings(as.numeric(plan[[robust_value_col]]))
+    s$robust_total_value <- sum(rv, na.rm = TRUE)
+    s$robust_mean_value <- mean(rv, na.rm = TRUE)
+    s$robust_objective_is_negated <- !maximize
+    # Requirement: state the aggregation approximation rather than implying plan-level coverage.
+    s$robustness_quantile_aggregation <- "sum_of_per_cross_quantiles"
+    s$robustness_quantile_aggregation_note <- paste0(
+      "The objective sums per-cross posterior quantiles at tail probability ",
+      format(tail_probability, digits = 8),
+      "; quantiles are not additive, so this is NOT the quantile of the plan's total. ",
+      "Equality would require the crosses' posteriors to be comonotonic; here they are ",
+      "positively but imperfectly correlated through the shared marker-effect draws, so the ",
+      "summed objective is a conservative bound on the plan total's quantile, not a ",
+      "plan-level coverage statement."
+    )
+  }
   attr(plan, "summary") <- s
   plan
 }

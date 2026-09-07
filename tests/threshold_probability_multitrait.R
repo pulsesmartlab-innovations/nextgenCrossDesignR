@@ -225,13 +225,23 @@ pairs9 <- ng_make_pairs(pair_ids9)
 geno9_use <- geno9[pair_ids9, , drop = FALSE]
 Y9_use <- Y9[pair_ids9, , drop = FALSE]
 
+# 0.29.0: this fixture used genetic_covariance = diag(c(yield = 1, disease = 1)) -- unit
+# genetic variance against phenotypes whose variance is ~0.92 and ~0.97, i.e. implied
+# h2 = 1.083 and 1.026. ng_posterior_multitrait_cross_predict() pairs the caller's G with a
+# P estimated from Y when no P is given, so the pair is now refused by the P - G guard, and
+# rightly: it was never a possible P = G + R. The threshold property under test does not
+# depend on G's scale, so take G as half the phenotypic covariance of the same rows the run
+# uses -- a uniform h2 of 0.5, with R = P - G = 0.5 P positive definite by construction.
+G9 <- 0.5 * as.matrix(ng_estimate_phenotypic_covariance(Y9_use, shrinkage = "auto"))
+dimnames(G9) <- list(c("yield", "disease"), c("yield", "disease"))
+
 post9 <- ng_posterior_multitrait_cross_predict(
   geno = geno9_use, Y = Y9_use, traits = traits9,
   ids = pair_ids9, pairs = pairs9,
   marker_map = marker_map9,
   n_draws = 30L, posterior_method = "closed_form",
   genetic_covariance_method = "beta_posterior",
-  genetic_covariance = diag(c(yield = 1, disease = 1)),
+  genetic_covariance = G9,
   index_method = "economic_index", value_mode = "mean",
   use_cpp = FALSE, seed = 7L,
   tau_lower_vec = c(0, -Inf),

@@ -431,7 +431,8 @@ ng_annotate_cross_priority_multitrait <- function(crosses, trait_order, mean_geb
                                                   vpm_cols, directions, coefficients,
                                                   pev_cols = NULL, effect_based_x = TRUE,
                                                   index_method = NA_character_,
-                                                  basis = NULL) {
+                                                  basis = NULL,
+                                                  post_sd = NULL, prob_top_tier = NULL) {
   crosses <- as.data.frame(crosses, stringsAsFactors = FALSE)
   n <- nrow(crosses)
   need <- c(mean_gebv_cols, vpm_cols)
@@ -457,8 +458,21 @@ ng_annotate_cross_priority_multitrait <- function(crosses, trait_order, mean_geb
     risk_driver <- ng_multitrait_risk_driver(
       ng_multitrait_pev_shares(pev_mat, basis$w, trait_order), trait_order)
   }
-  cf <- ng_cross_confidence(pev, effect_based_x = effect_based_x,
-                            method_prefix = "midparent_pev_index")
+  # DEFECT 7 fix (0.26.0). Mirror the single-trait branch: when the run produced a posterior
+  # for the INDEX (ng_posterior_multitrait_cross_predict(), wired in R/39), confidence comes
+  # from the posterior SD of multi_trait_score -- which covers both the mean and the variance
+  # term of the index merit, so it carries no "_partial" caveat -- instead of from the
+  # mid-parent-PEV fallback, which covers only the mean AND (see ng_multitrait_index_pev)
+  # assumes independent per-trait fits. Falls back to the PEV path when no posterior was run,
+  # so a posterior-off multi-trait run is bit-identical to 0.25.0.
+  use_post <- !is.null(post_sd) && any(is.finite(post_sd))
+  cf <- if (use_post) {
+    ng_cross_confidence(NULL, effect_based_x = FALSE,
+                        method_prefix = "posterior_ci", spread = post_sd)
+  } else {
+    ng_cross_confidence(pev, effect_based_x = effect_based_x,
+                        method_prefix = "midparent_pev_index")
+  }
   crosses$cross_confidence  <- cf$cross_confidence
   crosses$relative_precision <- cf$relative_precision
   crosses$risk_bin          <- cf$risk_bin
@@ -468,6 +482,12 @@ ng_annotate_cross_priority_multitrait <- function(crosses, trait_order, mean_geb
   # "This cross is high risk -- because of protein (62% of the index PEV)."
   crosses$risk_driver_trait <- risk_driver$trait
   crosses$risk_driver_share <- risk_driver$share
+  # Same contract as the single-trait branch: prob_top_tier is a JOINT merit x uncertainty
+  # quantity ("is this cross genuinely top-N ON THE INDEX?"), reported as its own continuous
+  # column and NEVER binned into risk_bin or relabelled as confidence. Always emitted (NA when
+  # no index posterior was run) so the multi-trait and single-trait reporting surfaces carry
+  # the same columns and the frontend does not have to fork.
+  crosses$prob_top_tier <- if (is.null(prob_top_tier)) NA_real_ else as.numeric(prob_top_tier)
   crosses$portfolio_profile <- ng_cross_portfolio_profile(crosses$cross_level,
                                                           crosses$cross_upside)
   # Provenance for the frontend: which weights produced these axes, in what units, and how

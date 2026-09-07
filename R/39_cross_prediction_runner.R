@@ -542,6 +542,20 @@ ng_run_cp_trait_value <- function(scored_trait,
   mean_value + sign * ng_selection_intensity(selection_prop) * sqrt(pmax(suppressWarnings(as.numeric(scored_trait[[var_col]])), 0))
 }
 
+# Orientation of the value ng_run_cp_trait_value() returns above: "maximize" when a HIGHER
+# value is the better cross. This is NOT always the trait's breeding direction. The mean and
+# usefulness metrics carry the trait's own units, so a minimize trait (disease, lodging) is
+# lower-is-better there. The pure-variance and parent-distance metrics are direction-agnostic
+# -- more within-family variance / more parental divergence is better whichever way the trait
+# points -- so they are always "maximize". Anything that ranks or takes a conservative tail of
+# the `_value` column (posterior top-N, robust mate allocation) must use THIS, not the raw
+# direction; see ng_optimize_robust_mating_plan() in R/30.
+ng_run_cp_value_orientation <- function(direction, trait_value_metric = "usefulness") {
+  metric <- trimws(tolower(as.character(trait_value_metric[[1L]])))
+  if (metric %in% c("vpm", "pmv", "parent_distance", "le")) return("maximize")
+  ng_run_cp_direction(direction)[[1L]]
+}
+
 ng_run_cp_clean_trait_name <- function(x) {
   out <- make.names(as.character(x))
   out <- gsub("[.]+", "_", out)
@@ -741,6 +755,24 @@ ng_cp__build_ctx <- function(config) {
   ctx$n_iter <- ng_run_cp_integer(ctx$n_iter, "n_iter", min_value = 1L)
   ctx$burn_in <- ng_run_cp_integer(ctx$burn_in, "burn_in", min_value = 0L)
   ctx$posterior_n_draws <- max(1L, ctx$n_iter - ctx$burn_in)
+  # ci_level governs ONLY the reported posterior credible interval (the _post_lower /
+  # _post_upper columns). robustness_quantile governs ONLY the tail a robust mate allocation
+  # is later optimised against, and is cached as its own empirical quantile of the same draws.
+  # They are kept apart on purpose: bending ci_level to reach a robust tail would silently
+  # relabel a reported "95% credible interval" as something else. Same validation rule as
+  # ng_posterior_cross_predict() applies to both.
+  ctx$ci_level <- suppressWarnings(as.numeric(ctx$ci_level))
+  if (length(ctx$ci_level) != 1L || !is.finite(ctx$ci_level) ||
+      ctx$ci_level <= 0 || ctx$ci_level >= 1) {
+    ng_stop("ci_level must be one finite probability in (0, 1)")
+  }
+  if (!is.null(ctx$robustness_quantile)) {
+    rq <- suppressWarnings(as.numeric(ctx$robustness_quantile))
+    if (length(rq) != 1L || !is.finite(rq) || rq <= 0 || rq >= 1) {
+      ng_stop("robustness_quantile must be one finite probability in (0, 1)")
+    }
+    ctx$robustness_quantile <- rq
+  }
   ctx$n_crosses <- ng_run_cp_integer(ctx$n_crosses, "n_crosses", min_value = 1L)
   ctx
 }
@@ -931,11 +963,28 @@ ng_cp__stage_predict <- function(ctx) {
     # count -- is what gates it; each job reduces Sigma_beta to an n_pairs PEV vector and
     # drops the dense matrix below, so peak memory is one Sigma_beta per parallel worker.
     want_beta_cov <- identical(method_varPMV, "full_posterior") || ncol(geno) <= 6000L
+    # SEED (0.28.0): the run seed itself, NOT `seed + i - 1L`.
+    #
+    # This seed reaches ng_choose_ridge_lambda() -> set.seed(seed); sample(...), i.e. it picks
+    # the k-fold CV partition used to select the ridge lambda (and, via ng_ridge_cv_predict(),
+    # the partition behind cv_predictive_r2). Keying it to `i` -- the trait's ROW POSITION in
+    # the breeder's direction file -- made every downstream quantity position-dependent: a
+    # different split can select a different lambda, which changes the marker effects and hence
+    # the progeny variance. Measured on a 24-parent / 40-marker panel, `disease_vpm` moved from
+    # 2.51 (listed first) to 3.20e-07 (listed second), and the selected crossing plan changed.
+    #
+    # Every trait now shares ONE fold partition. That is the statistically preferable choice
+    # independently of the bug: a common split makes the per-trait CV comparisons paired, so
+    # differences in cv_predictive_r2 between traits reflect the traits and not the split. It is
+    # also safe -- the folds are a nuisance parameter of lambda selection, not a source of
+    # innovation that could correlate the traits' fitted effects (each trait's beta is a
+    # deterministic function of its own y given lambda) -- and it keeps a single-trait run, and
+    # the first-listed trait of any run, bit-identical to 0.27.0.
     fit <- ng_fit_ridge_effects(
       geno = fit_geno,
       y = fit_y,
       ids = fit_ids,
-      seed = seed + i - 1L,
+      seed = seed,
       return_beta_cov_full = want_beta_cov
     )
     posterior_cov_full <- if (identical(method_varPMV, "full_posterior")) fit$beta_cov_full else NULL
@@ -966,6 +1015,23 @@ ng_cp__stage_predict <- function(ctx) {
     posterior_effects <- NULL
     posterior_scores <- NULL
     if (isTRUE(run_posterior_prediction)) {
+      # SEED (0.28.0): identity-derived, NOT position-derived -- and, unlike the lambda-CV seed
+      # above, still DISTINCT per trait.
+      #
+      # This seed drives the actual posterior innovations. Giving every trait the same stream
+      # would make their random innovations identical and induce artificial cross-trait
+      # correlation, which matters directly: ng_posterior_multitrait_cross_predict() (R/32,
+      # wired in 0.26.0) combines per-trait draws into an index posterior. So the traits must
+      # keep separate streams -- but keyed to the trait's NAME via ng_trait_rng_seed(), so
+      # reordering the direction file cannot move a trait onto a different stream.
+      #
+      # This is the one place a single-trait run is NOT bit-identical to 0.27.0 (its stream was
+      # `seed + 1000L`, now `seed + 1000L + hash(trait)`). Deliberate: the alternative --
+      # special-casing a one-trait run back onto the old stream -- would make a trait's draws
+      # depend on how many OTHER traits share the file, reintroducing exactly the context
+      # dependence being removed here. Nothing statistical changes: it is a different draw
+      # stream from the same posterior, i.e. Monte Carlo noise only. All deterministic
+      # single-trait outputs (variances, usefulness, index, plan) remain bit-identical.
       posterior_effects <- ng_fit_ridge_effects_posterior(
         geno = fit_geno,
         y = fit_y,
@@ -973,7 +1039,9 @@ ng_cp__stage_predict <- function(ctx) {
         n_draws = posterior_n_draws,
         method = posterior_method,
         mcmc_burnin = burn_in,
-        seed = seed + 1000L + i - 1L
+        # Keyed on trait AND phenotype column: nothing upstream forces trait names to be
+        # unique, and two traits reading different columns must not share a stream.
+        seed = ng_trait_rng_seed(seed, paste(trait, column, sep = "\r"), salt = 1000L)
       )
       posterior_scores <- ng_posterior_cross_predict(
         geno = geno,
@@ -987,6 +1055,15 @@ ng_cp__stage_predict <- function(ctx) {
         recomb_model = recomb_model,
         use_cpp = use_cpp,
         parent_type = parent_type,
+        ci_level = ci_level,
+        # Cache the breeder's robustness quantile from these same draws so a later
+        # ng_optimize_robust_mating_plan() is exact at that quantile without touching
+        # ci_level (which owns the reported interval) and without a normal approximation.
+        robustness_quantile = robustness_quantile,
+        # Orientation of the ranked `_value`, which is what the posterior top-N counts and the
+        # robust tail must follow. Not the raw trait direction: a pure-variance metric is
+        # higher-is-better even for a minimize trait (ng_run_cp_value_orientation above).
+        direction = ng_run_cp_value_orientation(trait_spec$direction[[i]], trait_value_metric),
         # Summarize the SELECTED metric, not the hardcoded usefulness column: a posterior
         # interval computed on usefulness must never be presented as the uncertainty of a
         # `mean` / `var_complex` run (design doc F2).
@@ -1156,6 +1233,93 @@ ng_cp__stage_predict <- function(ctx) {
     for (cc in setdiff(names(ctc), c("parent1", "parent2"))) cross_table[[cc]] <- ctc[[cc]]
   }
 
+  # ---- Posterior of the SELECTION INDEX (multi-trait only) -------------------------------
+  # DEFECT 5 fix (0.26.0). ng_posterior_multitrait_cross_predict() (R/32) was exported,
+  # documented, tested and release-gated but had ZERO non-test callers, so a multi-trait run
+  # reported multi_trait_score as a point estimate with no uncertainty at all. Everything
+  # downstream that wanted an uncertainty on the ranked merit therefore had to reach for a
+  # PER-TRAIT posterior -- posterior_predictions[[1]], i.e. whichever trait happens to sit in
+  # row 1 of the breeder's direction file -- while the plan was ranked on the index over ALL
+  # traits. This wires the index posterior itself.
+  #
+  # Why the index is recomputed inside R/32's draw loop rather than combined from the per-trait
+  # posteriors already fitted above: the traits share the draw INDEX, so index_mat[, s] is the
+  # index of one coherent joint draw. Recombining per-trait marginal intervals would not be.
+  #
+  # GATING. Runs only when posterior prediction is on AND there is more than one trait, so a
+  # single-trait run is untouched (bit-identical) and a posterior-off multi-trait run pays
+  # nothing. value_mode = "mean" keeps the cost at O(n * m * T * S) -- the same order as the
+  # per-trait posteriors already computed -- rather than the per-draw PMV rescoring that
+  # value_mode = "usefulness" needs.
+  #
+  # SCOPE NOTES (deliberate, recorded rather than silently absorbed):
+  #   * R/32 refits its own per-trait ridge posteriors. Those are the same model on the same
+  #     training rows (parents + any marker-effect training augmentation, assembled below) with
+  #     a different seed, so they are draws from the same posterior -- not a different one --
+  #     but they are not the SAME draws as posterior_predictions[[trait]].
+  #   * R/32 scores the per-draw index with ng_add_multitrait_score()'s default threshold
+  #     penalty weight, not the run's threshold_penalty_weight. It is a posterior on the index,
+  #     not on the run's threshold-penalised objective.
+  #   * The interval is on a per-draw RE-STANDARDISED index (see the caveat block in R/32);
+  #     that caveat travels with the table in its "posterior_multitrait" metadata.
+  posterior_multitrait <- NULL
+  if (isTRUE(run_posterior_prediction) && nrow(trait_spec) > 1L &&
+      !is.null(cross_table) && nrow(cross_table) > 0L) {
+    mt_rows <- match(ids, rownames(pheno))
+    mt_geno <- geno
+    mt_ids <- ids
+    mt_Y <- matrix(
+      vapply(trait_spec$column,
+             function(cc) suppressWarnings(as.numeric(pheno[[cc]][mt_rows])),
+             numeric(length(ids))),
+      nrow = length(ids), dimnames = list(ids, trait_spec$column))
+    # Same marker-effect training augmentation the per-trait posteriors above use, so the index
+    # posterior is fitted on the same information rather than on the parent panel alone. Only
+    # the candidate parents are ever crossed (`pairs` below), so the extra rows enlarge the fit
+    # without entering the candidate pool.
+    if (!is.null(training_set)) {
+      tr_Y <- matrix(
+        vapply(trait_spec$column,
+               function(cc) suppressWarnings(as.numeric(training_set$pheno[[cc]])),
+               numeric(length(training_set$ids))),
+        nrow = length(training_set$ids),
+        dimnames = list(training_set$ids, trait_spec$column))
+      keep_tr <- rowSums(is.finite(tr_Y)) > 0L
+      if (any(keep_tr)) {
+        mt_geno <- rbind(geno, training_set$geno[keep_tr, , drop = FALSE])
+        mt_Y <- rbind(mt_Y, tr_Y[keep_tr, , drop = FALSE])
+        mt_ids <- c(ids, training_set$ids[keep_tr])
+      }
+    }
+    posterior_multitrait <- ng_posterior_multitrait_cross_predict(
+      geno = mt_geno, Y = mt_Y, traits = trait_spec, marker_map = marker_map_std,
+      ids = mt_ids, pairs = cross_table[, c("parent1", "parent2"), drop = FALSE],
+      n_draws = posterior_n_draws, posterior_method = posterior_method,
+      phenotypic_covariance = phenotypic_covariance,
+      genetic_covariance = genetic_covariance,
+      index_method = multi_trait_method,
+      value_mode = "mean", selection_prop = selection_prop,
+      target = target, recomb_model = recomb_model, use_cpp = use_cpp,
+      parent_type = parent_type, ci_level = ci_level,
+      # Cache the breeder's robustness quantile (and its mirror) from these same draws, so a
+      # robust allocation ON THE INDEX is exact at that quantile -- the treatment 0.25.0 gave
+      # the per-trait path. No `direction`: the index is direction-normalised higher = better
+      # for every method, so R/32 fixes it at "maximize" (see the comment there).
+      robustness_quantile = robustness_quantile,
+      top_n_targets = unique(as.integer(c(n_crosses, min(n_crosses, 10L), 10L, 20L, 50L))),
+      seed = seed + 2000L
+    )
+    # Ride the cross table so they survive candidate filtering and allocation by row alignment,
+    # exactly like the per-trait `<trait>_post_sd` / `<trait>_post_topn` columns above. Purely
+    # additive: nothing existing is removed or renamed.
+    add_cols <- setdiff(names(posterior_multitrait), c("parent1", "parent2"))
+    for (cc in add_cols) cross_table[[cc]] <- posterior_multitrait[[cc]]
+    mt_tn <- paste0("multitrait_posterior_topn_prob_", as.integer(n_crosses))
+    cross_table$multi_trait_score_post_topn <- if (mt_tn %in% names(posterior_multitrait)) {
+      suppressWarnings(as.numeric(posterior_multitrait[[mt_tn]]))
+    } else NA_real_
+  }
+
   # Carried into ng_cp__stage_index for the check-reference block: the per-trait mean_source
   # (so a check resolves onto the same scale as the cross means it is compared against) and the
   # exact within-family cross-trait covariance (for the multi-check joint probability).
@@ -1171,6 +1335,7 @@ ng_cp__stage_predict <- function(ctx) {
     trait_scores = trait_scores,
     posterior_effects_list = posterior_effects_list,
     posterior_predictions_list = posterior_predictions_list,
+    posterior_multitrait = posterior_multitrait,
     cross_table = cross_table,
     trait_mean_source = trait_mean_source,
     ctc = ctc,
@@ -1603,14 +1768,25 @@ ng_cp__stage_rank <- function(ctx) {
                                     mean_gebv_cols = lvl_cols,
                                     directions = trait_spec$direction, coefficients = mt_coef)
     } else NULL
+    # DEFECT 7 fix (0.26.0): the index-level posterior SD and top-N stability, produced by
+    # ng_posterior_multitrait_cross_predict() and carried on the cross table alongside the
+    # per-trait posteriors. Previously the multi-trait branch passed NEITHER, so prob_top_tier
+    # was absent on every multi-trait run and confidence_method always fell back to
+    # "midparent_pev_index" even with posterior prediction on. Both are NULL when no posterior
+    # was run, which reproduces the 0.25.0 behaviour exactly.
+    mt_sd_col <- "multi_trait_score_post_sd"
+    mt_tn_col <- "multi_trait_score_post_topn"
     ann_one <- function(tbl) {
       if (!nrow(tbl) || is.null(mt_basis)) return(tbl)
       if (!all(c(lvl_cols, vpm_cols, wf_cols, "parent1", "parent2") %in% names(tbl))) return(tbl)
+      psd <- if (mt_sd_col %in% names(tbl)) suppressWarnings(as.numeric(tbl[[mt_sd_col]])) else NULL
+      ptn <- if (mt_tn_col %in% names(tbl)) suppressWarnings(as.numeric(tbl[[mt_tn_col]])) else NULL
       ng_annotate_cross_priority_multitrait(
         tbl, trait_order = trait_spec$trait, mean_gebv_cols = lvl_cols, vpm_cols = vpm_cols,
         directions = trait_spec$direction, coefficients = mt_coef,
         pev_cols = if (all(pev_cols %in% names(tbl))) pev_cols else NULL,
-        effect_based_x = effect_based_x, index_method = mt_method, basis = mt_basis)
+        effect_based_x = effect_based_x, index_method = mt_method, basis = mt_basis,
+        post_sd = psd, prob_top_tier = ptn)
     }
   }
   # Resolve every relative cut (confidence min/max, risk tertiles, portfolio
@@ -1800,6 +1976,7 @@ utils::globalVariables(c(
   "alphamate_number_of_parents", "alphamate_runtime_path", "alphamate_target_degree", "alphamate_workdir",
   "assume_inbred", "parent_type", "phased_haplotypes", "bp_per_cm", "budget", "burn_in",
   "check_geno", "check_pheno", "check_progeny_size", "check_records",
+  "ci_level", "robustness_quantile",
   "committed_crosses", "constraint_diagnostics", "cost_col",
   "cross_cost", "cross_table", "ctc", "direction_column_col", "direction_columns",
   "direction_direction_col", "direction_file", "direction_trait_col", "diversity_emphasis",
@@ -1824,6 +2001,7 @@ utils::globalVariables(c(
   "output_file", "output_files", "parallel_backend", "parallel_cores_used",
   "parent_group", "pheno", "phenotype", "phenotype_file",
   "phenotype_id_col_used", "plan", "posterior_effects_list", "posterior_method",
+  "posterior_multitrait",
   "posterior_n_draws", "posterior_predictions_list", "prediction_mode", "priority_breaks",
   "priority_check_weight", "priority_kinship_weight", "priority_labels", "priority_score_weight", "priority_threshold_weight",
   "qc", "recomb_model", "ril_mode", "run_posterior_prediction",
@@ -1878,6 +2056,14 @@ ng_cp__assemble_result <- function(ctx) {
     trait_scores = trait_scores,
     posterior_effects = posterior_effects_list,
     posterior_predictions = posterior_predictions_list,
+    # Posterior of the SELECTION INDEX itself (multi-trait + posterior prediction only; NULL
+    # otherwise). This is the object a robust allocation on a multi-trait plan must use --
+    # posterior_predictions[[1]] is one trait, chosen by direction-file row order, and is not
+    # the merit the plan was ranked on. Carries the ng_optimize_robust_mating_plan()-shaped
+    # "posterior" attribute (gain_col = "multi_trait_score", direction = "maximize") plus the
+    # richer "posterior_multitrait" attribute, including the per-draw re-standardisation caveat
+    # that governs how multi_trait_score_post_lower/_upper may be displayed.
+    posterior_multitrait = ctx$posterior_multitrait,
     candidate_crosses = scored_crosses,
     selected_crosses = selected,
     objective = objective,
@@ -1900,6 +2086,8 @@ ng_cp__assemble_result <- function(ctx) {
       n_iter = n_iter,
       burn_in = burn_in,
       posterior_n_draws = if (isTRUE(run_posterior_prediction)) posterior_n_draws else 0L,
+      ci_level = ci_level,
+      robustness_quantile = if (is.null(robustness_quantile)) NA_real_ else robustness_quantile,
       use_parallel = use_parallel,
       parallel_backend = parallel_backend,
       n_threads = parallel_cores_used,
@@ -1978,6 +2166,8 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
                                     posterior_method = c("mcmc", "closed_form"),
                                     n_iter = 5000L,
                                     burn_in = 500L,
+                                    ci_level = 0.95,
+                                    robustness_quantile = NULL,
                                     use_parallel = FALSE,
                                     n_threads = NULL,
                                     duplicate_action = c("remove", "report", "none"),

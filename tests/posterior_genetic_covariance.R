@@ -45,7 +45,16 @@ rownames(Y) <- ids
 # Sanity: the point estimator runs and gives a PSD G_hat. Use the same seed
 # as the posterior call so the per-trait ridge fits (and therefore lambdas
 # and sigma_g2 diagonals) are identical.
-G_hat <- ng_estimate_genetic_covariance(geno, Y, method = "two_stage_ridge", seed = 42L)
+# 0.30.0: the PUBLIC estimator refuses this fixture -- two_stage_ridge implies
+# h2 = 1.498 for y1 against the observed phenotypic variance, which is the guard
+# working as designed on the same heuristic this file exists to characterise.
+# The invariant under test here (posterior diagonals == point diagonals, because
+# sigma_g2 = sigma_e2 * denom / lambda is hyperparameter-conditional) is a
+# property of the ENGINE, not of the public wrapper, so the point estimate is
+# taken from the engine directly. ng_posterior_genetic_covariance() is likewise
+# unchanged in 0.30.0: it is already gated behind allow_heuristic = TRUE and
+# already warns that it returns heuristic draws.
+G_hat <- ng_genetic_cov_two_stage_ridge(geno, Y, kfold = 5L, seed = 42L)$G_hat
 stopifnot(all(dim(G_hat) == c(t_traits, t_traits)))
 stopifnot(all(eigen(G_hat, only.values = TRUE)$values > -1e-8))
 
@@ -74,11 +83,41 @@ if (diag_gap > 1e-6) {
   stop(sprintf("beta_posterior diagonals must match point G_hat to <1e-6; gap = %g",
                diag_gap))
 }
-# Off-diagonals: bias toward zero, so |G_post_mean[t,u]| should be <= |G_hat[t,u]|.
-G_post_off <- G_post_mean[upper.tri(G_post_mean)]
-G_hat_off  <- G_hat[upper.tri(G_hat)]
-if (any(abs(G_post_off) > abs(G_hat_off) + 1e-3)) {
-  stop("beta_posterior off-diagonals should be biased toward zero relative to point estimate")
+# Off-diagonals: bias toward zero, so the posterior mean's implied genetic
+# CORRELATIONS should be attenuated relative to the point estimate's.
+#
+# 0.29.0: this used to be a per-pair test at a flat 1e-3 slack, which is a
+# stricter claim than the mechanism supports. Attenuation is an EXPECTATION
+# statement about Pearson correlation under added noise, so a pair whose point
+# correlation is already ~0 has nothing to attenuate and the posterior mean's
+# Monte Carlo error moves it either way. Measured over 10 posterior seeds on this
+# fixture (point |r| = 0.0041, 0.4496, 0.0643): the two materially-correlated
+# pairs attenuate on 10/10 seeds by 0.26-0.38 and 0.034-0.062, while the ~0 pair
+# wanders in [-0.004, +0.010] with no sign preference. The 1e-3 slack was
+# therefore certifying the sign of Monte Carlo noise.
+#
+# Asserted instead: (a) the AGGREGATE attenuation, which holds with a large
+# margin on every seed measured (mean |r| 0.173 -> 0.028-0.075), and (b) per-pair
+# attenuation at a slack of 0.05, ~5x the largest excess observed over those 10
+# seeds, so a genuine loss of attenuation would still fail.
+R_post <- ng_genetic_cov_to_correlation(G_post_mean)
+R_point <- ng_genetic_cov_to_correlation(G_hat)
+ut <- upper.tri(R_post)
+r_post_abs <- abs(R_post[ut])
+r_point_abs <- abs(R_point[ut])
+cat(sprintf("  implied |r| point = [%s]; beta_posterior mean = [%s]\n",
+            paste(sprintf("%.4f", r_point_abs), collapse = ", "),
+            paste(sprintf("%.4f", r_post_abs), collapse = ", ")))
+if (mean(r_post_abs) > mean(r_point_abs)) {
+  stop(sprintf(paste0("beta_posterior off-diagonals should be biased toward zero: mean |r| ",
+                      "rose from %.4f (point) to %.4f (posterior mean)"),
+               mean(r_point_abs), mean(r_post_abs)))
+}
+if (any(r_post_abs > r_point_abs + 0.05)) {
+  stop(sprintf(paste0("beta_posterior off-diagonal attenuation lost on at least one pair: ",
+                      "max |r| excess over the point estimate = %.4f (slack 0.05, ~5x the ",
+                      "Monte Carlo excess observed over 10 posterior seeds)"),
+               max(r_post_abs - r_point_abs)))
 }
 
 # ---- parametric_bootstrap mode (covers hyperparameter uncertainty) ----------
@@ -116,6 +155,7 @@ if (covered_offdiag < n_offdiag - 1L) {
 # ---- Integration with ng_add_multitrait_score() -----------------------------
 # Use the posterior mean as a Bayes-point G; verify cov_source = smith_hazel.
 P_hat <- ng_estimate_phenotypic_covariance(Y, shrinkage = "auto")
+G_bayes <- attr(draws_bp, "G_mean")
 traits <- ng_multitrait_spec(trait = c("y1", "y2", "y3"),
                              direction = c("maximize", "maximize", "minimize"),
                              economic_weight = c(2, 1, 1))
@@ -124,10 +164,35 @@ scores_df <- data.frame(
   y1 = stats::rnorm(20L), y2 = stats::rnorm(20L), y3 = stats::rnorm(20L),
   stringsAsFactors = FALSE
 )
+
+# 0.29.0: (G_bayes, P_hat) is REFUSED by the P - G guard, and correctly so. Both
+# matrices inherit the two_stage_ridge diagonal -- the GBLUP lambda inversion
+# sigma_g2 = sigma_e2 * denom / lambda -- which overshoots here, so the pair
+# implies h2 > 1 for `y1` and there is no P = G + R decomposition behind the
+# Smith-Hazel solve. See docs/covariance-guards-report.md; the same pair implies
+# h2 > 1 on 87% of datasets from the sibling simulation. Assert the refusal, then
+# exercise the Smith-Hazel path on a pair that is valid.
+h2_implied <- diag(G_bayes) / diag(P_hat)
+cat(sprintf("  implied per-trait h2 from (G_bayes, P_hat): [%s]\n",
+            paste(sprintf("%.3f", h2_implied), collapse = ", ")))
+stopifnot(any(h2_implied > 1))
+refusal <- tryCatch({
+  ng_add_multitrait_score(scores = scores_df, traits = traits, method = "economic_index",
+                          phenotypic_covariance = P_hat, genetic_covariance = G_bayes)
+  NA_character_
+}, error = function(e) conditionMessage(e))
+stopifnot(!is.na(refusal), grepl("heritability above 1", refusal, fixed = TRUE))
+
+# A valid pair: scale G_bayes down to a uniform h2 of 0.5 against P_hat. This
+# preserves the posterior's correlation structure (the quantity under test) while
+# giving the residual covariance R = P - G somewhere to live.
+G_valid <- G_bayes * min(0.5 / h2_implied)
+dimnames(G_valid) <- dimnames(G_bayes)
+stopifnot(min(eigen(P_hat - G_valid, symmetric = TRUE, only.values = TRUE)$values) > 0)
 scored <- ng_add_multitrait_score(
   scores = scores_df, traits = traits, method = "economic_index",
   phenotypic_covariance = P_hat,
-  genetic_covariance = attr(draws_bp, "G_mean")
+  genetic_covariance = G_valid
 )
 meta <- attr(scored, "multi_trait")
 stopifnot(identical(meta$economic_index_cov_source, "smith_hazel"))
