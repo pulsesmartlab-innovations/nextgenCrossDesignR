@@ -3,6 +3,34 @@ helper <- c(file.path("tests", "helper_load.R"), "helper_load.R",
             file.path("..", "tests", "helper_load.R"))
 source(helper[file.exists(helper)][[1L]])
 
+# Comparing against constants frozen on ONE machine, from any machine.
+#
+# The references below were captured on macOS. R's linear algebra runs through
+# the platform's BLAS/LAPACK -- Accelerate there, OpenBLAS on the Linux CI
+# runner -- and the two are NOT bit-reproducible with each other: eigen() and
+# solve() legitimately differ in the last bits. identical() against a frozen
+# constant therefore asserts CROSS-PLATFORM bit reproducibility, which LAPACK
+# cannot provide and which this file never meant to claim. (It failed exactly
+# that way on the Linux harness while passing on macOS.)
+#
+# The real claim is that the 0.30.0 changes did not alter results that were
+# always valid -- a before-vs-after claim. So compare numerically at a tolerance
+# far tighter than any real algorithmic change could hide beneath, and print the
+# observed difference so genuine drift shows in the log even on a pass.
+# Non-numeric results (cross keys, row counts, the method string) stay on
+# identical(): those are exact on every platform.
+ng_same_num <- function(actual, ref, label, tol = 1e-12) {
+  a <- as.numeric(actual); r <- as.numeric(ref)
+  if (length(a) != length(r))
+    stop(label, ": length ", length(a), " vs reference ", length(r))
+  rel <- max(abs(a - r) / pmax(abs(r), 1))
+  cat(sprintf("  %-30s max rel diff = %.3e\n", label, rel))
+  if (!isTRUE(rel <= tol))
+    stop(label, ": max relative difference ", format(rel, digits = 6),
+         " exceeds tolerance ", tol)
+  invisible(TRUE)
+}
+
 # 0.30.0 -- THE TWO CHANGES MUST BE NUMERICALLY FREE ON WORK THAT WAS ALWAYS VALID.
 #
 # 0.30.0 makes two changes that could in principle move numbers:
@@ -102,17 +130,17 @@ ng_multitrait_validate_cov_pair(
                              trait_names, "genetic_covariance"))
 ok("the guard-satisfying fixture also passes ng_multitrait_validate_cov_pair()")
 
-stopifnot(identical(as.numeric(diag(G_hat)), G_DIAG))
-stopifnot(identical(as.numeric(G_hat), G_FULL))
-stopifnot(identical(as.numeric(attr(G_hat, "genetic_correlation")), G_CORR))
-ok("G_hat and its genetic_correlation are bit-identical to 0.29.0 (tolerance = 0)")
+ng_same_num(diag(G_hat), G_DIAG, "G_DIAG")
+ng_same_num(G_hat, G_FULL, "G_FULL")
+ng_same_num(attr(G_hat, "genetic_correlation"), G_CORR, "G_CORR")
+ok("G_hat and its genetic_correlation are unchanged from 0.29.0")
 
-stopifnot(identical(as.numeric(attr(G_hat, "genetic_variance")), SIGMA_G))
-stopifnot(identical(as.numeric(attr(G_hat, "residual_variance")), SIGMA_E))
+ng_same_num(attr(G_hat, "genetic_variance"), SIGMA_G, "SIGMA_G")
+ng_same_num(attr(G_hat, "residual_variance"), SIGMA_E, "SIGMA_E")
 stopifnot(identical(attr(G_hat, "method"), "two_stage_ridge"))
 stopifnot(identical(attr(G_hat, "n_used"), 100L))
-stopifnot(identical(as.numeric(P_hat), P_FULL))
-ok("provenance attributes and P_hat are bit-identical to 0.29.0 (tolerance = 0)")
+ng_same_num(P_hat, P_FULL, "P_FULL")
+ok("provenance attributes and P_hat are unchanged from 0.29.0")
 
 # The 0.30.0 attributes report the quantity the guard judged, and it agrees
 # with the quantity computed here from the same definition.
@@ -143,11 +171,11 @@ sc <- ng_score_crosses(g2, fit, marker_map = mm, ids = ids, adjusted_pheno = y2,
 keep <- seq_len(12L)
 stopifnot(identical(nrow(sc), SCORE_NROW))
 stopifnot(identical(paste(sc$parent1[keep], sc$parent2[keep], sep = "|"), SCORE_KEY))
-stopifnot(identical(as.numeric(sc$cross_mean[keep]), SCORE_MEAN))
-stopifnot(identical(as.numeric(sc$pmv[keep]), SCORE_PMV))
-stopifnot(identical(as.numeric(sc$usefulness_pmv[keep]), SCORE_UC))
-stopifnot(identical(as.numeric(sc$rank_score[keep]), SCORE_RANK))
-ok("ng_score_crosses() under the reduced ng_load() file set is bit-identical to 0.29.0")
+ng_same_num(sc$cross_mean[keep], SCORE_MEAN, "SCORE_MEAN")
+ng_same_num(sc$pmv[keep], SCORE_PMV, "SCORE_PMV")
+ng_same_num(sc$usefulness_pmv[keep], SCORE_UC, "SCORE_UC")
+ng_same_num(sc$rank_score[keep], SCORE_RANK, "SCORE_RANK")
+ok("ng_score_crosses() under the reduced ng_load() file set is unchanged from 0.29.0")
 
 # ---- part 3: the loader really did drop them, and would refuse a placeholder ----
 root <- ng_test_find_root()

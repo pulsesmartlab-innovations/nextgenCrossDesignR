@@ -8,14 +8,41 @@ source(helper[file.exists(helper)][[1L]])
 # The four covariance guards added in 0.29.0 refuse invalid input; they must not
 # perturb a single digit of a run whose matrices satisfy all of them. The
 # constants below were produced by a PRISTINE 0.28.0 tree (git archive HEAD of
-# commit a42dda6, unpacked to /tmp and loaded with the same helper), printed at
-# %.17g so they round-trip exactly, and are compared here with identical() --
-# tolerance = 0, not all.equal().
+# commit a42dda6, unpacked to /tmp and loaded with the same helper), as IEEE-754
+# hex literals so they round-trip exactly.
 #
 # If a later change makes this file fail, the guards have stopped being free.
 
 checks <- 0L
 ok <- function(msg) { checks <<- checks + 1L; cat("  OK:", msg, "\n") }
+
+# Comparing against constants frozen on ONE machine, from any machine.
+#
+# These references were captured on macOS. R's linear algebra runs through the
+# platform's BLAS/LAPACK -- Accelerate there, OpenBLAS on the Linux CI runner --
+# and the two are NOT bit-reproducible with each other: eigen() and solve()
+# legitimately differ in the last bits. identical() against a frozen constant
+# therefore asserts CROSS-PLATFORM bit reproducibility, which LAPACK cannot
+# provide and which this file never meant to claim. (It failed exactly that way
+# on the Linux harness while passing on macOS.)
+#
+# What this file does claim is that the 0.29.0 guards did not alter results for
+# a valid P/G pair. That is a before-vs-after claim, so compare numerically at a
+# tolerance far tighter than any real algorithmic change could hide beneath, and
+# print the observed difference so genuine drift is visible in the log even on a
+# pass. Non-numeric results (the crossing plan) stay on identical(): character
+# comparison is exact on every platform.
+ng_same_num <- function(actual, ref, label, tol = 1e-12) {
+  a <- as.numeric(actual); r <- as.numeric(ref)
+  if (length(a) != length(r))
+    stop(label, ": length ", length(a), " vs reference ", length(r))
+  rel <- max(abs(a - r) / pmax(abs(r), 1))
+  cat(sprintf("  %-30s max rel diff = %.3e\n", label, rel))
+  if (!isTRUE(rel <= tol))
+    stop(label, ": max relative difference ", format(rel, digits = 6),
+         " exceeds tolerance ", tol)
+  invisible(TRUE)
+}
 
 # ---- reference values from the pristine 0.28.0 tree ------------------------
 # IEEE-754 hex float literals: exact, not rounded decimal. as.numeric() parses them.
@@ -65,15 +92,15 @@ dg <- ng_add_multitrait_score(scores, traits, method = "desired_gain",
 m_ei <- attr(ei, "multi_trait")
 m_dg <- attr(dg, "multi_trait")
 
-stopifnot(identical(as.numeric(ei$multi_trait_score), EI_SCORE))
-stopifnot(identical(as.numeric(dg$multi_trait_score), DG_SCORE))
-ok("economic_index and desired_gain scores are bit-identical to 0.28.0 (tolerance = 0)")
+ng_same_num(ei$multi_trait_score, EI_SCORE, "EI_SCORE")
+ng_same_num(dg$multi_trait_score, DG_SCORE, "DG_SCORE")
+ok("economic_index and desired_gain scores are unchanged from 0.28.0")
 
-stopifnot(identical(as.numeric(m_ei$economic_index_coefficients), EI_COEF))
-stopifnot(identical(as.numeric(m_dg$desired_gain_coefficients), DG_COEF))
-stopifnot(identical(as.numeric(m_ei$economic_index_index_sd), EI_SD))
-stopifnot(identical(as.numeric(m_dg$desired_gain_index_sd), DG_SD))
-ok("index coefficients and index SDs are bit-identical to 0.28.0 (tolerance = 0)")
+ng_same_num(m_ei$economic_index_coefficients, EI_COEF, "EI_COEF")
+ng_same_num(m_dg$desired_gain_coefficients, DG_COEF, "DG_COEF")
+ng_same_num(m_ei$economic_index_index_sd, EI_SD, "EI_SD")
+ng_same_num(m_dg$desired_gain_index_sd, DG_SD, "DG_SD")
+ok("index coefficients and index SDs are unchanged from 0.28.0")
 
 plan_scores <- scores
 plan_scores$pair_kinship <- 0
