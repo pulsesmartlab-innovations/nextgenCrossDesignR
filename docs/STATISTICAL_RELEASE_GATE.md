@@ -1,9 +1,9 @@
 # Statistical Release Gate
 
-Generated: 2026-09-06 18:51:52 CDT
-Package: `nextgenCrossDesign 0.25.0`
+Generated: 2026-09-06 20:06:05 CDT
+Package: `nextgenCrossDesign 0.26.0`
 Installed namespace: `/Users/sikiru.atanda/Library/R/arm64/4.6/library/nextgenCrossDesign`
-Source Git commit: `8c3a8554597d` (working tree dirty: `TRUE`)
+Source Git commit: `038bcd089767` (working tree dirty: `TRUE`)
 R: `R version 4.6.1 (2026-06-24)`
 Compiled LD backend available: `TRUE`
 

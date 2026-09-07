@@ -1197,6 +1197,93 @@ ng_cp__stage_predict <- function(ctx) {
     for (cc in setdiff(names(ctc), c("parent1", "parent2"))) cross_table[[cc]] <- ctc[[cc]]
   }
 
+  # ---- Posterior of the SELECTION INDEX (multi-trait only) -------------------------------
+  # DEFECT 5 fix (0.26.0). ng_posterior_multitrait_cross_predict() (R/32) was exported,
+  # documented, tested and release-gated but had ZERO non-test callers, so a multi-trait run
+  # reported multi_trait_score as a point estimate with no uncertainty at all. Everything
+  # downstream that wanted an uncertainty on the ranked merit therefore had to reach for a
+  # PER-TRAIT posterior -- posterior_predictions[[1]], i.e. whichever trait happens to sit in
+  # row 1 of the breeder's direction file -- while the plan was ranked on the index over ALL
+  # traits. This wires the index posterior itself.
+  #
+  # Why the index is recomputed inside R/32's draw loop rather than combined from the per-trait
+  # posteriors already fitted above: the traits share the draw INDEX, so index_mat[, s] is the
+  # index of one coherent joint draw. Recombining per-trait marginal intervals would not be.
+  #
+  # GATING. Runs only when posterior prediction is on AND there is more than one trait, so a
+  # single-trait run is untouched (bit-identical) and a posterior-off multi-trait run pays
+  # nothing. value_mode = "mean" keeps the cost at O(n * m * T * S) -- the same order as the
+  # per-trait posteriors already computed -- rather than the per-draw PMV rescoring that
+  # value_mode = "usefulness" needs.
+  #
+  # SCOPE NOTES (deliberate, recorded rather than silently absorbed):
+  #   * R/32 refits its own per-trait ridge posteriors. Those are the same model on the same
+  #     training rows (parents + any marker-effect training augmentation, assembled below) with
+  #     a different seed, so they are draws from the same posterior -- not a different one --
+  #     but they are not the SAME draws as posterior_predictions[[trait]].
+  #   * R/32 scores the per-draw index with ng_add_multitrait_score()'s default threshold
+  #     penalty weight, not the run's threshold_penalty_weight. It is a posterior on the index,
+  #     not on the run's threshold-penalised objective.
+  #   * The interval is on a per-draw RE-STANDARDISED index (see the caveat block in R/32);
+  #     that caveat travels with the table in its "posterior_multitrait" metadata.
+  posterior_multitrait <- NULL
+  if (isTRUE(run_posterior_prediction) && nrow(trait_spec) > 1L &&
+      !is.null(cross_table) && nrow(cross_table) > 0L) {
+    mt_rows <- match(ids, rownames(pheno))
+    mt_geno <- geno
+    mt_ids <- ids
+    mt_Y <- matrix(
+      vapply(trait_spec$column,
+             function(cc) suppressWarnings(as.numeric(pheno[[cc]][mt_rows])),
+             numeric(length(ids))),
+      nrow = length(ids), dimnames = list(ids, trait_spec$column))
+    # Same marker-effect training augmentation the per-trait posteriors above use, so the index
+    # posterior is fitted on the same information rather than on the parent panel alone. Only
+    # the candidate parents are ever crossed (`pairs` below), so the extra rows enlarge the fit
+    # without entering the candidate pool.
+    if (!is.null(training_set)) {
+      tr_Y <- matrix(
+        vapply(trait_spec$column,
+               function(cc) suppressWarnings(as.numeric(training_set$pheno[[cc]])),
+               numeric(length(training_set$ids))),
+        nrow = length(training_set$ids),
+        dimnames = list(training_set$ids, trait_spec$column))
+      keep_tr <- rowSums(is.finite(tr_Y)) > 0L
+      if (any(keep_tr)) {
+        mt_geno <- rbind(geno, training_set$geno[keep_tr, , drop = FALSE])
+        mt_Y <- rbind(mt_Y, tr_Y[keep_tr, , drop = FALSE])
+        mt_ids <- c(ids, training_set$ids[keep_tr])
+      }
+    }
+    posterior_multitrait <- ng_posterior_multitrait_cross_predict(
+      geno = mt_geno, Y = mt_Y, traits = trait_spec, marker_map = marker_map_std,
+      ids = mt_ids, pairs = cross_table[, c("parent1", "parent2"), drop = FALSE],
+      n_draws = posterior_n_draws, posterior_method = posterior_method,
+      phenotypic_covariance = phenotypic_covariance,
+      genetic_covariance = genetic_covariance,
+      index_method = multi_trait_method,
+      value_mode = "mean", selection_prop = selection_prop,
+      target = target, recomb_model = recomb_model, use_cpp = use_cpp,
+      parent_type = parent_type, ci_level = ci_level,
+      # Cache the breeder's robustness quantile (and its mirror) from these same draws, so a
+      # robust allocation ON THE INDEX is exact at that quantile -- the treatment 0.25.0 gave
+      # the per-trait path. No `direction`: the index is direction-normalised higher = better
+      # for every method, so R/32 fixes it at "maximize" (see the comment there).
+      robustness_quantile = robustness_quantile,
+      top_n_targets = unique(as.integer(c(n_crosses, min(n_crosses, 10L), 10L, 20L, 50L))),
+      seed = seed + 2000L
+    )
+    # Ride the cross table so they survive candidate filtering and allocation by row alignment,
+    # exactly like the per-trait `<trait>_post_sd` / `<trait>_post_topn` columns above. Purely
+    # additive: nothing existing is removed or renamed.
+    add_cols <- setdiff(names(posterior_multitrait), c("parent1", "parent2"))
+    for (cc in add_cols) cross_table[[cc]] <- posterior_multitrait[[cc]]
+    mt_tn <- paste0("multitrait_posterior_topn_prob_", as.integer(n_crosses))
+    cross_table$multi_trait_score_post_topn <- if (mt_tn %in% names(posterior_multitrait)) {
+      suppressWarnings(as.numeric(posterior_multitrait[[mt_tn]]))
+    } else NA_real_
+  }
+
   # Carried into ng_cp__stage_index for the check-reference block: the per-trait mean_source
   # (so a check resolves onto the same scale as the cross means it is compared against) and the
   # exact within-family cross-trait covariance (for the multi-check joint probability).
@@ -1212,6 +1299,7 @@ ng_cp__stage_predict <- function(ctx) {
     trait_scores = trait_scores,
     posterior_effects_list = posterior_effects_list,
     posterior_predictions_list = posterior_predictions_list,
+    posterior_multitrait = posterior_multitrait,
     cross_table = cross_table,
     trait_mean_source = trait_mean_source,
     ctc = ctc,
@@ -1644,14 +1732,25 @@ ng_cp__stage_rank <- function(ctx) {
                                     mean_gebv_cols = lvl_cols,
                                     directions = trait_spec$direction, coefficients = mt_coef)
     } else NULL
+    # DEFECT 7 fix (0.26.0): the index-level posterior SD and top-N stability, produced by
+    # ng_posterior_multitrait_cross_predict() and carried on the cross table alongside the
+    # per-trait posteriors. Previously the multi-trait branch passed NEITHER, so prob_top_tier
+    # was absent on every multi-trait run and confidence_method always fell back to
+    # "midparent_pev_index" even with posterior prediction on. Both are NULL when no posterior
+    # was run, which reproduces the 0.25.0 behaviour exactly.
+    mt_sd_col <- "multi_trait_score_post_sd"
+    mt_tn_col <- "multi_trait_score_post_topn"
     ann_one <- function(tbl) {
       if (!nrow(tbl) || is.null(mt_basis)) return(tbl)
       if (!all(c(lvl_cols, vpm_cols, wf_cols, "parent1", "parent2") %in% names(tbl))) return(tbl)
+      psd <- if (mt_sd_col %in% names(tbl)) suppressWarnings(as.numeric(tbl[[mt_sd_col]])) else NULL
+      ptn <- if (mt_tn_col %in% names(tbl)) suppressWarnings(as.numeric(tbl[[mt_tn_col]])) else NULL
       ng_annotate_cross_priority_multitrait(
         tbl, trait_order = trait_spec$trait, mean_gebv_cols = lvl_cols, vpm_cols = vpm_cols,
         directions = trait_spec$direction, coefficients = mt_coef,
         pev_cols = if (all(pev_cols %in% names(tbl))) pev_cols else NULL,
-        effect_based_x = effect_based_x, index_method = mt_method, basis = mt_basis)
+        effect_based_x = effect_based_x, index_method = mt_method, basis = mt_basis,
+        post_sd = psd, prob_top_tier = ptn)
     }
   }
   # Resolve every relative cut (confidence min/max, risk tertiles, portfolio
@@ -1866,6 +1965,7 @@ utils::globalVariables(c(
   "output_file", "output_files", "parallel_backend", "parallel_cores_used",
   "parent_group", "pheno", "phenotype", "phenotype_file",
   "phenotype_id_col_used", "plan", "posterior_effects_list", "posterior_method",
+  "posterior_multitrait",
   "posterior_n_draws", "posterior_predictions_list", "prediction_mode", "priority_breaks",
   "priority_check_weight", "priority_kinship_weight", "priority_labels", "priority_score_weight", "priority_threshold_weight",
   "qc", "recomb_model", "ril_mode", "run_posterior_prediction",
@@ -1920,6 +2020,14 @@ ng_cp__assemble_result <- function(ctx) {
     trait_scores = trait_scores,
     posterior_effects = posterior_effects_list,
     posterior_predictions = posterior_predictions_list,
+    # Posterior of the SELECTION INDEX itself (multi-trait + posterior prediction only; NULL
+    # otherwise). This is the object a robust allocation on a multi-trait plan must use --
+    # posterior_predictions[[1]] is one trait, chosen by direction-file row order, and is not
+    # the merit the plan was ranked on. Carries the ng_optimize_robust_mating_plan()-shaped
+    # "posterior" attribute (gain_col = "multi_trait_score", direction = "maximize") plus the
+    # richer "posterior_multitrait" attribute, including the per-draw re-standardisation caveat
+    # that governs how multi_trait_score_post_lower/_upper may be displayed.
+    posterior_multitrait = ctx$posterior_multitrait,
     candidate_crosses = scored_crosses,
     selected_crosses = selected,
     objective = objective,

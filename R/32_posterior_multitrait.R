@@ -79,6 +79,7 @@ ng_posterior_multitrait_cross_predict <- function(geno,
                                                   threshold_k_progeny = 100L,
                                                   threshold_G_hat = NULL,
                                                   ci_level = 0.95,
+                                                  robustness_quantile = NULL,
                                                   top_n_targets = c(10L, 20L),
                                                   seed = 1L) {
   posterior_method <- match.arg(posterior_method)
@@ -88,6 +89,25 @@ ng_posterior_multitrait_cross_predict <- function(geno,
   target <- match.arg(target)
   parent_type <- ng_reconcile_parent_type(parent_type, assume_inbred)
   recomb_model <- match.arg(recomb_model)
+
+  # `ci_level` and `robustness_quantile` are SEPARATE controls, exactly as in
+  # ng_posterior_cross_predict() (R/30): ci_level owns the reported credible interval
+  # (_post_lower / _post_upper), robustness_quantile owns the tail an allocation is optimised
+  # against. Both q and 1 - q are cached from the SAME draws, so a robust allocation on the
+  # index is exact at that quantile with no extra sampling and no normal approximation, and the
+  # reported interval is untouched.
+  ci_level <- suppressWarnings(as.numeric(ci_level))
+  if (length(ci_level) != 1L || !is.finite(ci_level) || ci_level <= 0 || ci_level >= 1) {
+    ng_stop("ci_level must be one finite probability in (0, 1)")
+  }
+  robust_probs <- numeric(0)
+  if (!is.null(robustness_quantile)) {
+    robust_probs <- suppressWarnings(as.numeric(robustness_quantile))
+    if (!length(robust_probs) || any(!is.finite(robust_probs)) ||
+        any(robust_probs <= 0) || any(robust_probs >= 1)) {
+      ng_stop("robustness_quantile must be finite probabilities in (0, 1)")
+    }
+  }
 
   # ---- Validate multivariate threshold arguments ---------------------------
   do_threshold <- !is.null(tau_lower_vec) || !is.null(tau_upper_vec)
@@ -290,7 +310,17 @@ ng_posterior_multitrait_cross_predict <- function(geno,
         if (do_threshold) trait_cross_var[, j] <- pmv_js
         if (use_pmv) {
           sigma_js <- sqrt(pmv_js)
-          trait_cross_value[, j] <- mp_js + intensity * sigma_js
+          # DIRECTION SIGN (0.26.0 fix). The usefulness criterion is
+          # mean + sign * i * sigma with sign = +1 for a maximize trait and -1 for a minimize
+          # trait, and the sign applies ONLY to the i*sigma term -- never to the mean, which is
+          # already in the trait's own units and keeps its own orientation. Without the sign a
+          # minimize trait (disease, lodging) was scored at mean + i*sigma, i.e. the UNFAVOURABLE
+          # tail of the family, so within-family variance was charged as a liability instead of
+          # credited as an opportunity, and then value_z applied -1 on top of that. This matches
+          # ng_run_cp_trait_value() (R/39_cross_prediction_runner.R), which is the wired
+          # single-trait convention; the two must not disagree.
+          sign_j <- if (identical(traits$direction[[j]], "maximize")) 1 else -1
+          trait_cross_value[, j] <- mp_js + sign_j * intensity * sigma_js
         } else {
           trait_cross_value[, j] <- mp_js
         }
@@ -358,10 +388,62 @@ ng_posterior_multitrait_cross_predict <- function(geno,
   }
 
   out <- pairs
+  # PER-DRAW RE-STANDARDISATION CAVEAT -- read before displaying this interval to a breeder.
+  # ng_add_multitrait_score() is called INSIDE the draw loop above (that is what makes the
+  # index a coherent joint draw rather than a recombination of per-trait marginals), and it
+  # re-derives its own rank-normalisation / IQR centring from the rows it is handed. The index
+  # is therefore re-standardised within EVERY draw, so any component of posterior uncertainty
+  # that shifts or rescales the whole candidate pool together is removed before the quantile is
+  # taken. Consequences, all deliberate and out of scope to "fix" here (removing the
+  # re-standardisation is a design change to the index itself, not a bug fix):
+  #   * multi_trait_score_post_lower/_upper are an interval on a PER-DRAW RELATIVE index, not
+  #     on any fixed-scale quantity. They are narrower than a genuine index credible interval.
+  #   * They are not on the same scale as, and must not be differenced against, the
+  #     point-estimate multi_trait_score a runner call reports.
+  #   * For RANK-stability (multitrait_posterior_topn_prob_*) and for ordering crosses by a
+  #     conservative tail this is harmless, and arguably what is wanted.
+  # Recorded in the metadata below as `index_rescaling` / `index_rescaling_note` so a frontend
+  # can badge it rather than presenting it as a fixed-scale credible interval.
   out$multi_trait_score_post_mean  <- rowMeans(index_mat, na.rm = TRUE)
   out$multi_trait_score_post_lower <- row_quantile(index_mat, q_lower)
   out$multi_trait_score_post_upper <- row_quantile(index_mat, q_upper)
+  # Absolute posterior SD of the index, mirroring ranked_value_post_sd in R/30. This is the
+  # merit-DECOUPLED spread the cross-priority risk layer consumes; never a CV (the index can be
+  # ~0 or negative, so a ratio is sign-ill-defined and would re-conflate merit with uncertainty).
+  out$multi_trait_score_post_sd <- apply(index_mat, 1L, function(r) {
+    fr <- r[is.finite(r)]; if (length(fr) < 2L) NA_real_ else stats::sd(fr)
+  })
 
+  # Extra empirical quantile(s) of the index, taken from the SAME index_mat draws that produced
+  # the credible interval above -- the treatment 0.25.0 gave ng_posterior_cross_predict(). Both
+  # q and 1 - q are cached so ng_optimize_robust_mating_plan() is exact in either orientation
+  # without borrowing ci_level and without a normal approximation.
+  quantile_probs <- if (length(robust_probs)) sort(unique(c(robust_probs, 1 - robust_probs))) else numeric(0)
+  posterior_quantiles <- NULL
+  if (length(quantile_probs)) {
+    quantile_cols <- vapply(quantile_probs,
+                            function(p) ng_posterior_quantile_col("multi_trait_score", p),
+                            character(1L))
+    for (jj in seq_along(quantile_probs)) {
+      out[[quantile_cols[[jj]]]] <- row_quantile(index_mat, quantile_probs[[jj]])
+    }
+    posterior_quantiles <- data.frame(prob = quantile_probs, column = quantile_cols,
+                                      stringsAsFactors = FALSE)
+  }
+
+  # INDEX ORIENTATION -- hard-coded, not an argument, and deliberately so.
+  # Unlike the per-trait ranked value in R/30 (whose orientation depends on the trait's
+  # breeding direction and on trait_value_metric), multi_trait_score is direction-normalised
+  # to HIGHER = BETTER for every index method, and that is a stated design invariant of
+  # ng_add_multitrait_score() (see the "Design invariant (deliberate; do not normalize this
+  # away)" comment in R/19_multi_trait_selection.R). Both combination paths apply the trait
+  # direction UPSTREAM of the combination: the rank path negates a minimize trait inside
+  # ng_rank_normalize(bigger_is_better = FALSE) and combines with weights >= 0 summing to 1;
+  # the solved path builds value_z = sign * (x - center) / scale and combines with b = P^-1 G a
+  # / b = G^-1 d whose a, d >= 0 are enforced upstream. A `direction` argument here could only
+  # ever be "maximize", so plumbing one would be a meaningless knob that a caller could set
+  # wrong. The top-N sort below and the "posterior" metadata both fix it at "maximize".
+  index_direction <- "maximize"
   for (N in as.integer(top_n_targets)) {
     if (!is.finite(N) || N < 1L || N >= n_pairs) next
     in_topn <- apply(index_mat, 2L, function(col) {
@@ -387,6 +469,21 @@ ng_posterior_multitrait_cross_predict <- function(geno,
     index_method_requested = index_method,
     value_mode = value_mode,
     ci_level = ci_level,
+    direction = index_direction,
+    robustness_quantile = if (length(robust_probs)) robust_probs else NA_real_,
+    posterior_quantiles = posterior_quantiles,
+    # Surfaced so the frontend can badge the interval instead of presenting it as a
+    # fixed-scale credible interval; see the block comment above where the columns are built.
+    index_rescaling = "per_draw_restandardized",
+    index_rescaling_note = paste0(
+      "multi_trait_score is re-standardized within every posterior draw (the index is ",
+      "recomputed inside the draw loop by ng_add_multitrait_score(), which re-derives its ",
+      "rank-normalization / IQR centring from the rows it is handed). ",
+      "multi_trait_score_post_lower/_upper are therefore an interval on a PER-DRAW RELATIVE ",
+      "index: pool-wide shifts and rescalings are removed before the quantile is taken, the ",
+      "interval is narrower than a genuine index credible interval, and it is not on the same ",
+      "scale as the point-estimate multi_trait_score. Rank-stability ",
+      "(multitrait_posterior_topn_prob_*) and conservative-tail ORDERING are unaffected."),
     top_n_targets = as.integer(top_n_targets),
     G_mean = if (!is.null(genetic_covariance_draws)) apply(genetic_covariance_draws, c(1, 2), mean) else genetic_covariance,
     P_hat = P_hat,
@@ -394,6 +491,25 @@ ng_posterior_multitrait_cross_predict <- function(geno,
     tau_upper_vec = tau_upper_vec,
     threshold_k_progeny = if (do_threshold) threshold_k_progeny else NULL,
     threshold_G_hat = threshold_G_hat
+  )
+  # Second, NARROWER attribute in the shape ng_optimize_robust_mating_plan() (R/30) reads, so
+  # a robust allocation can be run on the INDEX the multi-trait plan actually ranks on instead
+  # of on one trait's per-trait posterior. gain_col is "multi_trait_score"; direction is fixed
+  # at "maximize" (see the index-orientation comment above); posterior_quantiles points at the
+  # exact empirical quantile columns cached from these same draws. Additive -- the richer
+  # "posterior_multitrait" attribute above is unchanged and remains the authoritative record.
+  attr(out, "posterior") <- list(
+    n_draws = n_draws,
+    method = posterior_method,
+    gain_col = "multi_trait_score",
+    var_col = NA_character_,
+    ranked_value = "multi_trait_score",
+    ci_level = ci_level,
+    top_n_targets = as.integer(top_n_targets),
+    direction = index_direction,
+    robustness_quantile = if (length(robust_probs)) robust_probs else NA_real_,
+    posterior_quantiles = posterior_quantiles,
+    index_rescaling = "per_draw_restandardized"
   )
   out
 }

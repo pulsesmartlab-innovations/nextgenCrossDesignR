@@ -651,11 +651,26 @@ ng_add_multitrait_score <- function(scores,
     # to `column` -- see ng_multitrait_spec()) gives the threshold its own, correctly-scaled
     # axis; the ranking z-score above is deliberately left on `column`/x.
     x_thresh <- suppressWarnings(as.numeric(scores[[traits$threshold_column[[i]]]]))
+    # DEFECT 3 fix (0.26.0): the deficit above is measured on threshold_column, so it must be
+    # made dimensionless by the dispersion of THAT column, not by `scale` (the robust spread of
+    # the RANKING column `x`). Dividing a trait-unit deficit by the IQR of whatever
+    # trait_value_metric produced mixes two different quantities in two different units: under
+    # trait_value_metric = "pmv"/"vpm"/"var_complex" the ranking column is a VARIANCE, and the
+    # measured effect was a 52x swing in how hard the same thresholds bite (mean penalty 0.35
+    # under "usefulness" vs 18.0 under "pmv" on identical data and identical thresholds) driven
+    # entirely by a knob that has nothing to do with thresholds. The penalty must be invariant
+    # to the ranking metric when the threshold column and the thresholds are unchanged.
+    # ng_multitrait_value_scale() never returns 0 or a non-finite value (it falls back
+    # IQR -> MAD -> SD -> range -> 1), so this can never divide by zero; when threshold_column
+    # IS column (the default for every direct caller) thresh_scale == scale exactly and the
+    # penalty is bit-identical to 0.25.0.
+    thresh_scale <- if (identical(traits$threshold_column[[i]], traits$column[[i]])) scale else
+      ng_multitrait_value_scale(x_thresh)
     if (is.finite(traits$min_value[[i]])) {
-      violation[, i] <- violation[, i] + pmax(traits$min_value[[i]] - x_thresh, 0) / scale
+      violation[, i] <- violation[, i] + pmax(traits$min_value[[i]] - x_thresh, 0) / thresh_scale
     }
     if (is.finite(traits$max_value[[i]])) {
-      violation[, i] <- violation[, i] + pmax(x_thresh - traits$max_value[[i]], 0) / scale
+      violation[, i] <- violation[, i] + pmax(x_thresh - traits$max_value[[i]], 0) / thresh_scale
     }
     violation[!is.finite(violation[, i]), i] <- 1
     violation[, i] <- violation[, i] * traits$threshold_weight[[i]]

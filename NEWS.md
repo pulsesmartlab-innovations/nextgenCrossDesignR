@@ -1,3 +1,81 @@
+# nextgenCrossDesign 0.26.0
+
+## New features
+
+* The multi-trait selection index now has a posterior.
+  `ng_posterior_multitrait_cross_predict()` was exported, documented, tested and exercised by
+  the statistical release gate, but had **zero non-test callers**, so `multi_trait_score` -- the
+  merit a multi-trait plan is actually ranked on -- reached the user as a point estimate with no
+  uncertainty at all. Anything that wanted an uncertainty on the plan's merit had to fall back
+  to a PER-TRAIT posterior, i.e. `posterior_predictions[[1]]`, which is whichever trait happens
+  to sit in row 1 of the breeder's direction file. `ng_run_cross_prediction()` now calls it on a
+  multi-trait run with posterior prediction on, and returns the table as
+  `result$posterior_multitrait`. The new columns
+  (`multi_trait_score_post_mean` / `_post_lower` / `_post_upper` / `_post_sd`, the
+  `multitrait_posterior_topn_prob_<N>` family, and any requested
+  `multi_trait_score_post_q<prob>`) also ride `candidate_crosses`, so they survive candidate
+  filtering and allocation. Purely additive: no existing column, name or list element changes.
+  Gated so a single-trait run is bit-identical and a multi-trait run with
+  `run_posterior_prediction = FALSE` pays nothing.
+* `ng_posterior_multitrait_cross_predict()` gains `robustness_quantile`, in the same shape
+  0.25.0 gave `ng_posterior_cross_predict()`: the requested quantile (and its mirror `1 - q`) is
+  cached as an extra empirical quantile of the SAME draws that produced the credible interval,
+  as `multi_trait_score_post_q<prob>`, leaving `ci_level` -- and therefore the reported interval
+  -- untouched. It also gains `multi_trait_score_post_sd` and a second, narrower `"posterior"`
+  metadata attribute in the shape `ng_optimize_robust_mating_plan()` reads
+  (`gain_col = "multi_trait_score"`, `direction = "maximize"`), so a robust allocation can now
+  be run on the INDEX the plan ranks on rather than on one trait's posterior.
+  **No `direction` argument** is added, deliberately: `multi_trait_score` is
+  direction-normalised higher-is-better for every index method (a stated design invariant of
+  `ng_add_multitrait_score()`, since both combination paths apply the trait direction upstream
+  of the combination), so the orientation is hard-coded at `"maximize"` with a comment rather
+  than plumbed as a knob a caller could set wrong.
+* `prob_top_tier` and posterior-based `cross_confidence` are now produced on multi-trait runs.
+  `ng_annotate_cross_priority_multitrait()` gains `post_sd` and `prob_top_tier`, and
+  `ng_run_cross_prediction()` passes the index posterior SD and the index top-N probability the
+  same way the single-trait branch has always passed its per-trait equivalents. Previously the
+  multi-trait branch passed neither, so `prob_top_tier` was ABSENT from a multi-trait
+  `candidate_crosses` and `confidence_method` always fell back to `"midparent_pev_index"` even
+  with posterior prediction on. `prob_top_tier` is now always emitted (`NA` when no index
+  posterior was run) so the multi-trait and single-trait reporting surfaces carry the same
+  columns.
+
+## Bug fixes
+
+* `ng_add_multitrait_score()`: the soft threshold penalty divided a deficit measured on
+  `threshold_column` by the robust spread of `column` -- the RANKING column. Those are different
+  quantities in different units, so `trait_value_metric`, a knob with nothing to do with
+  thresholds, silently rescaled how hard the thresholds bit: a measured mean penalty of 0.35
+  under `trait_value_metric = "usefulness"` against 18.0 under `"pmv"` on identical data with
+  identical thresholds (a 52x swing; under a variance metric the advisory soft threshold became
+  de facto hard). The deficit is now scaled by the dispersion of the column it is measured on.
+  `ng_multitrait_value_scale()` already falls back IQR -> MAD -> SD -> range -> 1, so a
+  degenerate threshold column cannot divide by zero. When `threshold_column` IS `column` -- the
+  default for every direct caller -- the two scales are the same quantity and the result is
+  bit-identical to 0.25.0.
+* `ng_posterior_multitrait_cross_predict()`, `value_mode = "usefulness"`: the per-trait,
+  per-draw value was built as `mean + i * sigma` with **no direction sign**, so a minimize trait
+  (disease, lodging) was scored on the unfavourable tail of its family -- within-family variance
+  charged as a liability instead of credited as an opportunity -- and `value_z` then applied
+  `-1` on top of that. Now `mean + sign * i * sigma` with `sign = -1` for a minimize trait, the
+  sign applied only to the `i * sigma` term and never to the mean, matching
+  `ng_run_cp_trait_value()`. This was latent in 0.25.0 (the function had no callers); wiring it
+  above makes it live, which is why it is fixed first.
+
+## Documentation
+
+* The index posterior's **per-draw re-standardisation** is now documented where the columns are
+  produced and recorded in the posterior metadata (`index_rescaling`, `index_rescaling_note`).
+  `ng_add_multitrait_score()` is called inside the draw loop -- which is what makes each draw a
+  coherent joint draw rather than a recombination of per-trait marginals -- and it re-derives
+  its own rank-normalisation / IQR centring from the rows it is handed. Any component of
+  posterior uncertainty that shifts or rescales the whole candidate pool together is therefore
+  removed before the quantile is taken, so `multi_trait_score_post_lower` / `_upper` are an
+  interval on a PER-DRAW RELATIVE index: narrower than a genuine index credible interval, and
+  not on the same scale as the point-estimate `multi_trait_score`. Rank stability
+  (`multitrait_posterior_topn_prob_*`) and conservative-tail ordering are unaffected. Removing
+  the re-standardisation is a design change to the index itself and is deliberately out of scope.
+
 # nextgenCrossDesign 0.25.0
 
 ## New features
