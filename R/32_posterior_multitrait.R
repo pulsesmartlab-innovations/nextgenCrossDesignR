@@ -181,11 +181,17 @@ ng_posterior_multitrait_cross_predict <- function(geno,
   for (j in seq_len(n_traits)) {
     y_j <- as.numeric(Y[, j])
     names(y_j) <- ids
+    # SEED (0.28.0): identity-derived, not position-derived. `seed + j` keyed each trait's
+    # posterior stream to its ROW POSITION in the caller's traits table, so permuting that
+    # table -- i.e. reordering the breeder's direction file -- silently moved every trait onto
+    # a different draw stream and changed the index posterior it feeds. The streams must stay
+    # DISTINCT per trait (shared innovations would manufacture cross-trait correlation in
+    # exactly the index this function builds), so the key is the trait's name, not its row.
     post_j <- ng_fit_ridge_effects_posterior(
       geno = geno, y = y_j, ids = ids,
       lambda = ridge_lambda, kfold = kfold,
       n_draws = n_draws, method = posterior_method,
-      seed = seed + j
+      seed = ng_trait_rng_seed(seed, trait_names[[j]])
     )
     posteriors[[j]] <- post_j
     fits[[j]] <- post_j$fit

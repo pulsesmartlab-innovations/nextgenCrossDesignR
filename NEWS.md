@@ -1,3 +1,81 @@
+# nextgenCrossDesign 0.28.0
+
+## Reproducibility: a trait's result no longer depends on its row position
+
+A trait's science depended on WHERE the breeder happened to list it in the
+direction file. `ng_run_cross_prediction()`'s per-trait loop derived both of its
+seeds from the trait's row position `i`:
+
+* `seed + i - 1L` was passed to `ng_fit_ridge_effects()` and reached
+  `ng_choose_ridge_lambda()`, which does `set.seed(seed); sample(...)` to build
+  the k-fold CV partition used to select the ridge penalty. A different partition
+  can select a different lambda, which changes the fitted marker effects and
+  therefore the progeny variance, the usefulness, the index, the mid-parent PEV,
+  the robust allocation and P(beat check).
+* `seed + 1000L + i - 1L` seeded the per-trait posterior draws.
+
+`ng_posterior_multitrait_cross_predict()` (R/32) had the same defect
+(`seed + j` over the traits table), so the index posterior moved with the file
+order too.
+
+Measured on a 24-parent / 40-marker panel with `seed = 909`, the trait named
+`disease` scored `disease_vpm` = **2.512** when it was listed FIRST and
+**3.20e-07** when it was listed SECOND -- seven orders of magnitude -- and the
+selected crossing plan was a different set of crosses. The two orders were both
+"right" only in the sense that neither was: the split was arbitrary.
+
+Both seeds are now derived from the trait's IDENTITY, and the two sites are
+treated differently on purpose:
+
+* **Lambda CV (`R/39`, `R/02`)**: every trait now shares ONE fold partition (the
+  run's `seed`, unmodified). Folds are a nuisance parameter of lambda selection,
+  not a source of innovation -- given lambda, each trait's `beta` is a
+  deterministic function of its own `y` -- so sharing them introduces no
+  cross-trait coupling, and it makes per-trait CV comparisons paired.
+* **Posterior draws (`R/39`, `R/32`)**: traits keep DISTINCT streams, keyed on
+  the trait name via the new internal `ng_trait_rng_seed()` /
+  `ng_name_hash32()`. A shared stream would give every trait identical random
+  innovations and manufacture cross-trait correlation in exactly the quantity
+  `ng_posterior_multitrait_cross_predict()` builds. The hash is an explicit
+  byte polynomial over the name's UTF-8 bytes, computed in exact double
+  arithmetic, so it is identical across sessions, platforms and R versions and
+  does not depend on any R hashing internal.
+
+**This changes numbers.** In a multi-trait run, every trait after the first now
+reports different variances, usefulness, index contributions, posterior
+intervals and (potentially) a different crossing plan. The previous values were
+position-dependent and therefore arbitrary; the new ones are the values that
+trait gets in a single-trait run. Specifically:
+
+* A single-trait run is BIT-IDENTICAL to 0.27.0 for every deterministic output
+  (variances, usefulness, index, plan). Only its posterior draw stream moves,
+  because the stream is now keyed on the trait's name -- a different sample from
+  the same posterior, i.e. Monte Carlo noise, not a different model. A one-trait
+  exception was rejected deliberately: it would make a trait's draws depend on
+  how many other traits share the file, which is the same class of context
+  dependence this release removes.
+* In a multi-trait run, the FIRST-listed trait's deterministic columns are also
+  bit-identical to 0.27.0, because sharing the run seed is exactly what position
+  1 already received.
+
+`tests/trait_order_invariance.R` pins this shut: it permutes the direction file
+and asserts every per-trait column, the whole per-trait posterior table, the
+index posterior and the selected plan are unchanged with `tolerance = 0`.
+
+## Known, not fixed
+
+`ng_estimate_genetic_covariance(method = "two_stage_ridge")` and
+`ng_posterior_genetic_covariance()` (R/31) carry the same position-derived
+seeding (`seed + j` over the columns of `Y`), plus residual bootstrap draws taken
+from one stream in trait order. Neither has a non-test caller inside the package
+-- they are opt-in diagnostic heuristics that already warn they are not formal
+estimators -- and de-positioning their seeds necessarily moves the numbers in an
+estimator whose accuracy guard is currently a coin flip: on unmodified 0.27.0,
+`tests/genetic_covariance_estimator.R`'s Frobenius acceptance
+(`ratio <= 0.5`) is met for only ~53% of base seeds (120-seed sweep: mean ratio
+0.625, sd 0.346), so seed 2026 passes by luck. That estimator needs its own
+stability work; fixing the seeding without it would just relabel the luck.
+
 # nextgenCrossDesign 0.27.0
 
 ## Safety: user-supplied P and G

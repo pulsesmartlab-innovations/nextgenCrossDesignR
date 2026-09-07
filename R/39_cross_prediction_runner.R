@@ -963,11 +963,28 @@ ng_cp__stage_predict <- function(ctx) {
     # count -- is what gates it; each job reduces Sigma_beta to an n_pairs PEV vector and
     # drops the dense matrix below, so peak memory is one Sigma_beta per parallel worker.
     want_beta_cov <- identical(method_varPMV, "full_posterior") || ncol(geno) <= 6000L
+    # SEED (0.28.0): the run seed itself, NOT `seed + i - 1L`.
+    #
+    # This seed reaches ng_choose_ridge_lambda() -> set.seed(seed); sample(...), i.e. it picks
+    # the k-fold CV partition used to select the ridge lambda (and, via ng_ridge_cv_predict(),
+    # the partition behind cv_predictive_r2). Keying it to `i` -- the trait's ROW POSITION in
+    # the breeder's direction file -- made every downstream quantity position-dependent: a
+    # different split can select a different lambda, which changes the marker effects and hence
+    # the progeny variance. Measured on a 24-parent / 40-marker panel, `disease_vpm` moved from
+    # 2.51 (listed first) to 3.20e-07 (listed second), and the selected crossing plan changed.
+    #
+    # Every trait now shares ONE fold partition. That is the statistically preferable choice
+    # independently of the bug: a common split makes the per-trait CV comparisons paired, so
+    # differences in cv_predictive_r2 between traits reflect the traits and not the split. It is
+    # also safe -- the folds are a nuisance parameter of lambda selection, not a source of
+    # innovation that could correlate the traits' fitted effects (each trait's beta is a
+    # deterministic function of its own y given lambda) -- and it keeps a single-trait run, and
+    # the first-listed trait of any run, bit-identical to 0.27.0.
     fit <- ng_fit_ridge_effects(
       geno = fit_geno,
       y = fit_y,
       ids = fit_ids,
-      seed = seed + i - 1L,
+      seed = seed,
       return_beta_cov_full = want_beta_cov
     )
     posterior_cov_full <- if (identical(method_varPMV, "full_posterior")) fit$beta_cov_full else NULL
@@ -998,6 +1015,23 @@ ng_cp__stage_predict <- function(ctx) {
     posterior_effects <- NULL
     posterior_scores <- NULL
     if (isTRUE(run_posterior_prediction)) {
+      # SEED (0.28.0): identity-derived, NOT position-derived -- and, unlike the lambda-CV seed
+      # above, still DISTINCT per trait.
+      #
+      # This seed drives the actual posterior innovations. Giving every trait the same stream
+      # would make their random innovations identical and induce artificial cross-trait
+      # correlation, which matters directly: ng_posterior_multitrait_cross_predict() (R/32,
+      # wired in 0.26.0) combines per-trait draws into an index posterior. So the traits must
+      # keep separate streams -- but keyed to the trait's NAME via ng_trait_rng_seed(), so
+      # reordering the direction file cannot move a trait onto a different stream.
+      #
+      # This is the one place a single-trait run is NOT bit-identical to 0.27.0 (its stream was
+      # `seed + 1000L`, now `seed + 1000L + hash(trait)`). Deliberate: the alternative --
+      # special-casing a one-trait run back onto the old stream -- would make a trait's draws
+      # depend on how many OTHER traits share the file, reintroducing exactly the context
+      # dependence being removed here. Nothing statistical changes: it is a different draw
+      # stream from the same posterior, i.e. Monte Carlo noise only. All deterministic
+      # single-trait outputs (variances, usefulness, index, plan) remain bit-identical.
       posterior_effects <- ng_fit_ridge_effects_posterior(
         geno = fit_geno,
         y = fit_y,
@@ -1005,7 +1039,9 @@ ng_cp__stage_predict <- function(ctx) {
         n_draws = posterior_n_draws,
         method = posterior_method,
         mcmc_burnin = burn_in,
-        seed = seed + 1000L + i - 1L
+        # Keyed on trait AND phenotype column: nothing upstream forces trait names to be
+        # unique, and two traits reading different columns must not share a stream.
+        seed = ng_trait_rng_seed(seed, paste(trait, column, sep = "\r"), salt = 1000L)
       )
       posterior_scores <- ng_posterior_cross_predict(
         geno = geno,

@@ -1,9 +1,9 @@
 # Statistical Release Gate
 
-Generated: 2026-09-06 21:25:59 CDT
-Package: `nextgenCrossDesign 0.27.0`
-Installed namespace: `/Users/sikiru.atanda/Library/R/arm64/4.6/library/nextgenCrossDesign`
-Source Git commit: `e8b5cead07a9` (working tree dirty: `TRUE`)
+Generated: 2026-09-06 22:19:46 CDT
+Package: `nextgenCrossDesign 0.28.0`
+Installed namespace: `/private/tmp/ngcd_lib_028/nextgenCrossDesign`
+Source Git commit: `52c63a5cf56d` (working tree dirty: `TRUE`)
 R: `R version 4.6.1 (2026-06-24)`
 Compiled LD backend available: `TRUE`
 
@@ -38,7 +38,7 @@ Graph LD pruning and fast PMV are retained. The gate explicitly checks them; nei
 | LD pruning | Installed C++/auto versus R graph parity | Same randomized cases through both production backends | 60/60 exact marker-set matches | 60/60 | PASS |
 | LD pruning | Map-order invariance | Marker columns permuted while chromosome/position map is held fixed | 60/60 invariant marker sets | 60/60 | PASS |
 | LD pruning | Compiled graph backend loaded | Installed namespace backend registry | TRUE | TRUE | PASS |
-| Marker effects | Fold-local centering translation invariance | Every marker shifted by a different constant; installed fit and CV rerun | prediction/CV difference <= 1e-10 | 3.553e-15 | PASS |
+| Marker effects | Fold-local centering translation invariance | Every marker shifted by a different constant; installed fit and CV rerun | prediction/CV difference <= 1e-10 | 1.776e-15 | PASS |
 | Marker effects | Predictive diagnostics are not mislabeled reliability | Installed ridge fit metadata | reliability=NA, calibrated flag FALSE, CV R2/correlation separately reported | reliability=NA; calibrated=FALSE | PASS |
 | Marker effects | Small-sample CV is not replaced by in-sample fit | Eight training records, below the package CV floor | both CV diagnostics are NA | R2=NA; cor=NA | PASS |
 | Marker effects | Reliability gating requires explicit calibration | Same numeric reliability with calibration flag FALSE then TRUE | uncalibrated cannot gate; calibrated can gate | adjusted_pheno / GEBV | PASS |
