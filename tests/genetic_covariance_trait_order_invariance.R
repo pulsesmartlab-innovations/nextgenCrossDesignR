@@ -72,8 +72,33 @@ cat(sprintf("  G_hat (after the PSD projection) differs by %.3e absolute, %.3e r
 stopifnot(rel < 1e-12)
 ok("two_stage_ridge: G_hat agrees to LAPACK reassociation noise (< 1e-12 relative) after the PSD projection")
 
-# ...and through the exported entry point.
-run_pub <- function(Ym) suppressWarnings(ng_estimate_genetic_covariance(
+# ...and through the exported entry points.
+#
+# 0.30.0: on THIS fixture ng_estimate_genetic_covariance() now refuses its own
+# output (implied h2 = 3.13 for yield, 1.94 for protein), which is the guard
+# working, not a regression. A REFUSAL is a verdict like any other and must also
+# be order-invariant, so that is what is asserted for the covariance entry point:
+# the same traits are named, with the same numbers, whichever order the columns
+# of Y arrived in. The matrix-returning assertion moves to
+# ng_estimate_genetic_correlation(), which is exported, is not subject to the h2
+# check, and carries the same per-trait provenance.
+run_pub_cov <- function(Ym) tryCatch({
+  suppressWarnings(ng_estimate_genetic_covariance(
+    geno = geno, Y = Ym, method = "two_stage_ridge", kfold = 5L, seed = 11L))
+  NA_character_
+}, error = function(e) conditionMessage(e))
+msg_A <- run_pub_cov(Y)
+msg_B <- run_pub_cov(Y_perm)
+stopifnot(!is.na(msg_A), !is.na(msg_B))
+stopifnot(grepl("IMPOSSIBLE for the data it was fitted to", msg_A, fixed = TRUE))
+# Same verdict, same offending traits, same numbers -- the message is built by
+# iterating the traits in the order they were supplied, so the two strings differ
+# only where the permutation reorders the clauses. Compare the sorted clauses.
+clauses <- function(m) sort(strsplit(sub("^.*\\[0, 1\\]\\. ", "", sub("\\. two_stage_ridge builds.*$", "", m)), "; ", fixed = TRUE)[[1L]])
+stopifnot(identical(clauses(msg_A), clauses(msg_B)))
+ok("ng_estimate_genetic_covariance(two_stage_ridge): the REFUSAL is order-invariant, trait by trait and number by number")
+
+run_pub <- function(Ym) suppressWarnings(ng_estimate_genetic_correlation(
   geno = geno, Y = Ym, method = "two_stage_ridge", kfold = 5L, seed = 11L))
 GA <- run_pub(Y)
 GB <- run_pub(Y_perm)
@@ -84,7 +109,14 @@ stopifnot(identical(as.numeric(attr(GA, "genetic_variance")[tn]),
                     as.numeric(attr(GB, "genetic_variance")[tn])))
 stopifnot(identical(as.numeric(attr(GA, "residual_variance")[tn]),
                     as.numeric(attr(GB, "residual_variance")[tn])))
-ok("ng_estimate_genetic_covariance(two_stage_ridge): same verdict through the exported entry point")
+# implied_h2_vs_observed_variance is diag(G_hat) / var(Y) and so inherits the
+# same LAPACK reassociation noise from the PSD projection that G_hat itself does
+# (its denominator, and the pre-projection `genetic_variance` above, ARE
+# bit-identical). Bounded, like G_hat, rather than asserted at tolerance = 0.
+h2_A <- as.numeric(attr(GA, "implied_h2_vs_observed_variance")[tn])
+h2_B <- as.numeric(attr(GB, "implied_h2_vs_observed_variance")[tn])
+stopifnot(max(abs(h2_A - h2_B)) / max(1, max(abs(h2_A))) < 1e-12)
+ok("ng_estimate_genetic_correlation(two_stage_ridge): same verdict through the exported entry point")
 
 # ============================================================================
 # 2. ng_posterior_genetic_covariance(): both methods

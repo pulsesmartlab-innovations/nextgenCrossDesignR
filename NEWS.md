@@ -1,3 +1,142 @@
+# nextgenCrossDesign 0.30.0
+
+## The genetic-covariance estimator refuses its own impossible output
+
+0.29.0 added a hard `P - G` guard for user-supplied covariance pairs. Turning
+that same standard on the package's OWN estimator showed that
+`ng_estimate_genetic_covariance(method = "two_stage_ridge")` routinely produces
+a `G_hat` that no phenotypic covariance can accommodate: on the generating model
+that ships in `tests/genetic_covariance_estimator.R` (n = 100, m = 200, 3
+traits, every true `h2 = 0.5`), its implied per-trait heritability exceeds 1 on
+**85.5% of 200 independently simulated datasets**, and at the test file's own
+seed 2026 it returns `diag(G_hat) = [3.598, 1.860, 1.004]` against a truth of
+`[1, 2, 0.5]` -- implied `h2 = [2.507, 0.526, 1.147]`. Backend 0.28.0 solved a
+Smith-Hazel index `b = P^{-1} G a` from exactly that.
+
+The estimator already holds `Y`, so it can now check itself.
+
+**The rule.** After the engine returns, the per-trait implied heritability
+
+    h2_t = diag(G_hat)_t / stats::var(Y[, t])
+
+is computed on the SAME complete-case rows the fit used, and `h2_t > 1` beyond
+the package's relative covariance tolerance (`ng_cov_tol`, the same convention
+`ng_multitrait_validate_cov_pair()` uses, so the two checks cannot disagree
+about where the boundary is) is a HARD ERROR naming every offending trait, its
+genetic variance, its observed phenotypic variance and its implied `h2`.
+
+**Why that phenotypic variance.** The observed sample variance of the fitted
+data is the one quantity in scope that is not itself a modelling choice -- no
+shrinkage intensity, no PSD projection, no second estimator whose own error
+could excuse or manufacture a violation. It is also never STRICTER than the
+downstream pair guard on the same data: with `shrinkage = "none"` it is exactly
+`diag(P_hat)`, and with `shrinkage = "auto"` the Ledoit-Wolf diagonal is the
+`1/n` sample variance, smaller than this unbiased `1/(n-1)` one. Under
+`Var(g) = G (x) K` the exact model ratio carries a `mean(diag(K))` factor; for
+this package's VanRaden GRM that is ~1 for an outbred panel (measured 0.9955,
+range [0.977, 1.016] over 200 panels) and ~2 for a fully inbred DH/RIL panel, so
+omitting it makes the guard conservative rather than trigger-happy.
+
+**It blocks for `sommer_remml` too.** Three reasons. The rule is a statement
+about the returned matrix, not about the machinery that produced it: an
+impossible variance ratio is impossible whichever engine wrote it.
+`desired_gain` (Pesek-Baker) solves `b = G^{-1} d` and never sees a `P`, so
+`ng_multitrait_validate_cov_pair()` never runs on that route and the estimator's
+self-check is the ONLY place an impossible G is caught before it becomes index
+weights -- exempting the default engine would leave the default route unguarded.
+And measurement supports it rather than contradicting it: over 118 successful
+sommer fits from that same `h2 = 0.5` model (120 attempted, 2 engine errors),
+exactly one violates (implied `h2 = 1.048`), and inspecting that fit shows it had
+assigned `h2 = 0.95` to one trait and `0.065` to another against a truth of 0.5
+for both. It is a fit that did not succeed, not a good fit being refused.
+Blocking rate: 85.5% for `two_stage_ridge` (171/200 datasets), 0.85% for
+`sommer_remml` (1/118). The message says so, and points at
+non-convergence, too few records for the number of traits, or a poorly
+conditioned GRM rather than at the heuristic's variance scale.
+
+**Nothing is rescaled.** `G_hat` is never clamped, divided through by the
+implied `h2`, or projected onto the feasible set. Silently altering a user's
+estimate is how a wrong index becomes untraceable; the caller is given the
+numbers and chooses.
+
+**`ng_estimate_genetic_correlation()` is new**, because the correlation
+structure is the half of `two_stage_ridge` that is estimated acceptably --
+its off-diagonals are the Pearson correlation of the per-trait ridge `beta`
+vectors, and Pearson correlation is invariant to per-trait multiplicative
+shrinkage, so it survives the ridge attenuation that wrecks the diagonal
+(relative Frobenius error mean 0.226, max 0.479 over 200 datasets, against mean
+1.88 and max 19.3 for the covariance). It returns a correlation matrix, which
+has a unit diagonal and therefore makes no claim about genetic variance at all,
+so the `h2 <= 1` check has nothing to test and is not applied. It is not a route
+back to a refused covariance: multiplying it up by any variance reintroduces
+exactly the scale that was refused.
+
+Two new provenance attributes, `phenotypic_variance_observed` and
+`implied_h2_vs_observed_variance`, report what the guard judged whether or not
+it fired. They are NOT the existing `implied_heritability`, which remains an
+independent profile-REML `h2` against the GRM computed only for the
+already-shrunk-input warning.
+
+**The one live caller degrades correctly.** The Shiny frontend's
+`run_cross_prediction_json.R` calls this estimator with no `method` argument, so it takes
+`sommer_remml`, and only as the second rung of its cross-trait covariance ladder when the exact
+within-family columns are absent. That call already turns a failure into the frontend's own
+refusal ("...it is not computed rather than reported as if the traits were uncorrelated"), so a
+refusal there is loud, not silent. Nothing inside this package calls the estimator, so no pipeline
+path is affected.
+
+## `ng_load()` sources only what the package actually contains
+
+`ng_load()` globbed `R/[0-9]*.R` off the filesystem. That is a directory
+listing, not a package manifest, so on a working tree that carries untracked
+files in `R/` it sourced them too -- and it sourced them AFTER the real sources,
+so a colliding definition would have won. This repository's working tree carries
+eleven such legacy prototype scripts whose names collide with the package's own
+numbering (`R/01_relationships.R`, `R/02_duplicate_detection_legacy.R`,
+`R/02b_duplicate_detection.R`, `R/03_ld.R`, `R/04_variance_simple_uc.R`,
+`R/05_pmv.R`, `R/06_build_cross_data.R`, `R/07_optimizers.R`,
+`R/08_select_optimal_parents.R`, `R/09_pmv_cpp.R`, `R/10_marker_effects.R`), so
+every source-loaded dev/test session exercised a different file set from the
+installed package.
+
+`ng_load()` now excludes exactly what `.Rbuildignore` excludes. Dev-load should
+match the BUILT package, and `.Rbuildignore` is the single existing declaration
+of what the built package contains, so deriving the load set from it makes the
+two the same definition instead of two lists that drift. It needs no external
+tooling, unlike a git-tracked-files rule (git is absent from an unpacked
+tarball, a CI image or a copied directory) and unlike a manifest in `load.R`
+(a third list to keep in sync). Verified: the resulting set is exactly the 54
+files a `git archive HEAD` tree contains, and exactly the git-tracked
+`R/[0-9]*.R` set.
+
+A file that SHOULD be loaded and cannot be read is now a loud, named failure.
+This matters more than it sounds: on OneDrive/iCloud "Files On-Demand" a
+cloud-only placeholder OPENS successfully, reports its real size through
+`file.size()`, and then reads as ZERO bytes with no error and no warning, so
+`sys.source()` on one is a silent no-op. `ng_load()` compares the reported size
+against the bytes actually obtained and stops, naming the file and the cause.
+Loading also got faster on such a tree -- 16.2 s to 0.20 s here, all of it
+placeholder I/O that was buying nothing.
+
+## Verification
+
+`tests/` deep harness: 136 PASS / 1 FAIL over 137 scripts. The one failure is
+`alphamate_external`, unchanged and environmental — the untracked
+`external/AlphaMate/binaries/AlphaMate.exe` is a OneDrive placeholder and `sh`
+returns 126, the same cause as the eleven `R/` files seen through the shell
+instead of through R. `tests/pipeline_integration.R` passes (19m59s).
+`testthat`: 80 passed / 0 failed / 1 skipped. Statistical release gate: PASS
+(44/44) against the installed 0.30.0.
+
+## Bit-identity
+
+`tests/estimator_selfguard_bit_identity.R` compares the 0.30.0 tree against a
+pristine 0.29.0 tree (`git archive HEAD` of `7ec06cd`, unpacked to `/tmp`) with
+`identical()` at `tolerance = 0`, on a dataset whose implied `h2` is below 1 on
+every trait. `G_hat`, its `genetic_correlation`, its `genetic_variance` and
+`residual_variance` attributes, `P_hat`, and a full `ng_score_crosses()` run
+under the reduced `ng_load()` file set are all bit-for-bit unchanged.
+
 # nextgenCrossDesign 0.29.0
 
 ## Blocking validity guards for user-supplied covariance matrices

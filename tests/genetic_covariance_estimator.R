@@ -46,6 +46,19 @@ source(helper[file.exists(helper)][[1L]])
 #
 # The estimator's structural guarantees (symmetry, PSD, positive diagonals,
 # provenance attributes) are asserted unconditionally, as before.
+#
+# 0.30.0 UPDATE. The estimator now refuses its own output when the implied
+# per-trait h2 = diag(G_hat) / var(Y[, t]) exceeds 1, so the PUBLIC entry point
+# returns nothing on the reference panel below. Three consequences for this file:
+#
+#   * the refusal is now ASSERTED, message and all, in place of the accepted
+#     G_hat that 0.29.0 went on to inspect;
+#   * the characterisation of the covariance scale runs against the INTERNAL
+#     engine ng_genetic_cov_two_stage_ridge(), so the diagnosis is not lost just
+#     because the public route is closed;
+#   * the correlation-recovery assertion runs through the new public entry point
+#     ng_estimate_genetic_correlation(), which returns the half of this heuristic
+#     that is estimated acceptably and is not subject to the h2 check.
 # ============================================================================
 
 checks <- 0L
@@ -99,12 +112,39 @@ geno <- panel$geno
 Y <- panel$Y
 n <- panel$n
 
-G_hat <- ng_estimate_genetic_covariance(
-  geno = geno, Y = Y,
-  method = "two_stage_ridge",
-  kfold = 5L, seed = 2026L,
-  return_diagnostics = TRUE
-)
+# ============================================================================
+# ASSERTED (0.30.0): the ESTIMATOR ITSELF refuses this G_hat
+# ============================================================================
+# The 0.29.0 finding below -- that (G_hat, P_hat) implies h2 > 1 -- was reported
+# by the downstream pair guard, which only runs when a caller happens to supply
+# both matrices. 0.30.0 moves the objection to where the estimate is made:
+# ng_estimate_genetic_covariance() compares diag(G_hat) against the per-trait
+# sample variance of the complete-case rows it fitted, and refuses. The public
+# entry point therefore returns NOTHING on this panel.
+vp_obs <- apply(Y, 2L, function(col) stats::var(col, na.rm = TRUE))
+selfguard_msg <- tryCatch({
+  suppressWarnings(ng_estimate_genetic_covariance(
+    geno = geno, Y = Y, method = "two_stage_ridge", kfold = 5L, seed = 2026L))
+  NA_character_
+}, error = function(e) conditionMessage(e))
+stopifnot(!is.na(selfguard_msg))
+stopifnot(grepl("IMPOSSIBLE for the data it was fitted to", selfguard_msg, fixed = TRUE))
+stopifnot(grepl("trait_a", selfguard_msg, fixed = TRUE))
+stopifnot(grepl("trait_c", selfguard_msg, fixed = TRUE))
+stopifnot(grepl("ng_estimate_genetic_correlation()", selfguard_msg, fixed = TRUE))
+stopifnot(grepl("sommer_remml", selfguard_msg, fixed = TRUE))
+cat("  self-guard message:", substr(selfguard_msg, 1L, 260L), "...\n")
+ok("ng_estimate_genetic_covariance(two_stage_ridge) REFUSES its own output on this panel")
+
+# The engine behind it is still reachable internally, which is how the rest of
+# this file can go on characterising what the heuristic actually produces. The
+# public estimator is the thing that refuses; the diagnosis does not disappear.
+ts <- ng_genetic_cov_two_stage_ridge(geno, Y, kfold = 5L, seed = 2026L,
+                                     return_diagnostics = TRUE)
+G_hat <- ts$G_hat
+attr(G_hat, "genetic_correlation") <- ng_genetic_cov_to_correlation(G_hat)
+attr(G_hat, "n_used") <- n
+attr(G_hat, "method") <- "two_stage_ridge"
 
 # ============================================================================
 # ASSERTED: structural guarantees -- unconditional, on every input
@@ -131,13 +171,21 @@ ok("G_hat is symmetric PSD with positive diagonals, unit correlation diagonal an
 # deviations above the mean and 25% above the worst case observed. It is a bound
 # on a property that holds, not a threshold fitted to a seed. The assertion runs
 # over 8 independent datasets so a single lucky draw cannot carry it.
+#
+# 0.30.0: routed through ng_estimate_genetic_correlation(), the public entry
+# point added for exactly this purpose. A correlation matrix has a unit diagonal
+# and so makes no claim about genetic variance; the h2 <= 1 guard therefore has
+# nothing to check on it and does not fire, which is what makes this assertion
+# runnable at all now that the covariance route is refused on most of these
+# datasets.
 cor_seeds <- as.integer(seq(3001L, 3008L))
 cor_ratios <- vapply(cor_seeds, function(s) {
   p <- simulate_panel(s)
-  Gh <- ng_estimate_genetic_covariance(p$geno, p$Y, method = "two_stage_ridge",
-                                       kfold = 5L, seed = s)
-  fro_ratio(ng_genetic_cov_to_correlation(matrix(as.numeric(Gh), t_traits, t_traits)),
-            R_true)
+  Rh <- suppressWarnings(ng_estimate_genetic_correlation(
+    p$geno, p$Y, method = "two_stage_ridge", kfold = 5L, seed = s))
+  stopifnot(identical(attr(Rh, "scale"), "correlation"))
+  stopifnot(max(abs(diag(Rh) - 1)) < 1e-12)
+  fro_ratio(matrix(as.numeric(Rh), t_traits, t_traits), R_true)
 }, numeric(1L))
 cat(sprintf("  genetic-correlation recovery over %d independent datasets: %s\n",
             length(cor_seeds), paste(sprintf("%.3f", cor_ratios), collapse = ", ")))
@@ -170,6 +218,34 @@ cat(sprintf("    diag(G_hat) = [%s] vs diag(G_true) = [%s]\n",
 # A collapse ceiling only: three orders of magnitude on the variance scale.
 stopifnot(cov_ratio < 1e3, exp(diag_logratio) < 1e3)
 ok("covariance-scale error is CHARACTERISED and printed, not certified (the 0.5 criterion is withdrawn)")
+
+# ============================================================================
+# ASSERTED (0.30.0): the self-guard is a MAJORITY refusal, not an edge case
+# ============================================================================
+# The point of the guard is that this heuristic's variance scale is unusable in
+# general, not that one unlucky seed is bad. Over the 8 correlation datasets
+# above -- chosen for the correlation assertion, not for this one -- most are
+# refused, and a dataset that IS accepted must have all three implied h2 <= 1.
+selfguard_seeds <- cor_seeds
+selfguard_refused <- vapply(selfguard_seeds, function(s) {
+  p <- simulate_panel(s)
+  refused <- tryCatch({
+    suppressWarnings(ng_estimate_genetic_covariance(
+      p$geno, p$Y, method = "two_stage_ridge", kfold = 5L, seed = s))
+    FALSE
+  }, error = function(e) grepl("IMPOSSIBLE for the data it was fitted to",
+                               conditionMessage(e), fixed = TRUE))
+  # Whatever the verdict, it must agree with the rule applied independently.
+  Rh <- suppressWarnings(ng_estimate_genetic_correlation(
+    p$geno, p$Y, method = "two_stage_ridge", kfold = 5L, seed = s))
+  h2 <- attr(Rh, "implied_h2_vs_observed_variance")
+  stopifnot(identical(refused, any(h2 > 1)))
+  refused
+}, logical(1L))
+cat(sprintf("  self-guard refuses %d of %d datasets (200-dataset reference: 85.5%%)\n",
+            sum(selfguard_refused), length(selfguard_seeds)))
+stopifnot(sum(selfguard_refused) >= length(selfguard_seeds) / 2)
+ok("the self-guard verdict matches diag(G_hat) > var(Y) exactly, and refuses the majority")
 
 # ============================================================================
 # Estimator: phenotypic covariance with Ledoit-Wolf shrinkage -- unchanged

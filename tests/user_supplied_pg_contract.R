@@ -186,6 +186,19 @@ ok("mating-plan summary reports which quantities are unavailable without P")
 # ============================================================================
 # Change 3: already-shrunk-input (BLUP/GEBV) guard
 # ============================================================================
+#
+# 0.30.0. This section inspects a RETURNED G-hat and its provenance attributes,
+# and the two_stage_ridge covariance route now refuses both fixtures below (the
+# phenotype panel implies h2 = 1.44/1.46, the GEBV panel worse). It is therefore
+# routed through ng_estimate_genetic_correlation(), which runs the identical
+# pipeline -- same engine, same shrunk-input guard, same provenance -- and
+# returns the correlation matrix, whose unit diagonal makes no variance claim for
+# the h2 check to object to.
+#
+# The distinction the two guards draw is asserted explicitly first: the
+# already-shrunk-input condition is ADVISORY (a warning, G-hat still returned),
+# while an impossible variance ratio is FATAL. They are different objections and
+# 0.30.0 keeps them that way.
 set.seed(4242)
 # n must clear the guard's min_n = 100; the REML heritability is deliberately
 # not attempted below that because it is too erratic to act on.
@@ -212,12 +225,21 @@ catch_shrunk <- function(expr) {
   any(grepl("ALREADY-SHRUNK", msgs, fixed = TRUE))
 }
 
+# The covariance route is FATAL on this panel; the correlation route is not.
+cov_msg <- tryCatch({
+  suppressWarnings(ng_estimate_genetic_covariance(geno, Y_pheno, method = "two_stage_ridge"))
+  NA_character_
+}, error = function(e) conditionMessage(e))
+stopifnot(!is.na(cov_msg))
+stopifnot(grepl("IMPOSSIBLE for the data it was fitted to", cov_msg, fixed = TRUE))
+ok("an impossible variance ratio is FATAL, unlike the advisory shrunk-input guard below")
+
 G_pheno <- NULL
 fired_pheno <- catch_shrunk(
-  G_pheno <- ng_estimate_genetic_covariance(geno, Y_pheno, method = "two_stage_ridge"))
+  G_pheno <- ng_estimate_genetic_correlation(geno, Y_pheno, method = "two_stage_ridge"))
 G_gebv <- NULL
 fired_gebv <- catch_shrunk(
-  G_gebv <- ng_estimate_genetic_covariance(geno, Y_gebv, method = "two_stage_ridge"))
+  G_gebv <- ng_estimate_genetic_correlation(geno, Y_gebv, method = "two_stage_ridge"))
 cat(sprintf("  guard REML h2: phenotypes = [%s], GEBVs = [%s]\n",
             paste(sprintf("%.4f", attr(G_pheno, "implied_heritability")), collapse = ", "),
             paste(sprintf("%.4f", attr(G_gebv, "implied_heritability")), collapse = ", ")))
@@ -239,7 +261,7 @@ ok("guard fires on GEBV-like Y and stays silent on phenotypes")
 if (requireNamespace("sommer", quietly = TRUE)) {
   G_s <- NULL
   fired_sommer <- catch_shrunk(
-    G_s <- ng_estimate_genetic_covariance(geno, Y_gebv, method = "sommer_remml"))
+    G_s <- ng_estimate_genetic_correlation(geno, Y_gebv, method = "sommer_remml"))
   cat(sprintf("  sommer_remml on GEBVs: guard h2 = [%s], engine residual variance = [%s]\n",
               paste(sprintf("%.4f", attr(G_s, "implied_heritability")), collapse = ", "),
               paste(sprintf("%.2e", attr(G_s, "residual_variance")), collapse = ", ")))
@@ -247,25 +269,30 @@ if (requireNamespace("sommer", quietly = TRUE)) {
   ok("guard fires through the sommer REML engine too")
 }
 
-# The guard is a warning, not an error: G-hat is still returned.
+# The shrunk-input guard is a warning, not an error: the estimate is still returned.
 stopifnot(is.matrix(G_gebv), all(dim(G_gebv) == c(2L, 2L)), all(is.finite(G_gebv)))
-ok("guard warns without erroring -- G-hat is still returned")
+stopifnot(max(abs(diag(G_gebv) - 1)) < 1e-12)
+ok("the shrunk-input guard warns without erroring -- the estimate is still returned")
 
 # Guard is skipped, with a stated reason, when n is too small to act on.
 small_ids <- rownames(geno)[seq_len(60L)]
 G_small <- NULL
 fired_small <- catch_shrunk(
-  G_small <- ng_estimate_genetic_covariance(geno[small_ids, ], Y_gebv[small_ids, ],
-                                            method = "two_stage_ridge"))
+  G_small <- ng_estimate_genetic_correlation(geno[small_ids, ], Y_gebv[small_ids, ],
+                                             method = "two_stage_ridge"))
 stopifnot(isFALSE(fired_small))
 stopifnot(is.na(attr(G_small, "implied_heritability_method")))
 stopifnot(grepl("skipped: n = 60", attr(G_small, "implied_heritability_note"), fixed = TRUE))
 ok("guard is skipped with a stated reason when n is too small")
 
 # Provenance attributes a caller needs to report what this G-hat is.
+# `genetic_correlation` is absent here only because the returned object IS the
+# correlation matrix; 0.30.0 adds phenotypic_variance_observed and
+# implied_h2_vs_observed_variance, the quantities the h2 guard judged.
 required_attrs <- c("method", "requested_method", "formal_variance_component_estimate",
-                    "genetic_correlation", "n_used", "n_markers", "traits",
+                    "n_used", "n_markers", "traits",
                     "y_input_contract", "genetic_variance", "residual_variance",
+                    "phenotypic_variance_observed", "implied_h2_vs_observed_variance",
                     "implied_heritability", "implied_heritability_method",
                     "implied_heritability_note", "reml_genetic_variance",
                     "reml_residual_variance", "shrunk_input_suspected",

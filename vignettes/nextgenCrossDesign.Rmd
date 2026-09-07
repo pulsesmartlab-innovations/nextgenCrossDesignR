@@ -1585,6 +1585,17 @@ G_hat <- ng_estimate_genetic_covariance(
 ) # requires sommer multivariate REML; otherwise supply an externally validated G
 ```
 
+Since 0.30.0 this estimator refuses its own output when the estimate is impossible for the data
+it was fitted to: if any trait's implied heritability `diag(G_hat) / var(Y)` exceeds 1 — genetic
+variance cannot exceed phenotypic variance — the call is an error naming the traits and the
+numbers, rather than a silently rescaled matrix that would propagate into every index weight
+downstream. This applies to both engines, but it is routine for the opt-in
+`method = "two_stage_ridge"` heuristic, whose GBLUP lambda-inversion diagonal is not a calibrated
+genetic variance. If a REML fit is refused, read it as a fit that did not succeed. When only the
+genetic correlation structure is needed — which is the part `two_stage_ridge` estimates
+acceptably — use `ng_estimate_genetic_correlation()`, which returns a correlation matrix and makes
+no claim about genetic variance.
+
 ## Calibration and validation
 
 Compare predicted cross metrics with realized family outcomes (supply your own `realized_families`
@@ -1778,7 +1789,7 @@ This table groups the exported functions so you can find the right entry point.
 | Number of crosses | `ng_optimize_mating_plan_curve()`, `ng_plot_diminishing_returns()` |
 | Priority ranking and workbook output | `ng_rank_cross_priority()`, `ng_cross_priority_summary()`, `ng_plot_priority_score_vs_kinship()`, `ng_cross_priority_workbook_tables()`, `ng_write_cross_priority_workbook()`, `ng_write_crossing_plan_workbook()` (single-trait runs also attach `cross_level` / `cross_upside` / `risk_bin` / `portfolio_profile` columns and a `priority_risk_diagnostics` block automatically) |
 | Calibration and family metrics | `ng_validate_metric_calibration()`, `ng_fit_family_variance_calibrators()`, `ng_apply_family_variance_calibrators()`, `ng_family_metric_registry()`, `ng_family_metric_summary()`, `ng_family_selection_threshold()`, `ng_compare_selected_families()` |
-| Probability and posterior prediction | `ng_p_superior_progeny()`, `ng_p_superior_progeny_multitrait()`, `ng_add_p_superior_progeny()`, `ng_add_p_superior_progeny_multitrait()`, `ng_build_cross_trait_covariance()`, `ng_cross_trait_within_family_cov()`, `ng_expected_excess_above_threshold()`, `ng_posterior_cross_predict()`, `ng_posterior_multitrait_cross_predict()`, `ng_sample_ridge_posterior_bcm()`, `ng_sample_ridge_posterior_mcmc()`, `ng_posterior_genetic_covariance()`, `ng_estimate_genetic_covariance()`, `ng_estimate_phenotypic_covariance()` |
+| Probability and posterior prediction | `ng_p_superior_progeny()`, `ng_p_superior_progeny_multitrait()`, `ng_add_p_superior_progeny()`, `ng_add_p_superior_progeny_multitrait()`, `ng_build_cross_trait_covariance()`, `ng_cross_trait_within_family_cov()`, `ng_expected_excess_above_threshold()`, `ng_posterior_cross_predict()`, `ng_posterior_multitrait_cross_predict()`, `ng_sample_ridge_posterior_bcm()`, `ng_sample_ridge_posterior_mcmc()`, `ng_posterior_genetic_covariance()`, `ng_estimate_genetic_covariance()`, `ng_estimate_genetic_correlation()`, `ng_estimate_phenotypic_covariance()` |
 | Native external-method compatibility | `ng_popvar_style_scores()`, `ng_add_popvar_scores()`, `ng_simplemating_relate_thinning()`, `ng_simplemating_build_crosses()`, `ng_simplemating_past_thinning()`, `ng_simplemating_select_crosses_native()`, `ng_simplemating_style_select()`, `ng_add_simplemating_scores()`, `ng_add_gms_vpm_scores()`, `ng_alphamate_default_executable()`, `ng_run_alphamate()`, `ng_select_alphamate()`, `ng_alphamate_style_select()`, `ng_add_external_baseline_scores()`, `ng_external_methods_needed()` |
 | Policy and validation runners | `ng_frontier_default_policy()`, `ng_frontier_policy_from_spec()`, `ng_frontier_policy_select()`, `ng_multitrait_policy_select()`, `ng_multitrait_validation_scenario()`, `ng_multitrait_validation_default_methods()`, `ng_run_multitrait_validation()`, `ng_run_multitrait_validation_grid()`, `ng_multitrait_crop_validation_scenario()`, `ng_run_multitrait_crop_validation_grid()`, `ng_crop_aware_policy_select()`, `ng_crop_genome_env()`, `ng_crop_genome_scenarios()`, `ng_crop_genome_select()` |
 | Head-to-head reports and frontend metadata | `ng_head_to_head_default_methods()`, `ng_run_head_to_head_benchmark()`, `ng_head_to_head_compare_summary()`, `ng_head_to_head_dashboard_payload()`, `ng_write_head_to_head_dashboard_json()`, `ng_write_head_to_head_visual_report()`, `ng_backend_capability_registry()`, `ng_write_backend_capability_registry_json()` |

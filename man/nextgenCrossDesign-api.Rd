@@ -59,6 +59,7 @@
 \alias{ng_detect_putative_duplicates}
 \alias{ng_build_cross_trait_covariance}
 \alias{ng_cross_trait_within_family_cov}
+\alias{ng_estimate_genetic_correlation}
 \alias{ng_estimate_genetic_covariance}
 \alias{ng_estimate_phenotypic_covariance}
 \alias{ng_posterior_genetic_covariance}
@@ -250,6 +251,27 @@ the supplied \code{Y} shows essentially no residual variation against the GRM,
 and the returned matrix carries provenance attributes
 (\code{method}, \code{formal_variance_component_estimate},
 \code{implied_heritability}, \code{shrunk_input_suspected}, and others).
+
+\code{ng_estimate_genetic_covariance()} additionally REFUSES ITS OWN OUTPUT,
+for both engines, when that output is impossible for the data it was fitted to.
+The returned \eqn{\hat{G}} is compared against the per-trait sample variance of
+the same complete-case rows the fit used, and an implied
+\eqn{h^2 = \mathrm{diag}(\hat{G}) / \mathrm{diag}(\mathrm{var}(Y))} above 1 --
+beyond the package's relative covariance tolerance -- is an error naming the
+traits and the numbers, because \eqn{h^2} is a ratio of a part to the whole and
+cannot exceed 1. Nothing is rescaled, clamped or projected: a silently
+corrected \eqn{\hat{G}} would yield index weights that cannot be traced back to
+anything. The rule is engine-independent because \code{desired_gain} inverts G
+and never sees P, so the pair check above never runs on that route. In practice
+\code{two_stage_ridge} is refused on about 86\% of datasets from a
+\eqn{h^2 = 0.5} simulation and \code{sommer_remml} on under 1\%; a refused REML
+fit should be read as a fit that did not succeed. Where only the genetic
+CORRELATION structure is wanted, \code{ng_estimate_genetic_correlation()}
+returns it: a correlation matrix has a unit diagonal, makes no claim about
+genetic variance, and is the half of \code{two_stage_ridge} that is estimated
+acceptably (relative Frobenius error mean 0.226, max 0.479 over 200 simulated
+datasets). It is not a route back to a refused covariance.
+
 The legacy \code{cross_mean_blend} column is retained for compatibility but is
 now exactly the midpoint of the explicitly selected mean source; it is not an
 uncalibrated phenotype/GEBV interpolation.

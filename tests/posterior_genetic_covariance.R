@@ -45,7 +45,16 @@ rownames(Y) <- ids
 # Sanity: the point estimator runs and gives a PSD G_hat. Use the same seed
 # as the posterior call so the per-trait ridge fits (and therefore lambdas
 # and sigma_g2 diagonals) are identical.
-G_hat <- ng_estimate_genetic_covariance(geno, Y, method = "two_stage_ridge", seed = 42L)
+# 0.30.0: the PUBLIC estimator refuses this fixture -- two_stage_ridge implies
+# h2 = 1.498 for y1 against the observed phenotypic variance, which is the guard
+# working as designed on the same heuristic this file exists to characterise.
+# The invariant under test here (posterior diagonals == point diagonals, because
+# sigma_g2 = sigma_e2 * denom / lambda is hyperparameter-conditional) is a
+# property of the ENGINE, not of the public wrapper, so the point estimate is
+# taken from the engine directly. ng_posterior_genetic_covariance() is likewise
+# unchanged in 0.30.0: it is already gated behind allow_heuristic = TRUE and
+# already warns that it returns heuristic draws.
+G_hat <- ng_genetic_cov_two_stage_ridge(geno, Y, kfold = 5L, seed = 42L)$G_hat
 stopifnot(all(dim(G_hat) == c(t_traits, t_traits)))
 stopifnot(all(eigen(G_hat, only.values = TRUE)$values > -1e-8))
 
