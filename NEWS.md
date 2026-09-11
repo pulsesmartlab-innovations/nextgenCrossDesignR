@@ -1,3 +1,133 @@
+# nextgenCrossDesign 0.31.0
+
+## The workbook never showed which basis, which merit, or which index applied
+
+Three reporting gaps, all found while investigating the mid-parent defect below.
+None was a wrong number; each was a right number that was not shown, or a shown
+number that was not the operative one. That is why an arithmetic test suite
+passed throughout.
+
+**The cross-mean basis was unreportable.** `ng_cpw_scoring_method()` took no
+arguments and emitted a fixed description of the engine, identical for every run.
+`trait_mean_source` was assembled in the runner but reached neither the workbook
+nor `result.json`; the only surviving record sat inside `posterior_predictions`,
+which is absent entirely when `run_posterior_prediction = FALSE`. A 17-trait
+study therefore ran, was delivered and was read before anyone could tell that
+every trait had fallen back to the phenotype mean.
+
+Now: a `Cross-mean basis (this run)` row on `Scoring_Method`, naming the basis
+per trait and explaining only the bases actually used; and a `mean_source` column
+on `effect_summary`, which reaches `result.json` through the app's existing field
+whitelist and sits beside the `cv_predictive_r2` the decision was taken on.
+
+**The ranked merit was absent from every sheet.** `<trait>_value` -- the
+usefulness the plan is ordered by -- was never emitted, so the workbook ranked
+crosses and offered no column explaining the ranking. Now emitted, named for the
+metric that produced it (`<trait>_usefulness` for
+`trait_value_metric = "usefulness"`).
+
+**A single-trait run advertised a multi-trait index.** With the merit column
+missing, `multi_trait_score` was the only score-shaped column on a one-trait
+plan -- a rank-normalised composite of a single trait, not in trait units, and
+not what `Cross_Rank` follows. Breeders read it as a sign of misconfiguration.
+It is now dropped when the run carries fewer than two traits, and unchanged for
+genuine multi-trait runs.
+
+Tests: `workbook_reports_mean_source.R`, `workbook_single_trait_merit.R`,
+`effect_summary_reports_mean_source.R`.
+
+## Deep-harness hygiene
+
+`tests/cross_priority_workbook.R` resolved the package root by checking
+`nextgen_cross_design/` BEFORE the working directory. The tree carries a stale
+0.19.0 copy under exactly that name, so the test silently loaded a package eleven
+versions old and asserted current column names against it -- failing on
+`risk_bin_within_candidate_pool`, which 0.19.0 still called `risk_bin_within_plan`
+(renamed in 0.22.0). Root order now matches `ng_load()`. The test passes.
+
+`mean_source_policy.R` and `statistical_invariants.R` moved to
+`attic/legacy_tests/`. They cover `build_cross_data()` and `VanRadenKin()`, which
+live in untracked prototype files that `.Rbuildignore` excludes and `ng_load()`
+deliberately refuses to source. `tools/run_tests.R` globs `tests/*.R`, so the
+harness ran them and they failed every time on a missing prototype rather than a
+defect -- the worst kind of red test, because it teaches the reader to ignore the
+harness.
+
+## The workbook printed a mid-parent on one basis and a check margin on another
+
+`ng_cross_priority_workbook_tables()` emitted `<trait>_mid_parent_gebv` (opt-in
+via `include_trait_gebv`) but never emitted the plain `<trait>_mean` -- the
+selection-basis mid-parent that `<trait>_vs_check` is computed FROM. The sheet
+therefore could not explain its own check comparison.
+
+The 2026-09 barley delivery shipped exactly that on all 17 traits. For YIELD the
+workbook printed mid-parent `97.013` against check `99.640` -- below it -- while
+reporting `vs_check = +3.840` and `check_ok = TRUE`. Both numbers were correct
+for their own basis; neither column said which basis it was on. A breeder reading
+that sheet reasonably concludes the mid-parents are wrong.
+
+The SELECTION consumed the correct value throughout, so no ranking or plan was
+affected -- this was a display defect only, and the delivered plans were repaired
+by adding the column rather than rerunning.
+
+**The rule.** The selection-basis mid-parent is emitted unconditionally, as
+`<trait>_mid_parent`. Unlike the GEBV column it is not opt-in: a check margin
+with no way to reconcile it is worse than no column at all.
+
+Also recorded here because the codebase nowhere stated it: `<trait>_vs_check` is
+signed so POSITIVE means favourable, which flips the subtraction with direction
+-- `mid_parent - check` for maximize traits, `check - mid_parent` for minimize.
+Verified 8/8 and 9/9 on the delivered traits. A single fixed sign silently
+corrupts the minimize traits while leaving maximize correct, which is close to
+invisible by eye. `tests/workbook_mid_parent_basis.R` pins both directions.
+
+## The GEBV branch of mean selection was unreachable
+
+`ng_choose_mean_source()` gated GEBV-based cross means on
+`effects$reliability_is_calibrated`. `ng_fit_ridge_effects()` returns that flag
+as a literal `FALSE` (and `reliability` as `NA_real_`), deliberately: a
+phenotype cross-validation statistic is not accuracy^2 against true breeding
+value, so reporting one under the name `reliability` would be wrong. That part
+stands and is unchanged.
+
+The consequence was not intended. With the flag never set, `isTRUE(rel_flag)`
+was never true, so the GEBV branch could not be reached by any input. Whenever
+`adjusted_pheno`, `blue` or `blup` was supplied -- which the JSON runner always
+does -- the cross mean silently became the phenotype mid-parent, however well
+the markers predicted, and `min_effect_reliability` became a parameter with no
+effect at any value, `0` included.
+
+Found in production: a 17-trait barley run (101 parents, 5,050 crosses) in which
+every trait reported `mean_source = "adjusted_pheno"`. `<TRAIT>_mean` equalled
+`(pheno_p1 + pheno_p2)/2` to 1.4e-14 for all 17. Because
+`R/51_check_reference.R` deliberately resolves each check onto the same source
+the means used, the check lines were phenotypic too -- self-consistent, but with
+no genomic content on either side of the comparison.
+
+**The rule.** When no calibrated reliability is available, mean selection falls
+back to the statistic that IS available and is honestly named: out-of-sample
+`cv_predictive_r2`, against the new `min_cv_predictive_r2` threshold.
+
+The two thresholds are not interchangeable and are deliberately not shared.
+`cv_predictive_r2` is bounded above by heritability, so for the same model it
+sits BELOW a true reliability; giving it the same `0.35` default therefore
+demands MORE of the markers, not less, and no existing run changes its answer
+unless its markers clear that bar. Lower it deliberately.
+
+`ng_choose_mean_source()` now also returns `mean_source_criterion`
+(`"calibrated_reliability"`, `"cv_predictive_r2"`, `"below_threshold"`,
+`"no_phenotype_fallback"`), because a substitution this consequential should
+never again be invisible in the output.
+
+`min_cv_predictive_r2` is a formal of `ng_score_crosses()` and
+`ng_run_cross_prediction()`, so the JSON runner forwards it from `run_config`
+with no frontend change.
+
+Regression tests: `tests/mean_source_gebv_gate.R` (a fit predicting at
+`cv_predictive_r2 = 0.87` must yield GEBV means) and
+`tests/mean_source_gebv_gate_wiring.R` (the threshold is reachable from
+`ng_score_crosses()` and still refuses the markers when raised).
+
 # nextgenCrossDesign 0.30.0
 
 ## The genetic-covariance estimator refuses its own impossible output

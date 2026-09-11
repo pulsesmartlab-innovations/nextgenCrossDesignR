@@ -41,6 +41,7 @@ ng_score_crosses <- function(geno,
                              parent_type = c("inbred", "dh", "ril"),
                              selection_prop = 0.10,
                              min_effect_reliability = 0.35,
+                             min_cv_predictive_r2 = 0.35,
                              recomb_model = c("haldane", "kosambi"),
                              window_cm = Inf,
                              use_cpp = TRUE,
@@ -154,7 +155,8 @@ ng_score_crosses <- function(geno,
     blue = blue,
     blup = blup,
     ids = ids,
-    min_reliability = min_effect_reliability
+    min_reliability = min_effect_reliability,
+    min_cv_predictive_r2 = min_cv_predictive_r2
   )
   # Reuse a caller-supplied kinship matrix when given (avoids recomputing the O(n^2*m)
   # VanRaden G on identical genotypes across a per-trait scoring loop); else compute it.

@@ -633,7 +633,8 @@ ng_run_cp_output_files <- function(output_dir,
                                    include_trait_gebv = FALSE,
                                    trait_check_reference = NULL,
                                    multi_trait_meta = NULL,
-                                   trait_value_metric = NULL) {
+                                   trait_value_metric = NULL,
+                                   trait_mean_source = NULL) {
   files <- list()
   if (!isTRUE(write_outputs) && !isTRUE(write_figures)) return(files)
   if (is.null(output_dir) || !nzchar(as.character(output_dir[[1L]]))) {
@@ -689,7 +690,9 @@ ng_run_cp_output_files <- function(output_dir,
       figures = figures,
       n_crosses_requested = n_crosses,
       include_trait_gebv = isTRUE(include_trait_gebv),
-      trait_check_reference = trait_check_reference
+      trait_check_reference = trait_check_reference,
+      trait_mean_source = trait_mean_source,
+      trait_value_metric = trait_value_metric
     )
   }
   files
@@ -997,6 +1000,7 @@ ng_cp__stage_predict <- function(ctx) {
       target = target,
       selection_prop = selection_prop,
       min_effect_reliability = min_effect_reliability,
+      min_cv_predictive_r2 = min_cv_predictive_r2,
       recomb_model = recomb_model,
       use_cpp = use_cpp,
       parent_type = parent_type,
@@ -1051,6 +1055,12 @@ ng_cp__stage_predict <- function(ctx) {
         adjusted_pheno = y,
         target = target,
         selection_prop = selection_prop,
+        # NOTE: no min_cv_predictive_r2 here. ng_posterior_cross_predict() does
+        # not select a mean source -- it takes the posterior effect draws it is
+        # given -- so the threshold is meaningless to it and passing it is an
+        # "unused argument" error at run time, not a warning. (It was added here
+        # by a pattern-matched edit that assumed both call sites in this function
+        # were ng_score_crosses(); only the one above is.)
         min_effect_reliability = min_effect_reliability,
         recomb_model = recomb_model,
         use_cpp = use_cpp,
@@ -1193,7 +1203,18 @@ ng_cp__stage_predict <- function(ctx) {
       posterior_effects_list[[trait]] <- item$posterior_effects
       posterior_predictions_list[[trait]] <- item$posterior_scores
     }
-    effect_summary[[j]] <- item$effect_summary
+    # The cross-mean basis rides on effect_summary so it reaches result.json.
+    # `trait_mean_source` is returned at top level too, but the JSON app assembles
+    # result.json from a fixed whitelist of fields and does not pick that up -- and
+    # the app is owned elsewhere. effect_summary IS whitelisted, and the basis
+    # belongs beside cv_predictive_r2 regardless: that number is the evidence, this
+    # is the decision taken on it. See tests/effect_summary_reports_mean_source.R.
+    es_row <- item$effect_summary
+    if (is.data.frame(es_row) && NROW(es_row)) {
+      src <- scored_trait$mean_source[[1L]]
+      es_row$mean_source <- if (is.null(src)) NA_character_ else as.character(src)[[1L]]
+    }
+    effect_summary[[j]] <- es_row
   }
 
   # EXACT within-family cross-trait covariance (multi-trait only): Cov(t, s | cross) = a_t' R a_s,
@@ -1951,7 +1972,8 @@ ng_cp__stage_rank <- function(ctx) {
     include_trait_gebv = include_trait_gebv,
     trait_check_reference = ctx$trait_check_reference,
     multi_trait_meta = ctx$multi_trait_meta,
-    trait_value_metric = ctx$trait_value_metric
+    trait_value_metric = ctx$trait_value_metric,
+    trait_mean_source = ctx$trait_mean_source
   )
   ctx <- ng_ctx_put(
     ctx,
@@ -1995,7 +2017,7 @@ utils::globalVariables(c(
   "map_pos_col", "map_position_unit", "marker_map", "marker_map_std",
   "marker_ploidy", "marker_target_spec", "mate_relatedness", "mate_relatedness_weight",
   "max_crosses_per_parent", "max_pair_kinship", "method_varPMV", "min_crosses_per_parent",
-  "min_effect_reliability", "min_unique_parents", "multi_trait_method", "n_candidates_pre_lethal",
+  "min_cv_predictive_r2", "min_effect_reliability", "min_unique_parents", "multi_trait_method", "n_candidates_pre_lethal",
   "n_crosses", "n_iter", "n_threads", "objective",
   "ocs_iter", "optimizer", "optimizer_method", "output_dir",
   "output_file", "output_files", "parallel_backend", "parallel_cores_used",
@@ -2052,6 +2074,12 @@ ng_cp__assemble_result <- function(ctx) {
       trait_columns = trait_spec$column
     ),
     effect_summary = do.call(rbind, effect_summary),
+    # The per-trait cross-mean basis chosen by ng_choose_mean_source(). Emitted at
+    # top level because the only other record was inside posterior_predictions,
+    # which is absent entirely when run_posterior_prediction = FALSE -- so a run
+    # could finish, be delivered and be read with no way to tell whether the mean
+    # was genomic or phenotypic. See tests/workbook_reports_mean_source.R.
+    trait_mean_source = trait_mean_source,
     marker_effects = effects_list,
     trait_scores = trait_scores,
     posterior_effects = posterior_effects_list,
@@ -2159,6 +2187,7 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
                                     recomb_model = c("haldane", "kosambi"),
                                     selection_prop = 0.10,
                                     min_effect_reliability = 0.35,
+                                    min_cv_predictive_r2 = 0.35,
                                     grm_method = c("vanraden", "yang"),
                                     method_varPMV = c("fast", "full_posterior"),
                                     ril_mode = "infinite",

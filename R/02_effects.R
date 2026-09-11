@@ -198,7 +198,8 @@ ng_choose_mean_source <- function(geno,
                                   blue = NULL,
                                   blup = NULL,
                                   ids = rownames(geno),
-                                  min_reliability = 0.35) {
+                                  min_reliability = 0.35,
+                                  min_cv_predictive_r2 = 0.35) {
   geno <- ng_as_numeric_matrix(geno, "geno")
   ids <- as.character(ids)
   gebv <- setNames(ng_predict_gebv(geno[ids, , drop = FALSE], effects), ids)
@@ -214,7 +215,28 @@ ng_choose_mean_source <- function(geno,
   if (rel_calibrated && is.finite(rel) && rel >= min_reliability) {
     return(list(source = "GEBV", value = gebv, reliability = rel,
                 reliability_is_calibrated = TRUE,
-                cv_predictive_r2 = predictive_r2))
+                cv_predictive_r2 = predictive_r2,
+                mean_source_criterion = "calibrated_reliability"))
+  }
+  # No calibrated reliability. `ng_fit_ridge_effects` deliberately reports none,
+  # because a phenotype cross-validation statistic is not accuracy^2 against true
+  # breeding value -- so gating ONLY on reliability made this branch unreachable
+  # and silently forced the phenotype mid-parent on every run, however well the
+  # markers predicted. Fall back to the statistic that IS available and IS
+  # honestly named: out-of-sample predictive R^2 against the phenotype.
+  #
+  # The two thresholds are NOT interchangeable. cv_predictive_r2 is bounded above
+  # by heritability, so for the same genomic model it sits BELOW a true
+  # reliability; sharing the 0.35 default therefore demands more of the markers
+  # here, not less. Lower it deliberately (and record why) rather than assuming
+  # the numbers mean the same thing.
+  if (is.finite(predictive_r2) && is.finite(min_cv_predictive_r2) &&
+      predictive_r2 >= min_cv_predictive_r2) {
+    return(list(source = "GEBV", value = gebv,
+                reliability = if (rel_calibrated) rel else NA_real_,
+                reliability_is_calibrated = rel_calibrated,
+                cv_predictive_r2 = predictive_r2,
+                mean_source_criterion = "cv_predictive_r2"))
   }
   candidates <- list(BLUP = blup, BLUE = blue, adjusted_pheno = adjusted_pheno)
   for (nm in names(candidates)) {
@@ -223,11 +245,13 @@ ng_choose_mean_source <- function(geno,
       return(list(source = nm, value = setNames(v, ids),
                   reliability = if (rel_calibrated) rel else NA_real_,
                   reliability_is_calibrated = rel_calibrated,
-                  cv_predictive_r2 = predictive_r2))
+                  cv_predictive_r2 = predictive_r2,
+                  mean_source_criterion = "below_threshold"))
     }
   }
   list(source = if (rel_calibrated) "GEBV_low_reliability" else "GEBV_uncalibrated",
        value = gebv, reliability = if (rel_calibrated) rel else NA_real_,
        reliability_is_calibrated = rel_calibrated,
-       cv_predictive_r2 = predictive_r2)
+       cv_predictive_r2 = predictive_r2,
+       mean_source_criterion = "no_phenotype_fallback")
 }

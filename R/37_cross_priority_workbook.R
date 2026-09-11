@@ -135,6 +135,50 @@ ng_cpw_gebv_label <- function(col) {
   sub("_mean_gebv$", "_mid_parent_gebv", col)
 }
 
+# The SELECTION-basis mid-parent, `<trait>_mean` (R/39), relabelled the way a breeder reads it.
+#
+# Unlike the GEBV column above this is NOT opt-in, because `<trait>_vs_check` is computed FROM
+# it: omitting it leaves the sheet unable to explain its own check comparison. The 2026-09
+# barley delivery shipped exactly that -- 17 traits showing only the GEBV mid-parent beside a
+# BLUP-basis vs_check, so for YIELD the sheet printed mid-parent 97.013 against check 99.640,
+# below it, while reporting vs_check = +3.840 and check_ok = TRUE. The two are different bases
+# and neither column said so. See tests/workbook_mid_parent_basis.R.
+#
+# `_mean_gebv` does not end in `_mean`, so the two patterns cannot collide.
+ng_cpw_mean_cols <- function(data) {
+  grep("^.+_mean$", names(data), value = TRUE)
+}
+
+ng_cpw_mean_label <- function(col) {
+  sub("_mean$", "_mid_parent", col)
+}
+
+# A one-trait run has no index to score, so `multi_trait_score` is a
+# rank-normalised composite of a single trait: not in trait units, not the ranked
+# merit, and alarming to a breeder who reasonably reads a "multi trait" column on
+# a single-trait plan as a sign something is misconfigured. Dropped when the run
+# carries fewer than two traits; kept unchanged otherwise.
+ng_cpw_drop_index_score <- function(out, trait_info) {
+  n_traits <- if (is.null(trait_info) || !NROW(trait_info)) 0L else NROW(trait_info)
+  if (n_traits >= 2L) return(out)
+  out[, setdiff(names(out), "multi_trait_score"), drop = FALSE]
+}
+
+# The MERIT the plan is ranked on: `<trait>_value` (R/39), relabelled for the metric
+# that produced it -- `<trait>_usefulness` for trait_value_metric = "usefulness", and so
+# on. Without it the workbook ranks crosses and shows no column explaining the ranking,
+# which is what the 2026-09 barley delivery did: 120 ranked crosses, no merit column,
+# and `multi_trait_score` -- a rank-normalised composite on a ONE-trait run -- as the
+# only score-shaped column on the sheet. See tests/workbook_single_trait_merit.R.
+ng_cpw_value_cols <- function(data) {
+  grep("^.+_value$", names(data), value = TRUE)
+}
+
+ng_cpw_value_label <- function(col, metric = NULL) {
+  m <- if (length(metric) && nzchar(as.character(metric)[[1L]])) as.character(metric)[[1L]] else "value"
+  sub("_value$", paste0("_", m), col)
+}
+
 # Portfolio + risk columns for the workbook, in breeder-reading order: where the cross sits, how
 # much to trust it, and (multi-trait only) which trait is driving that doubt. Returns an empty
 # list when the run carries no portfolio annotation at all.
@@ -218,7 +262,7 @@ ng_cpw_insert_before <- function(df, before, cols) {
 }
 
 ng_cpw_make_selected <- function(crosses, trait_info, parent_use, duplicate_pairs, block_size,
-                                 include_trait_gebv = FALSE) {
+                                 include_trait_gebv = FALSE, trait_value_metric = NULL) {
   crosses <- as.data.frame(crosses, stringsAsFactors = FALSE, check.names = FALSE)
   if (!("priority_rank" %in% names(crosses)) || !("priority_tier" %in% names(crosses))) {
     crosses <- ng_rank_cross_priority(crosses)
@@ -275,6 +319,15 @@ ng_cpw_make_selected <- function(crosses, trait_info, parent_use, duplicate_pair
   trait_cols <- trait_info$column[trait_info$available]
   trait_cols <- trait_cols[trait_cols %in% names(crosses)]
   for (col in trait_cols) out[[col]] <- crosses[[col]]
+  out <- ng_cpw_drop_index_score(out, trait_info)
+  for (col in ng_cpw_value_cols(crosses)) {
+    lbl <- ng_cpw_value_label(col, trait_value_metric)
+    if (!lbl %in% names(out)) out[[lbl]] <- ng_cpw_numeric(crosses[[col]])
+  }
+  for (col in ng_cpw_mean_cols(crosses)) {
+    lbl <- ng_cpw_mean_label(col)
+    if (!lbl %in% names(out)) out[[lbl]] <- ng_cpw_numeric(crosses[[col]])
+  }
   if (isTRUE(include_trait_gebv)) {
     gebv_cols <- ng_cpw_gebv_cols(crosses)
     for (col in gebv_cols) out[[ng_cpw_gebv_label(col)]] <- ng_cpw_numeric(crosses[[col]])
@@ -298,7 +351,8 @@ ng_cpw_make_selected <- function(crosses, trait_info, parent_use, duplicate_pair
   out
 }
 
-ng_cpw_candidate_table <- function(scored, selected, include_trait_gebv = FALSE) {
+ng_cpw_candidate_table <- function(scored, selected, include_trait_gebv = FALSE,
+                                  trait_info = NULL, trait_value_metric = NULL) {
   if (is.null(scored)) return(data.frame())
   scored <- as.data.frame(scored, stringsAsFactors = FALSE, check.names = FALSE)
   if (!nrow(scored)) return(data.frame())
@@ -330,6 +384,15 @@ ng_cpw_candidate_table <- function(scored, selected, include_trait_gebv = FALSE)
             "checks_all_ok", "p_beat_all_checks", "check_violation", "priority_check_component")
   keep <- intersect(unique(keep), names(scored))
   out <- cbind(out, scored[, keep, drop = FALSE])
+  out <- ng_cpw_drop_index_score(out, trait_info)
+  for (col in ng_cpw_value_cols(scored)) {
+    lbl <- ng_cpw_value_label(col, trait_value_metric)
+    if (!lbl %in% names(out)) out[[lbl]] <- ng_cpw_numeric(scored[[col]])
+  }
+  for (col in ng_cpw_mean_cols(scored)) {
+    lbl <- ng_cpw_mean_label(col)
+    if (!lbl %in% names(out)) out[[lbl]] <- ng_cpw_numeric(scored[[col]])
+  }
   if (isTRUE(include_trait_gebv)) {
     gebv_cols <- ng_cpw_gebv_cols(scored)
     for (col in gebv_cols) out[[ng_cpw_gebv_label(col)]] <- ng_cpw_numeric(scored[[col]])
@@ -375,9 +438,41 @@ ng_cpw_dashboard <- function(selected, scored, trait_info, parent_use, duplicate
   )
 }
 
-ng_cpw_scoring_method <- function() {
+# `trait_mean_source` is the per-trait basis chosen by ng_choose_mean_source():
+# "GEBV", or a phenotype fallback ("BLUP" / "BLUE" / "adjusted_pheno"). It decides
+# what `<trait>_mean` IS, and therefore what the ranking and the check comparison
+# mean -- so it belongs on the face of the workbook, not only in result.json. A
+# 2026-09 17-trait delivery silently used the phenotype mean for every trait and
+# nothing in the workbook said so. See tests/workbook_reports_mean_source.R.
+ng_cpw_scoring_method <- function(trait_mean_source = NULL) {
+  basis_row <- NULL
+  if (length(trait_mean_source)) {
+    nm <- names(trait_mean_source)
+    if (is.null(nm)) nm <- rep("", length(trait_mean_source))
+    src <- vapply(trait_mean_source, function(v) as.character(v)[[1L]], character(1))
+    # Group traits by basis so a 17-trait run reads as one or two lines, not 17.
+    parts <- vapply(split(nm, src), function(tr) paste(sort(tr), collapse = ", "), character(1))
+    # Explain ONLY the bases this run actually used. A fixed glossary of every
+    # possible value would put the words "adjusted_pheno" on a GEBV run's sheet,
+    # which is precisely the kind of text a reader mistakes for a statement of
+    # fact about their own run.
+    gloss <- c(
+      GEBV = "GEBV = cross mean predicted from marker effects.",
+      BLUP = "BLUP = cross mean from the parents' BLUPs (shrunken phenotypic values).",
+      BLUE = "BLUE = cross mean from the parents' BLUEs (phenotypic values).",
+      adjusted_pheno = paste("adjusted_pheno = cross mean from the parents'",
+                             "adjusted phenotypic values."))
+    used <- intersect(names(gloss), names(parts))
+    basis_row <- paste0(
+      paste(sprintf("%s: %s", names(parts), parts), collapse = "; "), ". ",
+      paste(gloss[used], collapse = " "),
+      " A phenotypic basis is chosen when the marker model does not predict well",
+      " enough out of sample. This is the basis <trait>_mean and <trait>_vs_check",
+      " are on.")
+  }
   data.frame(
     Section = c(
+      if (!is.null(basis_row)) "Cross-mean basis (this run)",
       "Selection engine",
       "Priority tiering",
       "Evidence columns",
@@ -386,6 +481,7 @@ ng_cpw_scoring_method <- function() {
       "Duplicate and parent-use QC"
     ),
     Details = c(
+      if (!is.null(basis_row)) basis_row,
       "Crosses are ranked from supplied trait directions, trait weights, kinship, threshold penalties, and parent-use constraints.",
       "Priority tiers divide the selected plan into practical execution groups; users can change tier breaks and crossing capacity.",
       "top_favorable_traits and top_risk_traits summarize objective trait evidence from the selected cross table.",
@@ -406,7 +502,9 @@ ng_cross_priority_workbook_tables <- function(crosses,
                                               n_crosses_requested = NULL,
                                               block_size = 10L,
                                               include_trait_gebv = FALSE,
-                                              trait_check_reference = NULL) {
+                                              trait_check_reference = NULL,
+                                              trait_mean_source = NULL,
+                                              trait_value_metric = NULL) {
   crosses <- as.data.frame(crosses, stringsAsFactors = FALSE, check.names = FALSE)
   if (!nrow(crosses)) ng_stop("crosses must contain at least one selected cross")
   if (!all(c("parent1", "parent2") %in% names(crosses))) {
@@ -414,10 +512,11 @@ ng_cross_priority_workbook_tables <- function(crosses,
   }
   trait_info <- ng_cpw_trait_table(trait_directions, crosses)
   selected <- ng_cpw_make_selected(crosses, trait_info, parent_use, duplicate_pairs, block_size,
-                                   include_trait_gebv = include_trait_gebv)
+                                   include_trait_gebv = include_trait_gebv,
+                                   trait_value_metric = trait_value_metric)
   out <- list(
     Dashboard = ng_cpw_dashboard(selected, scored, trait_info, parent_use, duplicate_pairs, n_crosses_requested),
-    Scoring_Method = ng_cpw_scoring_method(),
+    Scoring_Method = ng_cpw_scoring_method(trait_mean_source),
     Trait_Directions = trait_info,
     Selected_All = selected
   )
@@ -430,7 +529,8 @@ ng_cross_priority_workbook_tables <- function(crosses,
     idx <- tolower(selected$priority_tier) == tier
     out[[sheet]] <- selected[idx, , drop = FALSE]
   }
-  out$Candidate_Crosses <- ng_cpw_candidate_table(scored, selected, include_trait_gebv = include_trait_gebv)
+  out$Candidate_Crosses <- ng_cpw_candidate_table(scored, selected, include_trait_gebv = include_trait_gebv,
+                                                 trait_info = trait_info, trait_value_metric = trait_value_metric)
   out$Parent_Use_QC <- if (is.null(parent_use)) data.frame() else as.data.frame(parent_use, stringsAsFactors = FALSE)
   out$Duplicate_QC <- if (is.null(duplicate_pairs)) data.frame() else as.data.frame(duplicate_pairs, stringsAsFactors = FALSE)
   if (!is.null(figures)) out$Figure_Index <- as.data.frame(figures, stringsAsFactors = FALSE)
@@ -477,7 +577,9 @@ ng_write_cross_priority_workbook <- function(output_path,
                                              n_crosses_requested = NULL,
                                              block_size = 10L,
                                              include_trait_gebv = FALSE,
-                                             trait_check_reference = NULL) {
+                                             trait_check_reference = NULL,
+                                             trait_mean_source = NULL,
+                                             trait_value_metric = NULL) {
   if (!requireNamespace("openxlsx", quietly = TRUE)) {
     ng_stop("openxlsx is required to write cross priority workbooks")
   }
@@ -494,7 +596,9 @@ ng_write_cross_priority_workbook <- function(output_path,
     n_crosses_requested = n_crosses_requested,
     block_size = block_size,
     include_trait_gebv = include_trait_gebv,
-    trait_check_reference = trait_check_reference
+    trait_check_reference = trait_check_reference,
+    trait_mean_source = trait_mean_source,
+    trait_value_metric = trait_value_metric
   )
   wb <- openxlsx::createWorkbook(creator = "nextgenCrossDesign")
   for (sheet in names(tables)) {

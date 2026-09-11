@@ -1,8 +1,15 @@
+# Repository root FIRST. This preamble used to check `nextgen_cross_design/`
+# ahead of getwd(), and the working tree carries a stale 0.19.0 copy of the
+# package under exactly that name -- so this test silently loaded a package
+# eleven versions old and asserted current column names against it. It failed on
+# `risk_bin_within_candidate_pool`, which 0.19.0 still called
+# `risk_bin_within_plan` (renamed in 0.22.0). ng_load() already resolves in this
+# order; only this hand-rolled preamble inverted it.
 root_candidates <- c(
-  file.path(getwd(), "nextgen_cross_design"),
   getwd(),
-  file.path("..", "nextgen_cross_design"),
-  file.path("..")
+  file.path(".."),
+  file.path(getwd(), "nextgen_cross_design"),
+  file.path("..", "nextgen_cross_design")
 )
 root_hits <- root_candidates[file.exists(file.path(root_candidates, "R", "load.R"))]
 stopifnot(length(root_hits) > 0L)
