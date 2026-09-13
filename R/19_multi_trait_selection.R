@@ -1,3 +1,36 @@
+# Canonical multi-trait index methods, and the one place they are checked.
+#
+# Exposed as its own function so ng_run_cross_prediction() can reject a bad value
+# at ENTRY. A 2026-09 joint-modelling run spent 2,437 minutes -- 40.6 hours --
+# before failing on multi_trait_method = "smith_hazel": with posteriors enabled
+# the check below is not reached first, and the value survived until match.arg()
+# inside ng_posterior_multitrait_cross_predict() (R/32), which runs only after
+# every per-trait model, all cross scoring and the full posterior draw set. The
+# legal values are known before any data is touched, so they are checked before
+# any data is touched. See tests/multitrait_method_fails_fast.R.
+#
+# The aliases are not accepted, deliberately -- one spelling per method -- but a
+# caller who used one is told which method they meant. "smith_hazel" and
+# "pesek_baker" are the names this package's OWN comments and `source` labels use
+# for economic_index and desired_gain, so they are the obvious things to type.
+ng_multitrait_methods <- function() {
+  c("auto", "weighted", "threshold", "economic_index", "desired_gain")
+}
+
+ng_multitrait_validate_method <- function(method, arg = "multi_trait_method") {
+  m <- trimws(tolower(as.character(method)[[1L]]))
+  methods <- ng_multitrait_methods()
+  if (m %in% methods) return(m)
+  alias <- c(smith_hazel = "economic_index", `smith-hazel` = "economic_index",
+             smithhazel = "economic_index", pesek_baker = "desired_gain",
+             `pesek-baker` = "desired_gain", pesekbaker = "desired_gain")
+  hint <- if (m %in% names(alias)) {
+    paste0(" -- \"", m, "\" is this package's internal label for the ",
+           alias[[m]], " solve, not a value of ", arg, "; use \"", alias[[m]], "\"")
+  } else ""
+  ng_stop(arg, " must be one of: ", paste(methods, collapse = ", "), hint)
+}
+
 ng_multitrait_default_source <- function() {
   "rank_normalized_ocs_framework_2026_05_06"
 }
@@ -942,9 +975,7 @@ ng_add_multitrait_score <- function(scores,
                                     phenotypic_covariance = NULL,
                                     genetic_covariance = NULL,
                                     source = ng_multitrait_default_source()) {
-  method <- trimws(tolower(as.character(method)[[1]]))
-  methods <- c("auto", "weighted", "threshold", "economic_index", "desired_gain")
-  if (!(method %in% methods)) ng_stop("method must be one of: ", paste(methods, collapse = ", "))
+  method <- ng_multitrait_validate_method(method, arg = "method")
   scores <- as.data.frame(scores, stringsAsFactors = FALSE)
   traits <- ng_multitrait_spec(traits)
   if (identical(method, "auto")) {

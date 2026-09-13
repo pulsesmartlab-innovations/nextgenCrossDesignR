@@ -2289,6 +2289,10 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
   # lines) block het as a data error; 'ril' accepts residual het. Legacy
   # assume_inbred is deprecated (reconciled with a one-time warning). Canonicalise
   # once here so the staged config and inner calls carry a single clean value.
+  # Reject an unknown index method HERE, before any modelling. Its legal values do
+  # not depend on the data, and the downstream match.arg() that used to catch it
+  # sits behind the entire posterior pipeline -- 40.6 hours on a real 17-trait run.
+  multi_trait_method <- ng_multitrait_validate_method(multi_trait_method)
   parent_type <- ng_reconcile_parent_type(parent_type, assume_inbred)
   assume_inbred <- NULL
   config$parent_type <- parent_type
