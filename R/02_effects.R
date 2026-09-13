@@ -120,6 +120,23 @@ ng_fit_ridge_effects <- function(geno,
     reliability = NA_real_,
     in_sample_reliability = NA_real_,
     reliability_is_calibrated = FALSE,
+    # WHETHER the cross-validation could run at all, and if not, why.
+    #
+    # ng_ridge_cv_predict() returns NULL when n < 10 (see its guard below), so
+    # cv_predictive_r2 becomes NA, so the cv_predictive_r2 branch of
+    # ng_choose_mean_source() cannot fire, so the phenotype mid-parent is
+    # GUARANTEED regardless of how good the markers are. That is a completely
+    # different situation from a model that was measured and failed, and only the
+    # first is fixable by supplying a training set -- yet an NA reports both
+    # identically. Recording the reason is what lets the advisory channel tell a
+    # breeder which one they are in.
+    n_train = length(y),
+    kfold = kfold,
+    cv_available = !is.null(cv),
+    cv_unavailable_reason = if (!is.null(cv)) NA_character_
+                            else if (length(y) < 10L) "n_lt_10"
+                            else if (kfold < 2L) "kfold_lt_2"
+                            else "unknown",
     cv_predictive_r2 = cv_predictive_r2,
     cv_predictive_correlation = cv_predictive_correlation,
     in_sample_predictive_r2 = in_sample_predictive_r2,
