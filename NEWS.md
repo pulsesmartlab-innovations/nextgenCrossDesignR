@@ -1,3 +1,168 @@
+# nextgenCrossDesign 0.32.0
+
+A breeder reading a delivered 17-trait barley study reported that the mid-parent
+values "were wrong". They were not wrong; they were **unlabelled**. 0.31.0 fixed
+seven defects of that shape. This release covers what that investigation exposed
+and did not fix, and the shape is the same throughout: **a right number that is
+not shown, or a shown number that is not the operative one.** An arithmetic test
+suite passes all of them, and did, for months.
+
+## The engine could reject the marker effects and then use them anyway
+
+Three facts drove this release.
+
+Every genuine within-family variance in this package is a quadratic form in the
+estimated marker effects -- VPM, PMV fast and full-posterior, the phased
+het-parent correction, both polyploid paths. The only marker-free metric is
+`parent_distance`, which the code itself documents as not a variance.
+
+So when `cv_predictive_r2` came back at -0.002, the cross MEAN fell back to the
+phenotypic mid-parent while `usefulness = mid-parent + i * sqrt(PMV)` drew PMV
+straight from the model the engine had just disowned. Half the merit rested on a
+fit the run had rejected, and nothing said so.
+
+And reliability was learned inside the expensive stage and gated on nothing.
+`cv_predictive_r2` is known immediately after the ridge fit, which is cheap; the
+dense O(M^2) kernel, ~4,500 posterior draws and the cross-trait covariance all
+ran unconditionally afterwards. A production run spent **40.6 hours** before
+reporting a configuration error for exactly this reason.
+
+## The reliability gate
+
+Evaluated per trait immediately after the ridge fit, before any cross is scored:
+
+```text
+cv_predictive_r2 unevaluable (n < 10) or negative   -> REFUSE, naming every
+                                                       offending trait and its
+                                                       record count
+0 <= cv_predictive_r2 < min_cv_predictive_r2        -> WARN; cross means fall back
+                                                       to the phenotypic mid-parent
+cv_predictive_r2 >= min_cv_predictive_r2            -> GEBV cross means
+```
+
+Unevaluable means the fit has no cross-validatable basis; negative means it
+predicts measurably worse than the trait mean. Ranking crosses on a variance
+derived from either is not defensible, so the run refuses rather than
+substituting silently.
+
+The refusal applies to every metric whose delivered value contains a
+within-family variance -- `usefulness`, `var_complex`, `pmv`, `vpm`. `mean` and
+`parent_distance` are exempt: the first falls back to phenotype and carries no
+marker content, the second never touches marker effects. Both are honest
+non-genomic analyses, correctly labelled, not loopholes. If any requested trait
+trips the rule the whole run refuses -- in a multi-trait index every trait feeds
+the same score, so dropping one silently redefines the index.
+
+This is a policy gate, not an arithmetic limit. With n < 10 the ridge fit still
+returns a beta; only the cross-validation is unavailable. `effect_gate = "off"`
+disables it for diagnostics.
+
+`ng_preview_marker_effects(config)` runs QC and the marker-effect fits and stops
+before scoring, returning each trait's `cv_predictive_r2` and the verdict the
+gate will reach. It shares the fitting path and the seed with the run it
+previews, so the two cannot disagree -- pinned by a bitwise-identity test rather
+than `all.equal`, because a preview that can disagree with its run is not a
+preview but a second opinion, and the wrong one is worse than none.
+
+## Provenance: every number carries which estimator produced it
+
+`effect_summary` gained `trait_value_metric_resolved`, `variance_column_used`,
+`variance_requires_marker_effects`, `beta_var_available` and
+`mean_source_criterion`. `trait_value_metric = "var_complex"` previously reported
+`"var_complex"` while having computed usefulness on PMV; it now reports what it
+resolved to. `beta_var_available = FALSE` means PMV silently collapsed to VPM,
+which was undetectable before.
+
+The scored table gained a per-row `variance_estimator`. The het-parent correction
+overwrites `vpm`/`pmv` for a subset of rows using a dense kernel that ignores
+`window_cm`, so two rows in one table could come from two estimators
+indistinguishably. The polyploid paths, which answered the same question under
+the name `variance_model`, now emit `variance_estimator` as well -- from a single
+value so the two cannot drift. A consumer that learned one name read NULL on the
+other path and concluded the provenance was missing.
+
+The `Scoring_Method` sheet gained a **within-family variance method** row beside
+the cross-mean basis row: the resolved method and its traits, the statement that
+the variance is marker-derived even where the mean is not, and -- only when rows
+were actually corrected -- the het-correction count and the fact that `window_cm`
+does not apply to them. A spreadsheet outlives the session that produced it.
+
+## posterior_predictions$mean_source lied
+
+`ng_posterior_cross_predict()` scored every draw with `beta_var = 0`, so
+`ng_choose_mean_source()` ran again per draw with no `cv_predictive_r2`
+available, the GEBV branch could not fire, and it recorded `"adjusted_pheno"` --
+describing the posterior draw's basis, not the run's. For six traits
+`<TRAIT>_mean` WAS the GEBV mid-parent to 1e-9 while this field said otherwise,
+and `effect_summary$mean_source` in the same `result.json` said "GEBV". One file,
+two fields, opposite answers. A checker written against the label reported a
+confident FAIL on a run that had succeeded.
+
+## Configuration errors now surface before the expensive work
+
+`uc_variance_source` accepted `parent_distance`/`le` through `match.arg` and then
+hard-errored per trait during scoring, possibly inside a parallel worker where
+the message is mangled or lost. It is now rejected at entry. `"le"` is
+canonicalised to `parent_distance` at config time, with the original spelling
+preserved in `uc_variance_source_input`.
+
+`ng_cheap_cross_screen()` never received `min_cv_predictive_r2` and so ran a
+different effective policy than the runner. Threaded through.
+
+Advisories are emitted from the parent process, after `trait_results` is
+collected. A `warning()` raised inside an `mclapply` fork or a PSOCK worker never
+reaches the parent's calling handlers, so a per-trait advisory emitted during
+fitting would have been a *silent* advisory channel -- the exact defect class
+this work exists to remove.
+
+## Documentation that contradicted the engine
+
+The vignette was wrong in four places at once: it named `var_complex` the default
+(it is `usefulness`); described `pmv`/`vpm` as usefulness criteria when both rank
+on the raw within-family variance with no cross mean in the score; listed
+`uc_variance_source = "le"` as a working setting the engine hard-errors on; and
+claimed `var_complex` falls back to `parent_distance`, which was never in its
+candidate list.
+
+`config_schema.json` -- what a frontend builds a run config from -- was wrong in
+four places of its own, all inside the one blind spot of the existing drift test,
+which checked parameter NAMES and never `allowed` or `default`: the
+`trait_value_metric` default, the offered-but-refused `le`, a `lambda_mating`
+default of 0.02 against an engine default of 0, and `min_cv_predictive_r2` absent
+entirely while the inert `min_effect_reliability` was present -- so a UI could
+expose only the threshold that governs nothing.
+
+**Frontend owners: `uc_variance_source.allowed` narrows from three values to
+two.** A UI offering `"le"` today is offering a run the backend refuses, so this
+removes a broken option rather than a working one, but it is a visible menu
+change.
+
+Both surfaces are now pinned by tests that compare the documentation against
+`formals()` rather than against a fixed list, and the gate's remedies are checked
+against `man/` and `vignettes/` specifically -- `docs/` is `.Rbuildignore`d, so a
+remedy documented only there points an installed user at something they cannot
+read.
+
+## Dead code
+
+`ng_cp__stage_rank()` tested `uc_variance_source` against values that config-time
+canonicalisation and rejection make unreachable, implying that combination was
+supported downstream. Removed, with the two invariants that make the removal safe
+pinned by test. The calibrated-reliability branch in `ng_choose_mean_source()` is
+equally unreachable but is kept as the correct hook for a future PEV-based
+reliability, and is now documented as reserved so `min_effect_reliability` is not
+mistaken for a live knob.
+
+## Explicitly not done
+
+A marker-free within-family variance. The coherent answer to the mean and the
+variance degrading on different evidence is that they should degrade on the same
+evidence -- but no marker-free within-family variance exists in this package, and
+`parent_distance` is explicitly not one. Adding an expected-segregation or
+Mendelian-sampling variance is a new estimator requiring its own validation. This
+release makes the incoherence visible and refusable; it does not silently invent
+a way around it.
+
 # nextgenCrossDesign 0.31.0
 
 ## The workbook never showed which basis, which merit, or which index applied
