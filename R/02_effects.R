@@ -226,6 +226,22 @@ ng_choose_mean_source <- function(geno,
   # A numeric field named `reliability` is not self-authenticating. Require the
   # producer to state explicitly that it is calibrated to prediction-error
   # variance / true breeding-value accuracy before it can gate mean selection.
+  #
+  # RESERVED, NOT LIVE. Nothing in this package sets reliability_is_calibrated =
+  # TRUE: ng_fit_ridge_effects() (:122) and ng_poly_fit_effects() (R/48:93) both
+  # report FALSE by construction, and ng_posterior_cross_predict() (R/30:582)
+  # passes FALSE explicitly. So `rel_calibrated` is always FALSE today and the
+  # branch below it never fires -- every run reaches the cv_predictive_r2 branch.
+  #
+  # It is kept deliberately. It is the correct hook for a genuinely calibrated
+  # reliability (PEV-based, accuracy^2 against true breeding value) arriving from
+  # a mixed-model fit or an external source, and `min_reliability` is its
+  # threshold -- which is why min_reliability and min_cv_predictive_r2 are two
+  # separate parameters on different scales rather than one.
+  #
+  # Do not mistake this for live logic: tuning `min_reliability` changes nothing
+  # about any run this package can currently produce. `min_cv_predictive_r2` is
+  # the knob that governs mean selection today.
   rel_calibrated <- isTRUE(rel_flag) && is.finite(rel)
   predictive_r2 <- suppressWarnings(as.numeric(effects$cv_predictive_r2))
   if (length(predictive_r2) != 1L || !is.finite(predictive_r2)) predictive_r2 <- NA_real_

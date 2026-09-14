@@ -1898,12 +1898,17 @@ ng_cp__stage_rank <- function(ctx) {
   priority_risk_diagnostics <- NULL
   traits_clean <- vapply(trait_spec$trait, ng_run_cp_clean_trait_name, character(1L),
                          USE.NAMES = FALSE)
-  # The merit's sqrt(X) term is effect-based (i.e. draws on marker-effect estimation error,
-  # not just the mid-parent mean) for every metric except mean/parent_distance, and for
-  # usefulness only when its variance source isn't the effect-free parent_distance proxy.
-  effect_based_x <- !(trait_value_metric %in% c("mean", "parent_distance", "le")) &&
-    !(identical(trait_value_metric, "usefulness") &&
-      uc_variance_source %in% c("parent_distance", "le"))
+  # The merit's sqrt(X) term is effect-based (i.e. draws on marker-effect estimation
+  # error, not just the mid-parent mean) for every metric except mean and
+  # parent_distance -- the two the reliability gate exempts, for the same reason.
+  #
+  # This used to also test uc_variance_source against parent_distance/"le". Both were
+  # unreachable: ng_cp__build_ctx() canonicalises "le" -> "parent_distance" and
+  # hard-errors on the usefulness + parent_distance pair before any stage runs, so a
+  # stage only ever sees resolved tokens. The branch quietly implied that combination
+  # was supported here, which is the opposite of what the engine does.
+  # tests/resolved_tokens_reach_the_stages.R pins both invariants.
+  effect_based_x <- !(trait_value_metric %in% c("mean", "parent_distance"))
   lvl_cols <- paste0(traits_clean, "_mean_gebv")
   vpm_cols <- paste0(traits_clean, "_vpm")
   pev_cols <- paste0(traits_clean, "_midparent_pev")
