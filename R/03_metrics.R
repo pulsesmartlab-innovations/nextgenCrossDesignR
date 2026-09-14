@@ -77,7 +77,23 @@ ng_score_crosses <- function(geno,
   if (length(intercept_input) != 1L || !is.finite(intercept_input)) {
     ng_stop("effects$intercept must be one finite number")
   }
+  # An ABSENT beta_var makes PMV algebraically identical to VPM -- the marker-effect
+  # uncertainty term is all zeros -- while the column is still reported as `pmv`.
+  # That is a legitimate quantity but must not be indistinguishable from a PMV that
+  # carries real effect uncertainty, so the provenance is recorded and the surprise
+  # case is announced.
+  #
+  # A SUPPLIED all-zero beta_var is deliberately silent: R/30_posterior_prediction.R
+  # passes explicit zeros per draw because the effect uncertainty is carried by the
+  # draws themselves, and warning there would train users to ignore the warning that
+  # matters.
+  beta_var_source <- "supplied"
   if (is.null(effects$beta_var)) {
+    beta_var_source <- "absent_zero_filled"
+    warning("effects$beta_var is NULL: PMV is computed with zero marker-effect ",
+            "uncertainty and is numerically identical to VPM. The reported `pmv` ",
+            "column is a degenerate PMV (see the pmv_is_degenerate column).",
+            call. = FALSE)
     beta_var_input <- stats::setNames(rep(0, ncol(geno)), colnames(geno))
   } else {
     if (is.null(names(effects$beta_var)) || anyDuplicated(names(effects$beta_var))) {
@@ -259,12 +275,14 @@ ng_score_crosses <- function(geno,
   # of het-parent crosses with the exact phased-haplotype variance
   # (ng_gms_additive_var_general). Inbred-parent crosses and the no-phase / DH /
   # inbred paths are untouched.
+  het_corrected <- rep(FALSE, nrow(pairs))
   if (identical(parent_type, "ril") && !is.null(phased_haplotypes)) {
     corr <- ng_apply_het_parent_correction(
       dh_var, dh_pmv, dh_pmv_full, phased_haplotypes, sorted, pairs,
       target = target, recomb_model = recomb_model,
       beta_var = sorted$beta_var, beta_cov_full = posterior_cov_full)
     dh_var <- corr$vpm; dh_pmv <- corr$pmv; dh_pmv_full <- corr$pmv_full
+    het_corrected <- corr$corrected
   }
   effect_rel <- suppressWarnings(as.numeric(mean_source$reliability[[1L]]))
   if (!is.finite(effect_rel)) effect_rel <- NA_real_
@@ -309,6 +327,26 @@ ng_score_crosses <- function(geno,
   } else {
     out$pmv_full_posterior <- NA_real_
   }
+  # PER-ROW ESTIMATOR PROVENANCE.
+  #
+  # The het-parent correction above replaces vpm/pmv for a SUBSET of rows using a
+  # different kernel (ng_gms_additive_var_general) that is dense and to which
+  # window_cm does not apply. Without these columns, two rows in the same table can
+  # carry variances from two estimators under two truncation regimes with nothing
+  # to tell them apart -- a breeder comparing them is comparing incomparable
+  # numbers and cannot know it. The polyploid scorer already does this correctly
+  # with its per-row `variance_model` column (R/46); this brings the diploid path
+  # into line.
+  base_estimator <- if (!is.null(posterior_cov_full)) "dh_recomb_full_posterior" else "dh_recomb_aRa"
+  out$variance_estimator <- ifelse(het_corrected, "phased_het_general", base_estimator)
+  # The window ACTUALLY applied to this row, not the run's nominal setting.
+  out$variance_window_cm <- ifelse(het_corrected, Inf, as.numeric(window_cm))
+  # TRUE means the pmv column carries no marker-effect uncertainty and is therefore
+  # numerically identical to vpm. Legitimate (the posterior path does it on purpose)
+  # but it must be visible.
+  out$beta_var_source <- beta_var_source
+  out$pmv_is_degenerate <- !any(as.numeric(beta_var_input) > 0)
+  attr(out, "variance_estimator_counts") <- table(out$variance_estimator)
   # Usefulness criteria are mu + i * sigma in genetic-value units. Two
   # variance choices (VPM = vpm; PMV = pmv) crossed with four
   # mean sources. Pre-v0.1.0 columns usefulness_pmv_scaled, uc_gated, uc_hybrid (and
@@ -898,6 +936,11 @@ ng_apply_het_parent_correction <- function(vpm, pmv, pmv_full,
   beta <- sorted$effects[markers]
   bc_diag <- diag(as.numeric(beta_var[markers]), length(markers)); dimnames(bc_diag) <- list(markers, markers)
   bc_full <- if (!is.null(beta_cov_full)) beta_cov_full[markers, markers, drop = FALSE] else NULL
+  # `corrected` is the point of this vector: these rows carry a variance from a
+  # DIFFERENT estimator (ng_gms_additive_var_general, dense, window_cm does not
+  # apply) than every other row in the same table. Returning it is what lets the
+  # caller label the rows instead of silently mixing two estimators.
+  corrected <- rep(FALSE, nrow(pairs))
   for (i in seq_len(nrow(pairs))) {
     p1 <- as.character(pairs$parent1[i]); p2 <- as.character(pairs$parent2[i])
     if ((het_of(p1) || het_of(p2)) && p1 %in% ids_ph && p2 %in% ids_ph) {
@@ -906,7 +949,8 @@ ng_apply_het_parent_correction <- function(vpm, pmv, pmv_full,
       if (!is.null(bc_full) && !is.null(pmv_full)) {
         pmv_full[i] <- ng_gms_additive_var_general(p1, p2, hap_rows, beta, R, beta_cov = bc_full, target = target)[["PMV"]]
       }
+      corrected[i] <- TRUE
     }
   }
-  list(vpm = vpm, pmv = pmv, pmv_full = pmv_full)
+  list(vpm = vpm, pmv = pmv, pmv_full = pmv_full, corrected = corrected)
 }
