@@ -912,6 +912,48 @@ ng_cp__stage_qc <- function(ctx) {
   ctx
 }
 
+# The cheap marker-effect pass: fit only, retain nothing marker-sized.
+#
+# Shared verbatim by the in-run reliability gate and ng_preview_marker_effects(),
+# which is the entire reason the preview is trustworthy. A preview that fitted
+# separately could drift from the run -- a different seed, a different training
+# augmentation, a different pruned marker set -- and a preview that can disagree
+# with its run is a second opinion, not a preview.
+#
+# It never requests return_beta_cov_full and keeps no beta, so it does not hold T
+# dense m x m matrices (4.9 GB at m = 6000, T = 17) the way a "fit all then score
+# all" restructure would. Cost is O(n^2 m + n^3) plus k folds -- noise against the
+# scoring it guards.
+ng_cp__fit_trait_effects <- function(trait_spec, pheno, geno, ids, training_set, seed) {
+  rows <- lapply(seq_len(nrow(trait_spec)), function(i) {
+    column <- trait_spec$column[[i]]
+    if (!(column %in% names(pheno))) return(NULL)
+    y0 <- suppressWarnings(as.numeric(pheno[[column]])); names(y0) <- rownames(pheno)
+    if (sum(is.finite(y0)) < 2L) return(NULL)
+    # The SAME training augmentation the real pass performs, so the fit it reports
+    # is the fit the run will get.
+    fg <- geno; fy <- y0; fi <- ids
+    if (!is.null(training_set)) {
+      tr <- suppressWarnings(as.numeric(training_set$pheno[[column]]))
+      names(tr) <- training_set$ids
+      keep <- is.finite(tr)
+      if (any(keep)) {
+        fg <- rbind(geno, training_set$geno[keep, , drop = FALSE])
+        fy <- c(y0, tr[keep]); fi <- c(ids, training_set$ids[keep])
+      }
+    }
+    f <- ng_fit_ridge_effects(geno = fg, y = fy, ids = fi, seed = seed,
+                              return_beta_cov_full = FALSE)
+    data.frame(trait = trait_spec$trait[[i]],
+               cv_predictive_r2 = f$cv_predictive_r2,
+               cv_available = isTRUE(f$cv_available),
+               cv_unavailable_reason = as.character(f$cv_unavailable_reason %||% NA_character_),
+               marker_effect_training_n = as.integer(length(fi)),
+               stringsAsFactors = FALSE)
+  })
+  do.call(rbind, rows[!vapply(rows, is.null, logical(1))])
+}
+
 ng_cp__stage_predict <- function(ctx) {
   list2env(ctx, environment())
   # Optional LD pruning of the marker matrix (same capability as ng_design_crosses): drop
@@ -1223,31 +1265,7 @@ ng_cp__stage_predict <- function(ctx) {
   # the same geno, the same training augmentation and the same seed as
   # run_trait_job, so the cv_predictive_r2 it reports is the one that run will get.
   if (!identical(effect_gate, "off")) {
-    pre_rows <- lapply(seq_len(nrow(trait_spec)), function(i) {
-      column <- trait_spec$column[[i]]
-      if (!(column %in% names(pheno))) return(NULL)
-      y0 <- suppressWarnings(as.numeric(pheno[[column]])); names(y0) <- rownames(pheno)
-      if (sum(is.finite(y0)) < 2L) return(NULL)
-      fg <- geno; fy <- y0; fi <- ids
-      if (!is.null(training_set)) {
-        tr <- suppressWarnings(as.numeric(training_set$pheno[[column]]))
-        names(tr) <- training_set$ids
-        keep <- is.finite(tr)
-        if (any(keep)) {
-          fg <- rbind(geno, training_set$geno[keep, , drop = FALSE])
-          fy <- c(y0, tr[keep]); fi <- c(ids, training_set$ids[keep])
-        }
-      }
-      f <- ng_fit_ridge_effects(geno = fg, y = fy, ids = fi, seed = seed,
-                                return_beta_cov_full = FALSE)
-      data.frame(trait = trait_spec$trait[[i]],
-                 cv_predictive_r2 = f$cv_predictive_r2,
-                 cv_available = isTRUE(f$cv_available),
-                 cv_unavailable_reason = as.character(f$cv_unavailable_reason %||% NA_character_),
-                 marker_effect_training_n = as.integer(length(fi)),
-                 stringsAsFactors = FALSE)
-    })
-    pre_rows <- do.call(rbind, pre_rows[!vapply(pre_rows, is.null, logical(1))])
+    pre_rows <- ng_cp__fit_trait_effects(trait_spec, pheno, geno, ids, training_set, seed)
     if (!is.null(pre_rows) && nrow(pre_rows)) {
       gate_thresh <- if (is.null(effect_gate_min_cv_predictive_r2)) min_cv_predictive_r2
                      else effect_gate_min_cv_predictive_r2
