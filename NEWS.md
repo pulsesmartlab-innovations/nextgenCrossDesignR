@@ -57,6 +57,13 @@ This is a policy gate, not an arithmetic limit. With n < 10 the ridge fit still
 returns a beta; only the cross-validation is unavailable. `effect_gate = "off"`
 disables it for diagnostics.
 
+The gate **refuses**; it does not pause. A staged run (`ng_run_stage()`) that
+trips it fails the `predict` stage rather than parking in an acknowledgeable
+state, and the 5-stage contract is unchanged. Use
+`ng_preview_marker_effects()` to decide whether to launch, and fix the
+configuration or the training set before launching -- there is no
+"proceed anyway" acknowledgement.
+
 `ng_preview_marker_effects(config)` runs QC and the marker-effect fits and stops
 before scoring, returning each trait's `cv_predictive_r2` and the verdict the
 gate will reach. It shares the fitting path and the seed with the run it
