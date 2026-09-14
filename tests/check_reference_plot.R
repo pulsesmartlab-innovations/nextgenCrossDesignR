@@ -305,7 +305,14 @@ stopifnot(is.null(ng_plot_check_panels(scored_mt, NULL, output_path = p2)))
 # (+0.688) by about 20% of the axis span. That gap is exactly what this test now catches.
 # ---------------------------------------------------------------------------
 set.seed(11)
-n_p <- 12L; n_m <- 40L
+# yield used to be rnorm(n_p, 10, 2): pure noise, unrelated to the markers, on a
+# 12-line panel. The reliability gate refuses that -- rightly, since the default
+# trait_value_metric ("usefulness") ranks on a marker-derived variance. This test is
+# about where a check line is DRAWN, not about marker quality, so the phenotype is now
+# marker-driven and the panel large enough to cross-validate. The yield scale is held
+# at mean 10 / sd 2 on purpose: the check taus below (11.5, 9.25) are stated on that
+# scale, and rescaling the trait would silently move them relative to the candidates.
+n_p <- 60L; n_m <- 40L
 ids <- paste0("P", seq_len(n_p))
 markers <- paste0("m", seq_len(n_m))
 gm <- matrix(2L * rbinom(n_p * n_m, 1, 0.4), nrow = n_p, dimnames = list(ids, markers))
@@ -315,7 +322,11 @@ marker_map <- data.frame(marker = markers, chr = rep(1:4, length.out = n_m),
                          stringsAsFactors = FALSE)
 rp_direction <- data.frame(trait = "yield", column = "yield", direction = "increase",
                           stringsAsFactors = FALSE)
-rp_pheno <- data.frame(id = ids, yield = rnorm(n_p, 10, 2), stringsAsFactors = FALSE)
+rp_gv <- as.numeric(gm[, 1:8] %*% rnorm(8L, 0, 1))
+rp_pheno <- data.frame(
+  id = ids,
+  yield = 10 + 2 * as.numeric(scale(rp_gv + rnorm(n_p, 0, 0.2 * stats::sd(rp_gv)))),
+  stringsAsFactors = FALSE)
 rp_chk <- matrix(2L * rbinom(2 * n_m, 1, 0.4), nrow = 2,
                  dimnames = list(c("CHK_A", "CHK_B"), markers))
 rp_chk_records <- list(yield = list(adjusted_pheno = c(CHK_A = 11.5, CHK_B = 9.25)))
@@ -368,7 +379,22 @@ rp_r <- rank(rp_x, ties.method = "average")
 rp_p <- (rp_r - 0.5) / length(rp_r)
 rp_out <- stats::qnorm(rp_p)
 rp_mu <- mean(rp_out); rp_sd <- stats::sd(rp_out)
-rp_p_check <- (sum(rp_x <= 11.5) + 0.5) / length(rp_x)
+# The tau must be the RESOLVED one, not the raw 11.5 supplied in rp_chk_records.
+# ng_check_reference_value() puts the check on whatever basis produced the cross means,
+# and this fixture now earns GEBV means, so the check is resolved to a GEBV-basis value
+# (~9.97) rather than its phenotypic one. Comparing yield_mean against the raw 11.5 is
+# precisely the defect the 0.31.0 work was about: a check on one basis held against
+# means on another. Hardcoding 11.5 was only correct while this fixture was too small
+# to earn genomic means.
+#
+# Taking the tau from the result is not restating the implementation: the axis
+# arithmetic below (rank -> qnorm -> standardise) is still hand-rolled, and the tau is
+# an INPUT to that placement, not its output.
+stopifnot(identical(unname(rp_res$trait_check_reference$source[["yield"]]),
+                    unname(rp_res$effect_summary$mean_source[[1L]])))
+rp_tau <- rp_res$trait_check_reference$values$yield[["CHK_A"]]
+stopifnot(is.finite(rp_tau))
+rp_p_check <- (sum(rp_x <= rp_tau) + 0.5) / length(rp_x)
 rp_indep <- (stats::qnorm(rp_p_check) - rp_mu) / rp_sd
 stopifnot(abs(rp_cl - rp_indep) < 1e-8)
 

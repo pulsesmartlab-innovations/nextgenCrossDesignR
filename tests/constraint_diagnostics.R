@@ -11,11 +11,17 @@ helper <- c(file.path("tests", "helper_load.R"), "helper_load.R",
 source(helper[file.exists(helper)][[1L]])
 
 set.seed(11)
-n <- 18L; m <- 90L
+# Fixture sized so the marker model can actually be cross-validated. It used to be
+# n = 18 with m = 90 and every marker given a tiny effect, which is a panel no ridge
+# fit can predict: the reliability gate correctly refuses it. The test is about constraint diagnostics,
+# not about weak markers, so the fixture now carries real signal -- 10 causal markers
+# and noise at a fifth of the genetic SD -- and clears the gate on its merits.
+n <- 60L; m <- 90L
 ids <- sprintf("P%02d", seq_len(n))
 gm  <- matrix(2L * rbinom(n * m, 1, 0.5), n, m,
               dimnames = list(ids, sprintf("M%03d", seq_len(m))))
-y   <- as.numeric(gm %*% rnorm(m, 0, 0.1)) + rnorm(n)
+gv  <- as.numeric(gm %*% c(rnorm(10L, 0, 1), rep(0, m - 10L)))
+y   <- gv + rnorm(n, 0, 0.15 * stats::sd(gv))
 genotype  <- data.frame(NAME = ids, gm, check.names = FALSE, stringsAsFactors = FALSE)
 phenotype <- data.frame(NAME = ids, yield = y, stringsAsFactors = FALSE)
 runmm     <- data.frame(SNP_code = colnames(gm), Chromosome = rep(1:3, length.out = m),

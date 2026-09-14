@@ -9,14 +9,20 @@ helper <- c(file.path("tests", "helper_load.R"), "helper_load.R",
 source(helper[file.exists(helper)][[1L]])
 
 set.seed(515)
-n <- 18L
+# n was 18 against 18 markers with noise at ~1.5x the genetic SD -- a panel the ridge
+# fit cannot cross-validate, which the reliability gate correctly refuses. This test is
+# about LD pruning and marker exposure, not about weak markers, so the panel is enlarged
+# and the noise reduced; the duplicate-marker structure that the test actually measures
+# is untouched.
+n <- 60L
 base <- 12L; dup <- 6L
 G <- matrix(2L * rbinom(n * base, 1, 0.5), n, base)
 gm <- cbind(G, G[, seq_len(dup), drop = FALSE])         # 6 exact-copy markers -> r2 = 1
 colnames(gm) <- sprintf("M%02d", seq_len(ncol(gm)))
 ids <- sprintf("P%02d", seq_len(n)); rownames(gm) <- ids
 beta <- rnorm(base, 0, 0.2)
-y <- as.numeric(G %*% beta) + rnorm(n)
+gv <- as.numeric(G %*% beta)
+y <- gv + rnorm(n, 0, 0.15 * stats::sd(gv))
 genotype  <- data.frame(NAME = ids, gm, check.names = FALSE, stringsAsFactors = FALSE)
 phenotype <- data.frame(NAME = ids, yield = y, stringsAsFactors = FALSE)
 mm <- data.frame(SNP_code = colnames(gm), Chromosome = 1L,
