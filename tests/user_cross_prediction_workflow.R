@@ -21,31 +21,51 @@ make_small_cross_prediction_files <- function() {
   tmp <- tempfile("ng_user_cross_prediction_")
   dir.create(tmp, recursive = TRUE)
 
-  ids <- c("P01", "P02", "P02_copy", "P03", "P04", "P05", "P06")
-  geno <- data.frame(
-    NAME = ids,
-    M01 = c(0, 0, 0, 2, 2, 0, 2),
-    M02 = c(0, 2, 2, 0, 2, 0, 2),
-    M03 = c(2, 0, 0, 2, 0, 2, 0),
-    M04 = c(2, 2, 2, 0, 0, 2, 0),
-    M05 = c(0, 0, 0, 2, 0, 2, 2),
-    M06 = c(2, 0, 0, 0, 2, 2, 0),
-    M07 = c(0, 2, 2, 2, 0, 0, 2),
-    M08 = c(2, 2, 2, 0, 2, 0, 0),
-    check.names = FALSE
-  )
+  # A seven-line panel cannot support a genomic prediction: with fewer than ten
+  # genotyped-and-phenotyped records the cross-validation cannot run at all, so
+  # cv_predictive_r2 is unevaluable and the reliability gate refuses the run. That
+  # refusal is correct -- this fixture was demonstrating a workflow on a panel the
+  # engine considers too small to draw genomic conclusions from.
+  #
+  # It is generated rather than hand-written so the panel can be a realistic size while
+  # the file stays readable. The structure the test actually depends on is preserved
+  # exactly: P02_copy is a byte-identical duplicate of P02 in BOTH genotype and
+  # phenotype (so QC must detect and remove it), and yield/disease keep their opposite
+  # selection directions and their original scales.
+  #
+  # 20 markers, not the original 8. With 8 biallelic markers there are only 256 distinct
+  # genotypes, so a 60-line panel collides by chance and QC then removes several lines
+  # rather than the one planted duplicate -- the assertion below is that P02_copy and
+  # ONLY P02_copy is removed. duplicate_min_compared_markers = 8 is a floor and is still
+  # satisfied.
+  set.seed(4242L)
+  n_lines <- 60L
+  ids <- c(sprintf("P%02d", seq_len(n_lines)), "P02_copy")
+  n_mk <- 20L
+  gm <- matrix(2L * rbinom(n_lines * n_mk, 1L, 0.5), nrow = n_lines,
+               dimnames = list(sprintf("P%02d", seq_len(n_lines)),
+                               paste0("M", sprintf("%02d", seq_len(n_mk)))))
+  stopifnot(!anyDuplicated(apply(gm, 1L, paste, collapse = "")))   # only P02_copy duplicates
+  gv_y <- as.numeric(gm %*% c(1.2, -0.9, 0.7, 0, 1.0, 0, -0.6, rep(0, n_mk - 7L)))
+  gv_d <- as.numeric(gm %*% c(-0.5, 0.8, 0, 0.9, 0, -1.1, 0, 0.6, rep(0, n_mk - 8L)))
+  yield_v   <- 60 + 5 * as.numeric(scale(gv_y + rnorm(n_lines, 0, 0.2 * stats::sd(gv_y))))
+  disease_v <- 4  + 1 * as.numeric(scale(gv_d + rnorm(n_lines, 0, 0.2 * stats::sd(gv_d))))
+
+  dup <- 2L                                   # P02_copy duplicates P02 exactly
+  geno <- data.frame(NAME = ids, rbind(gm, gm[dup, , drop = FALSE]),
+                     check.names = FALSE, stringsAsFactors = FALSE)
   phenotype <- data.frame(
     NAME = ids,
-    yield = c(58, 61, 61, 53, 67, 55, 64),
-    disease = c(4.0, 3.1, 3.1, 5.2, 2.6, 4.6, 2.9),
+    yield = c(yield_v, yield_v[[dup]]),
+    disease = c(disease_v, disease_v[[dup]]),
     stringsAsFactors = FALSE
   )
   phenotype$selection_index <- as.numeric(scale(phenotype$yield)) -
     as.numeric(scale(phenotype$disease))
   marker_map <- data.frame(
-    SNP_code = paste0("M", sprintf("%02d", 1:8)),
-    Chromosome = c(1, 1, 1, 1, 2, 2, 2, 2),
-    Position_BP = c(0, 1, 2, 3, 0, 1, 2, 3) * 1e6,
+    SNP_code = paste0("M", sprintf("%02d", seq_len(n_mk))),
+    Chromosome = rep(1:2, each = n_mk / 2L),
+    Position_BP = rep(seq_len(n_mk / 2L) - 1L, 2) * 1e6,
     stringsAsFactors = FALSE
   )
   direction <- data.frame(
