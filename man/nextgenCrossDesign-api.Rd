@@ -189,7 +189,43 @@ conversion.
 
 Ridge \code{cv_predictive_r2} is out-of-fold phenotype predictive ability, not
 breeding-value reliability or accuracy squared. Native fits therefore report
-uncalibrated reliability as missing. Formal \code{economic_index} scoring
+uncalibrated reliability as missing. \code{min_effect_reliability} is the
+threshold for the calibrated-reliability branch and is reserved: nothing in
+this package sets a calibrated reliability, so it governs no run today.
+\code{min_cv_predictive_r2} is the threshold that governs mean selection.
+
+A marker-effect reliability gate is evaluated per trait immediately after the
+ridge fit, before any cross is scored. An unevaluable \code{cv_predictive_r2}
+(fewer than the cross-validation minimum of ten genotyped and phenotyped
+records) or a negative one refuses the run, naming every offending trait and
+its record count: the first has no cross-validatable basis, the second predicts
+measurably worse than the trait mean, and ranking crosses on a within-family
+variance derived from either is not defensible. Between zero and
+\code{min_cv_predictive_r2} the run proceeds with a warning and the cross mean
+falls back to the phenotypic mid-parent while the within-family variance
+remains marker-derived; \code{effect_summary} reports both bases so that
+asymmetry is visible rather than implied. At or above the threshold, cross
+means are GEBVs.
+
+The refusal applies to every metric whose delivered value contains a
+within-family variance -- \code{usefulness}, \code{var_complex}, \code{pmv},
+\code{vpm} -- because every within-family variance in this package is a
+quadratic form in the estimated marker effects. \code{mean} and
+\code{parent_distance} are exempt: the first falls back to the phenotypic
+mid-parent and so carries no marker content, the second is a GRM distance that
+never touches marker effects. Both are honest non-genomic analyses, correctly
+labelled, not loopholes. \code{effect_gate = "off"} disables the gate for
+diagnostics.
+
+The remedy the gate names is a larger marker-effect training set, supplied as
+\code{training_genotype} / \code{training_phenotype} (or the corresponding
+\code{_file} and \code{_id_col} arguments). These individuals inform the ridge
+fit only; they are never crossing candidates and never appear in the plan.
+\code{ng_preview_marker_effects()} runs quality control and the marker-effect
+fits and stops before scoring, returning each trait's \code{cv_predictive_r2}
+and the verdict the gate will reach, so a run can be judged before it is
+launched. It shares the fitting path and the seed with the run it previews, so
+the two cannot disagree. Formal \code{economic_index} scoring
 (Smith-Hazel, \eqn{b = P^{-1} G a}) requires both a phenotypic covariance
 matrix P and an additive-genetic covariance matrix G. Formal
 \code{desired_gain} scoring (Pesek-Baker, \eqn{b = G^{-1} d}) requires only G;
