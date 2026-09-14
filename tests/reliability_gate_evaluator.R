@@ -82,7 +82,12 @@ stopifnot(identical(ev(es(trait = "X", cv_predictive_r2 = 0.30), thresh = 0.35)$
 for (r2 in list(-0.5, NA_real_, 0.9)) {
   d <- es(trait = "X", cv_predictive_r2 = as.numeric(r2),
           cv_available = !is.na(r2), cv_unavailable_reason = if (is.na(r2)) "n_lt_10" else NA_character_)
-  stopifnot(!identical(ev(d, metric = "parent_distance")$verdict, "refuse"))
+  # parent_distance: reliability is IRRELEVANT, not merely tolerated. Reporting a
+  # phenotype fallback here would describe a mean this metric never computes.
+  pd <- ev(d, metric = "parent_distance")
+  stopifnot(identical(pd$verdict, "not_applicable"))
+  stopifnot(grepl("uses no marker effects", pd$reason, fixed = TRUE))
+  # mean has no variance term, but its mid-parent genuinely does fall back.
   stopifnot(!identical(ev(d, metric = "mean")$verdict, "refuse"))
 }
 

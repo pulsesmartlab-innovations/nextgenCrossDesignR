@@ -18,6 +18,12 @@ source(file.path(root, "tools", "ng_project_libpath.R")); ng_prepend_project_lib
 source(file.path(root, "R", "load.R"))
 ng_load(root, use_cpp = FALSE, verbose = FALSE)
 
+# Synthetic fixture: random genotypes against a random phenotype, so the marker
+# model has no signal BY CONSTRUCTION (cv_predictive_r2 is negative or unevaluable).
+# The reliability gate is therefore correct to refuse it -- this file tests scoring,
+# outputs and plumbing, not marker quality, so it opts out explicitly.
+options(ngcd.effect_gate = "off")
+
 crosses <- data.frame(
   parent1 = sprintf("P%02d", seq_len(8L)),
   parent2 = sprintf("Q%02d", seq_len(8L)),

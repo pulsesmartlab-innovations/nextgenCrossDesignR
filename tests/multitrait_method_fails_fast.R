@@ -27,6 +27,12 @@
 source(file.path("R", "load.R"))
 ng_load(use_cpp = FALSE, verbose = FALSE)
 
+# Synthetic fixture: random genotypes against a random phenotype, so the marker
+# model has no signal BY CONSTRUCTION (cv_predictive_r2 is negative or unevaluable).
+# The reliability gate is therefore correct to refuse it -- this file tests scoring,
+# outputs and plumbing, not marker quality, so it opts out explicitly.
+options(ngcd.effect_gate = "off")
+
 set.seed(3)
 n <- 24L; m <- 30L
 g <- matrix(sample(c(0L, 2L), n * m, TRUE), nrow = n)

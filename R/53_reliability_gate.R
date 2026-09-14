@@ -61,7 +61,21 @@ ng_evaluate_marker_reliability <- function(effect_summary,
                       verdict = character(), reason = character(), remedy = character(),
                       stringsAsFactors = FALSE))
   }
-  gated <- ng_metric_uses_marker_variance(trait_value_metric)
+  metric <- as.character(trait_value_metric)[[1L]]
+  gated <- ng_metric_uses_marker_variance(metric)
+  # parent_distance uses only the GRM: marker reliability is not merely tolerable
+  # here, it is IRRELEVANT. Reporting a "phenotype fallback" for it would describe a
+  # mean it does not compute. `mean` is different -- it has no variance term, but its
+  # mid-parent genuinely does fall back, so it keeps the fallback verdict.
+  if (identical(metric, "parent_distance")) {
+    return(data.frame(
+      trait = as.character(es$trait %||% seq_len(nrow(es))),
+      cv_predictive_r2 = suppressWarnings(as.numeric(es$cv_predictive_r2 %||% NA_real_)),
+      n = suppressWarnings(as.integer(es$marker_effect_training_n %||% NA_integer_)),
+      verdict = "not_applicable",
+      reason = "trait_value_metric = 'parent_distance' ranks on genomic relationship distance and uses no marker effects, so marker predictive ability does not bear on it",
+      remedy = NA_character_, stringsAsFactors = FALSE))
+  }
   thresh <- suppressWarnings(as.numeric(min_cv_predictive_r2)[[1L]])
 
   trait <- as.character(es$trait %||% seq_len(nrow(es)))

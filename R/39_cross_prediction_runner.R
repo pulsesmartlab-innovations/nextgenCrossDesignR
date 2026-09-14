@@ -760,6 +760,7 @@ ng_cp__build_ctx <- function(config) {
             "Use uc_variance_source = 'pmv' or 'vpm', or set ",
             "trait_value_metric = 'parent_distance' to rank on distance alone.")
   }
+  ctx$effect_gate <- match.arg(ctx$effect_gate, c("on", "off"))
   ctx$threshold_policy <- match.arg(ctx$threshold_policy, c("soft", "strict"))
   ctx$recomb_model <- match.arg(ctx$recomb_model, c("haldane", "kosambi"))
   ctx$grm_method <- match.arg(ctx$grm_method, c("vanraden", "yang"))
@@ -1202,6 +1203,88 @@ ng_cp__stage_predict <- function(ctx) {
     )
   }
 
+  # Input validity BEFORE model quality. A marker-reliability verdict computed from
+  # invalid parent dosages is not meaningful, and the data problem is the more
+  # actionable of the two -- so it must be the one the user hears about.
+  ng_validate_parent_dosage(geno, parent_type = parent_type, ploidy = marker_ploidy %||% 2L,
+                            phased_haplotypes = phased_haplotypes)
+
+  # ---- RELIABILITY GATE: decide before paying for the expensive work --------
+  #
+  # cv_predictive_r2 is known immediately after the ridge fit, which is cheap
+  # (O(n^2 m + n^3) plus k folds). Everything costly comes after it: the dense
+  # O(M^2) recombination kernel, the posterior draws, the cross-trait covariance.
+  # Leaving the verdict until those have run is how a 17-trait study came to be
+  # delivered with every cross mean silently phenotypic.
+  #
+  # This pass deliberately refits. It never requests return_beta_cov_full and keeps
+  # no marker-sized object, so it does not hold T dense m x m matrices (4.9 GB at
+  # m = 6000, T = 17) the way a "fit all then score all" restructure would. It uses
+  # the same geno, the same training augmentation and the same seed as
+  # run_trait_job, so the cv_predictive_r2 it reports is the one that run will get.
+  if (!identical(effect_gate, "off")) {
+    pre_rows <- lapply(seq_len(nrow(trait_spec)), function(i) {
+      column <- trait_spec$column[[i]]
+      if (!(column %in% names(pheno))) return(NULL)
+      y0 <- suppressWarnings(as.numeric(pheno[[column]])); names(y0) <- rownames(pheno)
+      if (sum(is.finite(y0)) < 2L) return(NULL)
+      fg <- geno; fy <- y0; fi <- ids
+      if (!is.null(training_set)) {
+        tr <- suppressWarnings(as.numeric(training_set$pheno[[column]]))
+        names(tr) <- training_set$ids
+        keep <- is.finite(tr)
+        if (any(keep)) {
+          fg <- rbind(geno, training_set$geno[keep, , drop = FALSE])
+          fy <- c(y0, tr[keep]); fi <- c(ids, training_set$ids[keep])
+        }
+      }
+      f <- ng_fit_ridge_effects(geno = fg, y = fy, ids = fi, seed = seed,
+                                return_beta_cov_full = FALSE)
+      data.frame(trait = trait_spec$trait[[i]],
+                 cv_predictive_r2 = f$cv_predictive_r2,
+                 cv_available = isTRUE(f$cv_available),
+                 cv_unavailable_reason = as.character(f$cv_unavailable_reason %||% NA_character_),
+                 marker_effect_training_n = as.integer(length(fi)),
+                 stringsAsFactors = FALSE)
+    })
+    pre_rows <- do.call(rbind, pre_rows[!vapply(pre_rows, is.null, logical(1))])
+    if (!is.null(pre_rows) && nrow(pre_rows)) {
+      gate_thresh <- if (is.null(effect_gate_min_cv_predictive_r2)) min_cv_predictive_r2
+                     else effect_gate_min_cv_predictive_r2
+      verdicts <- ng_evaluate_marker_reliability(pre_rows, trait_value_metric = trait_value_metric,
+                                                 min_cv_predictive_r2 = gate_thresh)
+      adv <- ng_advisory_empty()
+      for (k in seq_len(nrow(verdicts))) {
+        if (verdicts$verdict[[k]] %in% c("gebv", "not_applicable")) next
+        id <- if (identical(verdicts$verdict[[k]], "refuse")) {
+          if (isTRUE(pre_rows$cv_available[[k]])) "marker_effects_negative" else "cv_unavailable"
+        } else "mean_source_phenotype_fallback"
+        adv <- ng_advisory_add(adv, id = id,
+          severity = if (identical(verdicts$verdict[[k]], "refuse")) "blocker" else "warning",
+          stage = "predict", trait = verdicts$trait[[k]],
+          message = sprintf("%s: %s. %s", verdicts$trait[[k]], verdicts$reason[[k]],
+                            if (is.na(verdicts$remedy[[k]])) "" else verdicts$remedy[[k]]))
+      }
+      ctx_advisories <- adv
+      # Emitted HERE, in the parent. run_trait_job runs under mclapply/parLapply and
+      # a warning() raised in a forked child or PSOCK worker never reaches the
+      # caller's handlers, so it would never appear in the JSON envelope. An
+      # advisory nobody receives is the defect this work exists to remove.
+      ng_emit_advisories(adv[adv$severity == "warning", , drop = FALSE])
+      refused <- verdicts[verdicts$verdict == "refuse", , drop = FALSE]
+      if (nrow(refused)) {
+        ng_stop("Marker-effect reliability gate refused this run before cross scoring.\n",
+                paste(sprintf("  %s: %s", refused$trait, refused$reason), collapse = "\n"),
+                "\nThe requested trait_value_metric ('", trait_value_metric,
+                "') ranks crosses on a within-family variance computed from these marker ",
+                "effects, so the plan would rest on a model with no demonstrated predictive ",
+                "ability.\nRemedies: ", refused$remedy[[1L]],
+                "; or set trait_value_metric = 'parent_distance' or 'mean', which do not use ",
+                "marker-derived variance; or effect_gate = 'off' to proceed deliberately.")
+      }
+    }
+  }
+
   trait_results <- ng_run_cp_apply(
     jobs = seq_len(nrow(trait_spec)),
     fun = run_trait_job,
@@ -1405,6 +1488,7 @@ ng_cp__stage_predict <- function(ctx) {
     posterior_multitrait = posterior_multitrait,
     cross_table = cross_table,
     trait_mean_source = trait_mean_source,
+    advisories = if (exists("ctx_advisories", inherits = FALSE)) ctx_advisories else ng_advisory_empty(),
     ctc = ctc,
     parallel_backend = parallel_backend,
     parallel_cores_used = parallel_cores_used,
@@ -2078,6 +2162,7 @@ utils::globalVariables(c(
   "threshold_penalty_weight", "threshold_policy", "training_genotype", "training_genotype_file",
   "training_genotype_id_col", "training_ids", "training_only_count", "training_phenotype",
   "training_phenotype_file", "training_phenotype_id_col",
+  "effect_gate", "effect_gate_min_cv_predictive_r2", "advisories", "advisory_summary",
   "trait_check_reference", "trait_checks", "trait_direction", "trait_mean_source",
   "trait_scores", "trait_spec", "trait_value_metric", "trait_value_metric_input",
   "uc_variance_source_input", "trait_weights",
@@ -2126,6 +2211,10 @@ ng_cp__assemble_result <- function(ctx) {
     # could finish, be delivered and be read with no way to tell whether the mean
     # was genomic or phenotypic. See tests/workbook_reports_mean_source.R.
     trait_mean_source = trait_mean_source,
+    # The post-effects advisory channel: what the run learned about its own marker
+    # effects, in the same shape as qc$issues so one renderer serves both.
+    advisories = advisories,
+    advisory_summary = ng_advisory_rollup(advisories),
     marker_effects = effects_list,
     trait_scores = trait_scores,
     posterior_effects = posterior_effects_list,
@@ -2241,6 +2330,11 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
                                     selection_prop = 0.10,
                                     min_effect_reliability = 0.35,
                                     min_cv_predictive_r2 = 0.35,
+                                    # The reliability gate is ON by default. "off" is an
+                                    # explicit, recorded opt-out for benchmark harnesses that
+                                    # deliberately drive weak-marker scenarios.
+                                    effect_gate = getOption("ngcd.effect_gate", "on"),
+                                    effect_gate_min_cv_predictive_r2 = NULL,
                                     grm_method = c("vanraden", "yang"),
                                     method_varPMV = c("fast", "full_posterior"),
                                     ril_mode = "infinite",
