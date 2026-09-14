@@ -224,28 +224,23 @@ stopifnot(identical(r_mean$effect_summary$mean_source[[1L]], "GEBV"))
 stopifnot(identical(r_mean$selected_crosses$confidence_method[[1L]], "posterior_ci"))
 stopifnot(any(is.finite(r_mean$selected_crosses$cross_confidence)))
 
-# OPEN FINDING -- deliberately NOT asserted, because asserting either outcome would
-# be wrong until it is decided.
-#
-# Forcing the phenotypic mean via the documented fallback tier
-# (min_cv_predictive_r2 = 1.1, which `mean` is exempt from refusing) gives:
-#     mean_source            = "adjusted_pheno"     <- delivered value is phenotypic
-#     confidence_method      = "posterior_ci"
-#     posterior_used         = TRUE
-#     cross_confidence       = finite, varying
+# Phenotypic mean: forced via the documented fallback tier (an unreachable
+# min_cv_predictive_r2), NOT by disabling the gate -- `mean` is exempt from refusal, so
+# this is the ordinary warn-and-fall-back path a real weak-marker run takes.
 #
 # A phenotypic mid-parent does not depend on the marker effects, so it cannot vary
-# across marker-effect posterior draws; its posterior SD is exactly zero. The interval
-# being reported therefore describes the uncertainty of a quantity that is NOT the one
-# in the output -- the same shape as the posterior_predictions$mean_source defect this
-# release documents.
+# across posterior draws and its posterior SD is exactly zero. The only honest report
+# is unavailable relative precision, never a fabricated interval.
 #
-# The original assertion here ("relative_precision_unavailable") was right, and passed
-# only because the old fixture was too weak to earn genomic means, so this path was
-# never reached with good markers. Enlarging the fixture exposed it.
-#
-# Not asserted either way pending a decision: asserting the old value fails, and
-# asserting the observed value would bless a confidence interval on the wrong quantity.
+# This used to report posterior_ci here, because the per-draw scoring in
+# ng_posterior_cross_predict() did not receive the run's min_cv_predictive_r2 and so ran
+# a different mean-source policy than the run itself -- the draws resolved to GEBV while
+# the delivered value stayed phenotypic. Fixed in R/30; pinned by
+# tests/posterior_draws_follow_the_run_basis.R.
 r_mean_ph <- suppressWarnings(run_post(TRUE, "mean", min_cv_predictive_r2 = 1.1))
 stopifnot(identical(r_mean_ph$effect_summary$mean_source[[1L]], "adjusted_pheno"))
+stopifnot(identical(r_mean_ph$selected_crosses$confidence_method[[1L]],
+                    "relative_precision_unavailable"))
+stopifnot(all(is.na(r_mean_ph$selected_crosses$cross_confidence)))
+stopifnot(isFALSE(r_mean_ph$priority_risk_diagnostics$posterior_used))
 cat("posterior-ON confidence + prob_top_tier test passed\n")
