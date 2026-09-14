@@ -740,6 +740,26 @@ ng_cp__build_ctx <- function(config) {
   }
   ctx$trait_value_metric <- match.arg(ctx$trait_value_metric, c("usefulness", "pmv", "vpm", "parent_distance", "le", "var_complex", "mean"))
   ctx$uc_variance_source <- match.arg(ctx$uc_variance_source, c("pmv", "vpm", "parent_distance", "le"))
+  # Canonicalise the deprecated `le` spelling so everything downstream -- and every
+  # field the run reports -- carries one name per concept. The raw string is kept in
+  # *_input, so nothing about what the caller typed is lost.
+  if (identical(ctx$trait_value_metric, "le")) ctx$trait_value_metric <- "parent_distance"
+  if (identical(ctx$uc_variance_source, "le")) ctx$uc_variance_source <- "parent_distance"
+  # Reject the impossible pairing HERE, at config time, before a single genotype is
+  # read. A relationship distance is not a trait variance, so mu + i*sqrt(distance)
+  # is not a quantity. The legality of this pairing does not depend on the data, so
+  # it must not be discovered during scoring -- which is where it used to surface:
+  # per trait, after marker effects were fitted, possibly inside a parallel worker
+  # where the message is mangled or lost. Same lesson as multi_trait_method, which
+  # sat behind the whole posterior pipeline and cost 40.6 hours on a real run.
+  # The check at ng_run_cp_variance_col() stays as a defence for direct callers.
+  if (identical(ctx$trait_value_metric, "usefulness") &&
+      identical(ctx$uc_variance_source, "parent_distance")) {
+    ng_stop("uc_variance_source = 'parent_distance' cannot be combined with ",
+            "trait_value_metric = 'usefulness': genomic distance is not a trait variance. ",
+            "Use uc_variance_source = 'pmv' or 'vpm', or set ",
+            "trait_value_metric = 'parent_distance' to rank on distance alone.")
+  }
   ctx$threshold_policy <- match.arg(ctx$threshold_policy, c("soft", "strict"))
   ctx$recomb_model <- match.arg(ctx$recomb_model, c("haldane", "kosambi"))
   ctx$grm_method <- match.arg(ctx$grm_method, c("vanraden", "yang"))
@@ -1153,7 +1173,27 @@ ng_cp__stage_predict <- function(ctx) {
         marker_effect_training_n = as.integer(n_effect_training),
         ridge_lambda = fit$lambda,
         method_varPMV = method_varPMV,
+        # pmv_column_used names the column this method_varPMV setting SELECTS,
+        # whether or not the run used PMV at all. variance_column_used names the
+        # column ng_run_cp_trait_value() actually READ. They differ on a vpm or
+        # mean run, and only the second is the honest answer to "which variance
+        # produced these numbers". uc_variance_source was absent from
+        # effect_summary entirely, so PMV-vs-VPM was previously unreportable per
+        # trait even though fast-vs-full PMV was reported.
         pmv_column_used = pmv_used_col,
+        variance_column_used = ng_run_cp_variance_col(
+          trait_value_metric, uc_variance_source, scored_trait, method_varPMV),
+        trait_value_metric_resolved = trait_value_metric,
+        uc_variance_source_resolved = uc_variance_source,
+        # The basis decision and the REASON for it, carried from the scored table
+        # so a reader sees the verdict and its justification on one row.
+        mean_source_criterion = as.character(
+          (scored_trait$mean_source_criterion %||% NA_character_)[[1L]]),
+        beta_var_available = identical(
+          as.character((scored_trait$beta_var_source %||% NA_character_)[[1L]]), "supplied"),
+        pmv_is_degenerate = isTRUE((scored_trait$pmv_is_degenerate %||% NA)[[1L]]),
+        n_crosses_het_corrected = sum(
+          as.character(scored_trait$variance_estimator %||% "") == "phased_het_general"),
         posterior_prediction = isTRUE(run_posterior_prediction),
         posterior_method = if (isTRUE(run_posterior_prediction)) posterior_method else NA_character_,
         posterior_draws = if (isTRUE(run_posterior_prediction)) posterior_n_draws else NA_integer_,
@@ -2107,8 +2147,15 @@ ng_cp__assemble_result <- function(ctx) {
     priority_risk_diagnostics = priority_risk_diagnostics,
     output_files = output_files,
     settings = list(
-      trait_value_metric = trait_value_metric_input,
-      uc_variance_source = uc_variance_source_input,
+      # RESOLVED, not the raw string. `var_complex` is rewritten to
+      # usefulness + pmv before anything runs (and several friendly aliases
+      # likewise), so echoing the input left the artifact unable to say which
+      # metric actually produced its numbers. The raw string is preserved
+      # alongside so provenance is not lost.
+      trait_value_metric = trait_value_metric,
+      uc_variance_source = uc_variance_source,
+      trait_value_metric_input = trait_value_metric_input,
+      uc_variance_source_input = uc_variance_source_input,
       method_varPMV = method_varPMV,
       multi_trait_method = multi_trait_method,
       progeny = target,

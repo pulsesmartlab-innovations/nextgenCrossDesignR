@@ -292,6 +292,12 @@ ng_score_crosses <- function(geno,
 
   out <- pairs
   out$mean_source <- mean_source$source
+  # WHY that basis was chosen, not just which. ng_choose_mean_source() sets this in
+  # all four branches and, until now, nothing read it -- so the package recorded the
+  # decision while discarding the reason. "below_threshold" (measured and lost) and
+  # "cv_predictive_r2" (cleared the bar) have different remedies, and a reader who
+  # only sees `mean_source` cannot tell them apart.
+  out$mean_source_criterion <- as.character(mean_source$mean_source_criterion %||% NA_character_)[[1L]]
   out$effect_reliability <- effect_rel
   out$effect_reliability_is_calibrated <- isTRUE(mean_source$reliability_is_calibrated)
   out$effect_cv_predictive_r2 <- suppressWarnings(as.numeric((mean_source$cv_predictive_r2 %||% NA_real_)[[1L]]))
