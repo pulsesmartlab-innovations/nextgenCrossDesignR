@@ -19,12 +19,19 @@ source(helper[file.exists(helper)][[1L]])
 # selected crossing plan differed. This test pins that shut.
 
 set.seed(346L)
-n <- 24L; m <- 40L
+# n was 24 against 40 markers with noise at ~2 units against a weak polygenic signal:
+# cross-validates negative, so the reliability gate refuses before trait ordering can be
+# tested at all. This test is about invariance to the ORDER traits are listed in, not
+# about marker quality, and its assertions compare runs to each other rather than to
+# constants -- so enlarging the panel leaves what it measures intact.
+n <- 80L; m <- 40L
 X <- matrix(2L * rbinom(n * m, 1L, 0.5), nrow = n, ncol = m,
             dimnames = list(sprintf("P%02d", seq_len(n)), sprintf("M%02d", seq_len(m))))
-disease <- as.numeric(X %*% rnorm(m, 0, 0.25)) + rnorm(n, 0, 2)
+gv_d <- as.numeric(X %*% c(rnorm(8L, 0, 1), rep(0, m - 8L)))
+disease <- gv_d + rnorm(n, 0, 0.2 * stats::sd(gv_d))
 set.seed(11L)
-yield <- 60 + as.numeric(X %*% rnorm(m, 0, 0.20)) + rnorm(n, 0, 2)
+gv_y <- as.numeric(X %*% c(rep(0, 8L), rnorm(8L, 0, 1), rep(0, m - 16L)))
+yield <- 60 + gv_y + rnorm(n, 0, 0.2 * stats::sd(gv_y))
 
 tmp <- tempfile("ng_trait_order_"); dir.create(tmp, recursive = TRUE)
 files <- list(pheno = file.path(tmp, "phenotype.csv"), geno = file.path(tmp, "genotype.csv"),

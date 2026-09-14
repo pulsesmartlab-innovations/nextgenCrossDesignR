@@ -9,15 +9,21 @@ helper <- c(file.path("tests", "helper_load.R"), "helper_load.R",
 source(helper[file.exists(helper)][[1L]])
 
 set.seed(909)
-n <- 30L; m <- 120L
+# n was 30 against 120 markers with every marker given a 0.1 effect and unit noise --
+# a panel that cross-validates negative, which the reliability gate refuses. This test
+# is about VanRaden vs Yang GRM scaling, not marker quality, so the panel is enlarged
+# and the signal concentrated. The allele-frequency SPREAD below is what makes the two
+# GRM methods diverge and is deliberately untouched.
+n <- 100L; m <- 120L
 ids <- sprintf("P%02d", seq_len(n))
 # segregating inbred lines (0/2) with a spread of allele frequencies so VanRaden's single
 # overall Sum(2p(1-p)) scaling and Yang's per-marker unit-variance weighting genuinely diverge.
 freq <- runif(m, 0.1, 0.9)
 gm <- vapply(freq, function(p) 2L * rbinom(n, 1, p), integer(n))
 rownames(gm) <- ids; colnames(gm) <- sprintf("M%03d", seq_len(m))
-beta <- rnorm(m, 0, 0.1)
-y <- as.numeric(gm %*% beta) + rnorm(n)
+beta <- c(rnorm(12L, 0, 1), rep(0, m - 12L))
+gv <- as.numeric(gm %*% beta)
+y <- gv + rnorm(n, 0, 0.2 * stats::sd(gv))
 names(y) <- ids
 mm <- data.frame(marker = colnames(gm), chr = rep(1:4, length.out = m),
                  pos_cm = rep(seq(0, 100, length.out = ceiling(m / 4)), 4)[seq_len(m)],

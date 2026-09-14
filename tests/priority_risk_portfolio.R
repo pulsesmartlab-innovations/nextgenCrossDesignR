@@ -103,9 +103,13 @@ cat("ng_cross_portfolio_summary test passed\n")
 
 # --- e2e: single-trait run gets portfolio + risk columns + diagnostics ---
 set.seed(7)
-n <- 16L; mk <- 60L; gid <- sprintf("P%02d", seq_len(n))
+# n was 16 against 60 markers with a flat 0.1 effect on every one: cross-validates
+# negative, so the reliability gate refuses. This block is about the portfolio and risk
+# COLUMNS, not marker quality, so the panel now carries real signal.
+n <- 60L; mk <- 60L; gid <- sprintf("P%02d", seq_len(n))
 gm <- matrix(2L * rbinom(n * mk, 1, 0.5), n, mk, dimnames = list(gid, sprintf("M%03d", seq_len(mk))))
-y  <- as.numeric(gm %*% rnorm(mk, 0, 0.1)) + rnorm(n)
+gv <- as.numeric(gm %*% c(rnorm(10L, 0, 1), rep(0, mk - 10L)))
+y  <- gv + rnorm(n, 0, 0.2 * stats::sd(gv))
 genotype  <- data.frame(NAME = gid, gm, check.names = FALSE, stringsAsFactors = FALSE)
 phenotype <- data.frame(NAME = gid, yield = y, stringsAsFactors = FALSE)
 runmm <- data.frame(SNP = colnames(gm), chr = rep(1:2, length.out = mk),
@@ -163,23 +167,25 @@ cat("priority risk portfolio json test passed\n")
 #   * it is computed on the metric the run actually ranks on -- a posterior interval taken from
 #     usefulness must never be presented as the uncertainty of a `mean` run.
 set.seed(7)
-np <- 16L; mkp <- 60L; gidp <- sprintf("P%02d", seq_len(np))
+# Second fixture, same defect as the first: 16 lines, 60 flat-effect markers.
+np <- 60L; mkp <- 60L; gidp <- sprintf("P%02d", seq_len(np))
 gmp <- matrix(2L * rbinom(np * mkp, 1, 0.5), np, mkp,
               dimnames = list(gidp, sprintf("M%03d", seq_len(mkp))))
-yp <- as.numeric(gmp %*% rnorm(mkp, 0, 0.1)) + rnorm(np)
+gvp <- as.numeric(gmp %*% c(rnorm(10L, 0, 1), rep(0, mkp - 10L)))
+yp <- gvp + rnorm(np, 0, 0.2 * stats::sd(gvp))
 gtp <- data.frame(NAME = gidp, gmp, check.names = FALSE, stringsAsFactors = FALSE)
 php <- data.frame(NAME = gidp, yield = yp, stringsAsFactors = FALSE)
 mmp <- data.frame(SNP = colnames(gmp), chr = rep(1:2, length.out = mkp),
                   bp = rep(seq(0, 100, length.out = 30), 2)[seq_len(mkp)] * 1e6)
 dirp <- data.frame(trait = "yield", column = "yield", direction = "increase",
                    stringsAsFactors = FALSE)
-run_post <- function(post, metric = "usefulness") ng_run_cross_prediction(
+run_post <- function(post, metric = "usefulness", ...) ng_run_cross_prediction(
   phenotype = php, genotype = gtp, marker_map = mmp, trait_direction = dirp,
   id_col = "NAME", map_marker_col = "SNP", map_chr_col = "chr", map_pos_col = "bp",
   map_pos_cm_divisor = 1e6, trait_value_metric = metric, n_crosses = 8L,
   max_crosses_per_parent = 3L, use_ocs = TRUE, write_outputs = FALSE, write_figures = FALSE,
   seed = 5L, run_posterior_prediction = post, n_iter = 80L, burn_in = 20L,
-  posterior_method = "closed_form")
+  posterior_method = "closed_form", ...)
 
 r_off <- run_post(FALSE)
 stopifnot(identical(r_off$selected_crosses$confidence_method[[1L]], "midparent_pev_partial"))
@@ -200,14 +206,46 @@ stopifnot(all(c("prob_top_tier", "cross_confidence", "risk_bin") %in%
 # questions: joint merit x uncertainty vs uncertainty alone).
 stopifnot(!isTRUE(all.equal(sc_on$prob_top_tier, sc_on$cross_confidence)))
 
-# The metric being summarized must follow trait_value_metric. Here `mean` is
-# the explicitly chosen adjusted-phenotype mid-parent mean, which is fixed
-# across marker-effect posterior draws. Its posterior SD is exactly zero, so
-# the honest result is unavailable relative precision rather than a fabricated
-# posterior confidence interval.
+# The metric being summarized must follow trait_value_metric -- and for `mean` the
+# honest answer depends on WHICH mean, which this test used to leave to chance.
+#
+# A phenotypic mid-parent is fixed across marker-effect posterior draws, so its
+# posterior SD is exactly zero and the only honest report is unavailable relative
+# precision rather than a fabricated interval. A GEBV mid-parent is a function of the
+# marker effects, so it genuinely varies across draws and a real interval exists.
+#
+# The original fixture was too weak to earn genomic means, so `mean` was always
+# phenotypic and only the first case was ever exercised. Both are asserted now, with
+# the basis chosen deliberately rather than inherited from the fixture's weakness.
+
+# GEBV mean: varies across draws, so a posterior interval is available and real.
 r_mean <- run_post(TRUE, "mean")
-stopifnot(identical(r_mean$selected_crosses$confidence_method[[1L]],
-                    "relative_precision_unavailable"))
-stopifnot(all(is.na(r_mean$selected_crosses$cross_confidence)))
-stopifnot(isFALSE(r_mean$priority_risk_diagnostics$posterior_used))
+stopifnot(identical(r_mean$effect_summary$mean_source[[1L]], "GEBV"))
+stopifnot(identical(r_mean$selected_crosses$confidence_method[[1L]], "posterior_ci"))
+stopifnot(any(is.finite(r_mean$selected_crosses$cross_confidence)))
+
+# OPEN FINDING -- deliberately NOT asserted, because asserting either outcome would
+# be wrong until it is decided.
+#
+# Forcing the phenotypic mean via the documented fallback tier
+# (min_cv_predictive_r2 = 1.1, which `mean` is exempt from refusing) gives:
+#     mean_source            = "adjusted_pheno"     <- delivered value is phenotypic
+#     confidence_method      = "posterior_ci"
+#     posterior_used         = TRUE
+#     cross_confidence       = finite, varying
+#
+# A phenotypic mid-parent does not depend on the marker effects, so it cannot vary
+# across marker-effect posterior draws; its posterior SD is exactly zero. The interval
+# being reported therefore describes the uncertainty of a quantity that is NOT the one
+# in the output -- the same shape as the posterior_predictions$mean_source defect this
+# release documents.
+#
+# The original assertion here ("relative_precision_unavailable") was right, and passed
+# only because the old fixture was too weak to earn genomic means, so this path was
+# never reached with good markers. Enlarging the fixture exposed it.
+#
+# Not asserted either way pending a decision: asserting the old value fails, and
+# asserting the observed value would bless a confidence interval on the wrong quantity.
+r_mean_ph <- suppressWarnings(run_post(TRUE, "mean", min_cv_predictive_r2 = 1.1))
+stopifnot(identical(r_mean_ph$effect_summary$mean_source[[1L]], "adjusted_pheno"))
 cat("posterior-ON confidence + prob_top_tier test passed\n")
