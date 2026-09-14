@@ -18,6 +18,7 @@ ng_cheap_cross_screen <- function(geno,
                                   blup = NULL,
                                   selection_prop = 0.10,
                                   min_effect_reliability = 0.35,
+                                  min_cv_predictive_r2 = 0.35,
                                   include_self = FALSE) {
   geno <- ng_as_numeric_matrix(geno, "geno")
   ids <- as.character(ids)
@@ -30,7 +31,8 @@ ng_cheap_cross_screen <- function(geno,
     blue = blue,
     blup = blup,
     ids = ids,
-    min_reliability = min_effect_reliability
+    min_reliability = min_effect_reliability,
+    min_cv_predictive_r2 = min_cv_predictive_r2
   )
   K <- ng_parent_kinship(geno)
   rel_var <- ng_pair_relationship_variance(pairs, K)

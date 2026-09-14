@@ -461,6 +461,13 @@ ng_posterior_cross_predict <- function(geno,
                                        parent_type = c("inbred", "dh", "ril"),
                                        selection_prop = 0.10,
                                        min_effect_reliability = 0.35,
+                                     # Threaded, not defaulted. Omitting it made this
+                                     # path apply 0.35 while the run used its own
+                                     # threshold, so posterior_predictions$mean_source
+                                     # contradicted effect_summary$mean_source in the
+                                     # same result.json. See
+                                     # tests/mean_source_policy_parity.R.
+                                     min_cv_predictive_r2 = 0.35,
                                        recomb_model = c("haldane", "kosambi"),
                                        window_cm = Inf,
                                        use_cpp = TRUE,
@@ -539,6 +546,7 @@ ng_posterior_cross_predict <- function(geno,
     include_self = include_self, target = target,
     selection_prop = selection_prop,
     min_effect_reliability = min_effect_reliability,
+    min_cv_predictive_r2 = min_cv_predictive_r2,
     recomb_model = recomb_model, window_cm = window_cm, use_cpp = use_cpp,
     parent_type = parent_type
   )

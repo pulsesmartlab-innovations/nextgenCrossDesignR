@@ -1055,13 +1055,19 @@ ng_cp__stage_predict <- function(ctx) {
         adjusted_pheno = y,
         target = target,
         selection_prop = selection_prop,
-        # NOTE: no min_cv_predictive_r2 here. ng_posterior_cross_predict() does
-        # not select a mean source -- it takes the posterior effect draws it is
-        # given -- so the threshold is meaningless to it and passing it is an
-        # "unused argument" error at run time, not a warning. (It was added here
-        # by a pattern-matched edit that assumed both call sites in this function
-        # were ng_score_crosses(); only the one above is.)
         min_effect_reliability = min_effect_reliability,
+        # ng_posterior_cross_predict() DOES select a mean source: it builds its
+        # point-estimate table with ng_score_crosses() (R/30:536), which calls
+        # ng_choose_mean_source(). Omitting this threshold made that call use the
+        # 0.35 default while the run used its own, so on a 0.20 run
+        # posterior_predictions$mean_source read "adjusted_pheno" for six traits
+        # whose cross_mean WAS the GEBV mid-parent, contradicting
+        # effect_summary$mean_source in the same result.json.
+        #
+        # (An earlier comment here asserted the opposite -- that the threshold was
+        # meaningless to this function. That was wrong, and is what let the split
+        # policy persist. See tests/mean_source_policy_parity.R.)
+        min_cv_predictive_r2 = min_cv_predictive_r2,
         recomb_model = recomb_model,
         use_cpp = use_cpp,
         parent_type = parent_type,
