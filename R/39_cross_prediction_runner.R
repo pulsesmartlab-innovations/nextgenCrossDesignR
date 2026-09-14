@@ -730,8 +730,17 @@ ng_cp__build_ctx <- function(config) {
   # so it maps to BOTH fields to preserve its exact (UC-PMV) behavior.
   # Preserve the user's ORIGINAL choices so result$settings echoes what they
   # supplied (e.g. "var_complex"/"family_variance"), not the normalized token.
-  ctx$trait_value_metric_input <- ctx$trait_value_metric
-  ctx$uc_variance_source_input <- ctx$uc_variance_source
+  # Scalarise first. These are captured BEFORE match.arg(), and when the caller supplies
+  # nothing the formal's default is still its whole choice VECTOR -- so the field that
+  # reports "what you asked for" reported seven values for trait_value_metric and four
+  # for uc_variance_source, none of which the caller typed. Through the JSON bridge that
+  # becomes an array where every consumer expects a string.
+  #
+  # match.arg() takes the first element, so element one IS the value the run will use:
+  # reporting it is truthful for the defaulted case, and an explicitly supplied value is
+  # already length one and passes through untouched.
+  ctx$trait_value_metric_input <- as.character(ctx$trait_value_metric)[[1L]]
+  ctx$uc_variance_source_input <- as.character(ctx$uc_variance_source)[[1L]]
   .tv <- ng_normalize_metric_token(ctx$trait_value_metric)
   if (identical(.tv, "var_complex")) {
     ctx$trait_value_metric <- "usefulness"
