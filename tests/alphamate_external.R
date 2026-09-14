@@ -44,9 +44,25 @@ stopifnot(grepl("self-cross", conditionMessage(bad_match), fixed = TRUE))
 stopifnot(grepl("A x A", conditionMessage(bad_match), fixed = TRUE))
 stopifnot(grepl("Z x B", conditionMessage(bad_match), fixed = TRUE))
 
-exe <- normalizePath("external/AlphaMate/binaries/AlphaMate.exe", mustWork = FALSE)
-if (!file.exists(exe)) {
-  message("AlphaMate binary unavailable; parser/criterion tests passed")
+# Resolve through the package's own picker rather than hardcoding the Windows name.
+# Hardcoding AlphaMate.exe meant this test SKIPPED whenever that file was absent and
+# RAN whenever it was present -- including on macOS and Linux, where the file exists in
+# the repository but is a Windows PE32+ that cannot execute. The run then failed with
+# exit code 126 and the suite reported a red test on a machine that simply has no
+# AlphaMate for its platform.
+exe <- ng_alphamate_default_executable()
+if (!nzchar(exe) || !file.exists(exe)) {
+  message("AlphaMate binary unavailable for this platform; parser/criterion tests passed")
+  quit(save = "no", status = 0)
+}
+# Existence is not runnability. The bundled Unix binary is Linux ELF, so on macOS it is
+# present and still cannot exec; a cross-architecture binary reports 126 ("found, not
+# executable") and 127 ("not found" from the loader). Probe once and skip on either,
+# rather than reporting a failure the machine cannot do anything about.
+probe <- suppressWarnings(system2(exe, stdout = FALSE, stderr = FALSE))
+if (probe %in% c(126L, 127L)) {
+  message("AlphaMate binary present but not executable on this platform (exit ", probe,
+          "); parser/criterion tests passed")
   quit(save = "no", status = 0)
 }
 
@@ -73,7 +89,7 @@ stopifnot(all(plan$parent2 %in% ids))
 summary <- attr(plan, "summary")
 stopifnot(is.list(summary))
 stopifnot(identical(summary$lambda_parent_use_mode, "alphamate"))
-stopifnot(isTRUE(grepl("AlphaMate.exe", summary$alphamate_executable, fixed = TRUE)))
+stopifnot(isTRUE(grepl(basename(exe), summary$alphamate_executable, fixed = TRUE)))
 stopifnot(identical(summary$alphamate_mode, "ModeOptTarget1"))
 stopifnot(identical(summary$alphamate_exit_code, 0L))
 

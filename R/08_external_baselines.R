@@ -410,13 +410,23 @@ ng_parent_criterion_from_cross_mean <- function(scores, criterion_col = "cross_m
 ng_alphamate_default_executable <- function() {
   env <- Sys.getenv("NG_ALPHAMATE_EXE", unset = "")
   if (nzchar(env)) return(env)
-  # AlphaMate ships as `AlphaMate.exe` on Windows and `AlphaMate` (no extension) on
-  # macOS/Linux. Probe both names so discovery is OS-agnostic, preferring the
-  # native name for the running platform.
+  # AlphaMate ships as `AlphaMate.exe` on Windows and, in the bundled distribution,
+  # as `AlphaMate_Unix` elsewhere; a self-built binary is usually just `AlphaMate`.
+  #
+  # `AlphaMate_Unix` used to be missing from this list, so on macOS and Linux the probe
+  # fell through to the Windows executable and the run died with exit code 126 ("found,
+  # but cannot execute") -- the least informative way to say "there is no binary for
+  # your platform". On Linux, where AlphaMate_Unix runs perfectly well, the picker chose
+  # the Windows .exe over it.
+  #
+  # The .exe is deliberately NOT a fallback off Windows. A Windows PE cannot execute on
+  # Unix under any circumstance, so offering it there cannot help: it only converts a
+  # clear "not found" into a confusing exec failure. NG_ALPHAMATE_EXE above still lets a
+  # user point at any binary they like, whatever it is called.
   exe_names <- if (.Platform$OS.type == "windows") {
     c("AlphaMate.exe", "AlphaMate")
   } else {
-    c("AlphaMate", "AlphaMate.exe")
+    c("AlphaMate_Unix", "AlphaMate")
   }
   bases <- c(
     file.path("external", "AlphaMate", "binaries"),
