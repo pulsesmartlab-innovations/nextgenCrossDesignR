@@ -102,6 +102,12 @@ ng_polyploid_score_crosses <- function(dosage, effects, ploidy = 2L, pairs = NUL
     }, numeric(1))
   }
   intensity <- ng_selection_intensity(selection_prop)
+  # One name for one question. `variance_model` is this path's existing column;
+  # `variance_estimator` is the name the diploid table uses for the same fact
+  # (R/03_metrics.R). A consumer that learned one and reads NULL on the other
+  # concludes the provenance is missing, when it is only spelled differently --
+  # so both are emitted, from one value, and cannot drift apart.
+  var_estimator <- if (use_phase) "phased_exact" else "uniform_phase_prior_expectation"
 
   out <- data.frame(
     parent1 = p1, parent2 = p2,
@@ -109,7 +115,8 @@ ng_polyploid_score_crosses <- function(dosage, effects, ploidy = 2L, pairs = NUL
     poly_var = poly_var,
     poly_usefulness = (gebv[p1] + gebv[p2]) / 2 + intensity * sqrt(pmax(poly_var, 0)),
     poly_parent1_gebv = gebv[p1], poly_parent2_gebv = gebv[p2],
-    variance_model = if (use_phase) "phased_exact" else "uniform_phase_prior_expectation",
+    variance_model = var_estimator,
+    variance_estimator = var_estimator,
     pair_relationship = ng_poly4x_pair_relationship(parent_kinship, pairs),
     pair_kinship = ng_poly4x_pair_coancestry(parent_kinship, pairs),
     stringsAsFactors = FALSE

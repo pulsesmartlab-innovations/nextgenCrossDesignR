@@ -208,6 +208,8 @@ ng_polyploid_score_crosses_dominance <- function(fit,
   # Travels with the numbers: an autopolyploid within-family variance is unbiased over unknown
   # parental phase but cannot resolve linkage-phase differences between crosses (see header).
   out$variance_model <- "uniform_phase_prior_expectation"
+  # Same fact under the name the diploid table uses -- see R/46 for why both ship.
+  out$variance_estimator <- out$variance_model
   attr(out, "variance_model") <- "uniform_phase_prior_expectation"
   attr(out, "dominance_model") <- if (is.null(bd)) NA_character_ else "digenic"
   attr(out, "double_reduction") <- as.numeric(double_reduction)
