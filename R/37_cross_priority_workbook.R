@@ -444,7 +444,15 @@ ng_cpw_dashboard <- function(selected, scored, trait_info, parent_use, duplicate
 # mean -- so it belongs on the face of the workbook, not only in result.json. A
 # 2026-09 17-trait delivery silently used the phenotype mean for every trait and
 # nothing in the workbook said so. See tests/workbook_reports_mean_source.R.
-ng_cpw_scoring_method <- function(trait_mean_source = NULL) {
+# `effect_summary` supplies the VARIANCE half of the provenance the mean-basis row
+# started. It is the harder half: seven variance-ish columns ship on the cross
+# table, four numerically identical on a typical run, one all-NA and one ~30x
+# smaller -- and the het-parent correction silently substitutes a different
+# estimator, under a different truncation regime, for a subset of rows. A
+# spreadsheet outlives the session that produced it, so a reader with no way to
+# tell which variance produced the ranking is comparing numbers that may not be
+# comparable.
+ng_cpw_scoring_method <- function(trait_mean_source = NULL, effect_summary = NULL) {
   basis_row <- NULL
   if (length(trait_mean_source)) {
     nm <- names(trait_mean_source)
@@ -470,9 +478,43 @@ ng_cpw_scoring_method <- function(trait_mean_source = NULL) {
       " enough out of sample. This is the basis <trait>_mean and <trait>_vs_check",
       " are on.")
   }
+  var_row <- NULL
+  if (!is.null(effect_summary) && NROW(effect_summary)) {
+    esdf <- as.data.frame(effect_summary, stringsAsFactors = FALSE)
+    vc <- as.character(esdf$variance_column_used %||% NA_character_)
+    tr <- as.character(esdf$trait %||% seq_len(nrow(esdf)))
+    keep <- !is.na(vc) & nzchar(vc)
+    if (any(keep)) {
+      parts <- vapply(split(tr[keep], vc[keep]), function(x) paste(sort(x), collapse = ", "),
+                      character(1))
+      # Every within-family variance in this package is a quadratic form in the
+      # marker effects. Saying so is the point: a reader who has just been told the
+      # MEAN fell back to phenotype needs to know the VARIANCE did not.
+      var_row <- paste0(
+        paste(sprintf("%s: %s", names(parts), parts), collapse = "; "),
+        ". This is the within-family variance the ranking used. It is computed from ",
+        "the marker effects, so it carries the marker model's quality even where the ",
+        "cross mean did not.")
+      het_n <- suppressWarnings(as.integer(esdf$n_crosses_het_corrected %||% 0L))
+      het_n <- sum(het_n[is.finite(het_n)])
+      if (isTRUE(het_n > 0L)) {
+        var_row <- paste0(var_row, " ", het_n, " cross(es) with residual-heterozygous ",
+          "parents instead used the exact phased-haplotype estimator, which is dense: ",
+          "window_cm does not apply to those rows, so their variance comes from a ",
+          "different kernel than the rest of the table (see the per-row ",
+          "variance_estimator column).")
+      }
+      degen <- esdf$pmv_is_degenerate %||% FALSE
+      if (any(isTRUE(unlist(degen)))) {
+        var_row <- paste0(var_row, " NOTE: marker-effect variances were unavailable, so ",
+          "PMV carries no effect uncertainty and is numerically identical to VPM.")
+      }
+    }
+  }
   data.frame(
     Section = c(
       if (!is.null(basis_row)) "Cross-mean basis (this run)",
+      if (!is.null(var_row)) "Within-family variance method (this run)",
       "Selection engine",
       "Priority tiering",
       "Evidence columns",
@@ -482,6 +524,7 @@ ng_cpw_scoring_method <- function(trait_mean_source = NULL) {
     ),
     Details = c(
       if (!is.null(basis_row)) basis_row,
+      if (!is.null(var_row)) var_row,
       "Crosses are ranked from supplied trait directions, trait weights, kinship, threshold penalties, and parent-use constraints.",
       "Priority tiers divide the selected plan into practical execution groups; users can change tier breaks and crossing capacity.",
       "top_favorable_traits and top_risk_traits summarize objective trait evidence from the selected cross table.",
@@ -504,7 +547,8 @@ ng_cross_priority_workbook_tables <- function(crosses,
                                               include_trait_gebv = FALSE,
                                               trait_check_reference = NULL,
                                               trait_mean_source = NULL,
-                                              trait_value_metric = NULL) {
+                                              trait_value_metric = NULL,
+                                              effect_summary = NULL) {
   crosses <- as.data.frame(crosses, stringsAsFactors = FALSE, check.names = FALSE)
   if (!nrow(crosses)) ng_stop("crosses must contain at least one selected cross")
   if (!all(c("parent1", "parent2") %in% names(crosses))) {
@@ -516,7 +560,7 @@ ng_cross_priority_workbook_tables <- function(crosses,
                                    trait_value_metric = trait_value_metric)
   out <- list(
     Dashboard = ng_cpw_dashboard(selected, scored, trait_info, parent_use, duplicate_pairs, n_crosses_requested),
-    Scoring_Method = ng_cpw_scoring_method(trait_mean_source),
+    Scoring_Method = ng_cpw_scoring_method(trait_mean_source, effect_summary),
     Trait_Directions = trait_info,
     Selected_All = selected
   )
@@ -579,7 +623,8 @@ ng_write_cross_priority_workbook <- function(output_path,
                                              include_trait_gebv = FALSE,
                                              trait_check_reference = NULL,
                                              trait_mean_source = NULL,
-                                             trait_value_metric = NULL) {
+                                             trait_value_metric = NULL,
+                                             effect_summary = NULL) {
   if (!requireNamespace("openxlsx", quietly = TRUE)) {
     ng_stop("openxlsx is required to write cross priority workbooks")
   }
@@ -598,7 +643,8 @@ ng_write_cross_priority_workbook <- function(output_path,
     include_trait_gebv = include_trait_gebv,
     trait_check_reference = trait_check_reference,
     trait_mean_source = trait_mean_source,
-    trait_value_metric = trait_value_metric
+    trait_value_metric = trait_value_metric,
+    effect_summary = effect_summary
   )
   wb <- openxlsx::createWorkbook(creator = "nextgenCrossDesign")
   for (sheet in names(tables)) {

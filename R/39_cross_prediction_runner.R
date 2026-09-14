@@ -634,7 +634,8 @@ ng_run_cp_output_files <- function(output_dir,
                                    trait_check_reference = NULL,
                                    multi_trait_meta = NULL,
                                    trait_value_metric = NULL,
-                                   trait_mean_source = NULL) {
+                                   trait_mean_source = NULL,
+                                   effect_summary = NULL) {
   files <- list()
   if (!isTRUE(write_outputs) && !isTRUE(write_figures)) return(files)
   if (is.null(output_dir) || !nzchar(as.character(output_dir[[1L]]))) {
@@ -692,7 +693,8 @@ ng_run_cp_output_files <- function(output_dir,
       include_trait_gebv = isTRUE(include_trait_gebv),
       trait_check_reference = trait_check_reference,
       trait_mean_source = trait_mean_source,
-      trait_value_metric = trait_value_metric
+      trait_value_metric = trait_value_metric,
+      effect_summary = effect_summary
     )
   }
   files
@@ -2121,7 +2123,8 @@ ng_cp__stage_rank <- function(ctx) {
     trait_check_reference = ctx$trait_check_reference,
     multi_trait_meta = ctx$multi_trait_meta,
     trait_value_metric = ctx$trait_value_metric,
-    trait_mean_source = ctx$trait_mean_source
+    trait_mean_source = ctx$trait_mean_source,
+    effect_summary = do.call(rbind, ctx$effect_summary)
   )
   ctx <- ng_ctx_put(
     ctx,
