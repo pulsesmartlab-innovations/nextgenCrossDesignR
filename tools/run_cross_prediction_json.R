@@ -17,13 +17,19 @@
 # docs/frontend/contracts/example_config.json for a runnable example.
 
 # --- locate the package root and load it (pure-R; mirrors tools/export_*.R) -------------------
-root_candidates <- unique(normalizePath(c(
-  file.path(getwd(), "nextgen_cross_design"), getwd(),
-  file.path("..", "nextgen_cross_design"), file.path("..")
-), winslash = "/", mustWork = FALSE))
-root_hits <- root_candidates[file.exists(file.path(root_candidates, "R", "load.R"))]
-if (!length(root_hits)) stop("Could not locate nextgen_cross_design root", call. = FALSE)
-root <- root_hits[[1L]]
+# Resolution order matters: this searched getwd()/nextgen_cross_design BEFORE
+# getwd(), so an untracked stale copy beside the real sources won and the headless
+# frontend path ran an eleven-version-old package while every in-process test ran
+# the current one. Shared with tests/helper_load.R so the two cannot diverge again.
+local({
+  here <- dirname(normalizePath(sub("^--file=", "",
+    grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)[1L]),
+    winslash = "/", mustWork = FALSE))
+  finder <- file.path(here, "ng_find_package_root.R")
+  source(if (file.exists(finder)) finder
+         else file.path(getwd(), "tools", "ng_find_package_root.R"))
+})
+root <- ng_find_package_root(getwd())
 source(file.path(root, "tools", "ng_project_libpath.R"))
 ng_prepend_project_lib(file.path(dirname(root), ".Rlib"))
 source(file.path(root, "R", "load.R"))
