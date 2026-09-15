@@ -179,6 +179,36 @@ ng_cpw_value_label <- function(col, metric = NULL) {
   sub("_value$", paste0("_", m), col)
 }
 
+# The WITHIN-FAMILY VARIANCE the run selected, by value.
+#
+# A breeder picks one variance -- uc_variance_source = "pmv" or "vpm" -- and that choice
+# drives the merit the plan is ranked on. The workbook named the estimator (0.32.0's
+# Scoring_Method row) but carried no number for it, while `cross_upside` on the same
+# sheet is sqrt(VPM) unconditionally. On a default PMV run the reader therefore saw a
+# merit built on PMV beside a spread built on VPM, with neither raw value present to
+# reconcile them.
+#
+# They are different estimands -- PMV = VPM + tr(R Sigma_beta) -- and the gap varies per
+# cross rather than being a constant offset, so the two can order crosses differently.
+# Naming a method without showing its value leaves the name uncheckable.
+#
+# The column is resolved from effect_summary$variance_column_used, the same field the
+# Scoring_Method row is built from, so the name and the number cannot disagree.
+ng_cpw_variance_cols <- function(crosses, effect_summary) {
+  if (is.null(effect_summary) || !NROW(effect_summary)) return(character())
+  es <- as.data.frame(effect_summary, stringsAsFactors = FALSE)
+  vc <- as.character(es$variance_column_used %||% NA_character_)
+  tr <- as.character(es$trait %||% character())
+  keep <- !is.na(vc) & nzchar(vc) & nzchar(tr)
+  if (!any(keep)) return(character())
+  out <- stats::setNames(
+    paste0(vapply(tr[keep], ng_run_cp_clean_trait_name, character(1L), USE.NAMES = FALSE),
+           "_", vc[keep]),
+    paste0(vapply(tr[keep], ng_run_cp_clean_trait_name, character(1L), USE.NAMES = FALSE),
+           "_within_family_variance"))
+  out[out %in% names(crosses)]
+}
+
 # Portfolio + risk columns for the workbook, in breeder-reading order: where the cross sits, how
 # much to trust it, and (multi-trait only) which trait is driving that doubt. Returns an empty
 # list when the run carries no portfolio annotation at all.
@@ -262,7 +292,8 @@ ng_cpw_insert_before <- function(df, before, cols) {
 }
 
 ng_cpw_make_selected <- function(crosses, trait_info, parent_use, duplicate_pairs, block_size,
-                                 include_trait_gebv = FALSE, trait_value_metric = NULL) {
+                                 include_trait_gebv = FALSE, trait_value_metric = NULL,
+                                 effect_summary = NULL) {
   crosses <- as.data.frame(crosses, stringsAsFactors = FALSE, check.names = FALSE)
   if (!("priority_rank" %in% names(crosses)) || !("priority_tier" %in% names(crosses))) {
     crosses <- ng_rank_cross_priority(crosses)
@@ -327,6 +358,12 @@ ng_cpw_make_selected <- function(crosses, trait_info, parent_use, duplicate_pair
   for (col in ng_cpw_mean_cols(crosses)) {
     lbl <- ng_cpw_mean_label(col)
     if (!lbl %in% names(out)) out[[lbl]] <- ng_cpw_numeric(crosses[[col]])
+  }
+  # The variance the ranking rests on, beside the merit it produced.
+  vsel <- ng_cpw_variance_cols(crosses, effect_summary)
+  for (i in seq_along(vsel)) {
+    lbl <- names(vsel)[[i]]
+    if (!lbl %in% names(out)) out[[lbl]] <- ng_cpw_numeric(crosses[[vsel[[i]]]])
   }
   if (isTRUE(include_trait_gebv)) {
     gebv_cols <- ng_cpw_gebv_cols(crosses)
@@ -557,7 +594,8 @@ ng_cross_priority_workbook_tables <- function(crosses,
   trait_info <- ng_cpw_trait_table(trait_directions, crosses)
   selected <- ng_cpw_make_selected(crosses, trait_info, parent_use, duplicate_pairs, block_size,
                                    include_trait_gebv = include_trait_gebv,
-                                   trait_value_metric = trait_value_metric)
+                                   trait_value_metric = trait_value_metric,
+                                   effect_summary = effect_summary)
   out <- list(
     Dashboard = ng_cpw_dashboard(selected, scored, trait_info, parent_use, duplicate_pairs, n_crosses_requested),
     Scoring_Method = ng_cpw_scoring_method(trait_mean_source, effect_summary),
