@@ -32,10 +32,16 @@ for (ctl in registry$controls) {
 ctl_ids <- vapply(registry$controls, function(x) x$id, character(1))
 stopifnot(all(c("trait_value_metric", "multi_trait_method", "optimizer",
                 "allocation_method", "progeny") %in% ctl_ids))
-# the choice list must be exhaustive: multi_trait_method includes every backend method
+# The choice list must be EXHAUSTIVE: multi_trait_method includes every backend method.
+#
+# This said so and then asserted with %in% against a hardcoded five, so it passed while
+# violating its own stated intent -- rank_sum shipped in the engine and the registry
+# grew it, but a literal list here would never have noticed either way. Compared against
+# ng_multitrait_methods(), the actual authority, so the registry cannot fall behind the
+# engine OR advertise a method the engine does not have.
 mtm <- registry$controls[[which(ctl_ids == "multi_trait_method")]]
 mtm_vals <- vapply(mtm$choices, function(x) x$value, character(1))
-stopifnot(all(c("auto", "weighted", "economic_index", "desired_gain", "threshold") %in% mtm_vals))
+stopifnot(setequal(mtm_vals, ng_multitrait_methods()))
 # defaults must be valid choices (enums only -- a number's default is range-checked above)
 for (ctl in registry$controls) {
   if (!identical(ctl$type, "enum")) next

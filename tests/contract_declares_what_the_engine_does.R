@@ -78,6 +78,54 @@ if (any(c("le", "parent_distance") %in% ucs)) {
        call. = FALSE)
 }
 
+# ---- 1b. and no engine capability MISSING from the contract ---------------
+# The reverse direction, and the one that was absent. Check 1 fails only when the schema
+# offers something the engine rejects; nothing failed when the ENGINE gained a value the
+# schema never learned about. That is how multi_trait_method = "rank_sum" shipped in the
+# backend while the contract still listed five methods: a frontend that renders from the
+# contract simply could not offer it, and no test said so.
+#
+# The authority differs per parameter. Most enums carry their choices in the formal's
+# default vector, but multi_trait_method's formal is just "auto" -- its real authority is
+# ng_multitrait_methods(). Checking formals alone would miss exactly the case that
+# motivated this.
+engine_choices <- function(nm) {
+  if (identical(nm, "multi_trait_method")) return(ng_multitrait_methods())
+  d <- f[[nm]]
+  if (!is.call(d) && length(d) > 1L) as.character(d) else NULL
+}
+
+# Deliberate narrowings, each with the reason it is not a gap. Same idea as
+# `undocumented_ok` in tests/contract_schema_drift.R: an exception must be named and
+# justified, never inferred from a structural quirk.
+narrowed_on_purpose <- list(
+  uc_variance_source = paste(
+    "the formal accepts parent_distance/le, but ng_cp__build_ctx() hard-errors on them",
+    "in the only context where this parameter applies (trait_value_metric =",
+    "'usefulness'), so the contract must not advertise a run the backend refuses")
+)
+
+for (nm in names(params)) {
+  p <- params[[nm]]
+  if (is.null(p$allowed) || !(nm %in% names(f))) next
+  eng <- engine_choices(nm)
+  if (is.null(eng)) next
+  missing_from_schema <- setdiff(eng, unlist(p$allowed))
+  # a value the schema states in the breeder vocabulary still counts as declared
+  if (length(missing_from_schema)) {
+    declared <- vapply(unlist(p$allowed),
+                       function(v) as.character(ng_normalize_metric_token(v)), character(1))
+    missing_from_schema <- setdiff(missing_from_schema, declared)
+  }
+  if (length(missing_from_schema) && !is.null(narrowed_on_purpose[[nm]])) next
+  if (length(missing_from_schema)) {
+    stop("the engine accepts ", nm, " value(s) that config_schema.json never lists: ",
+         paste(missing_from_schema, collapse = ", "),
+         " -- a frontend rendering from the contract cannot offer them. Add them, or ",
+         "name the narrowing in narrowed_on_purpose with its reason.", call. = FALSE)
+  }
+}
+
 # ---- 3b. enums whose choices formals() cannot carry, validated by round-trip --
 # ng_cp__build_ctx() match.arg()s these, so an accepted value survives and a
 # rejected one errors. This is what keeps the contract honest for effect_gate,

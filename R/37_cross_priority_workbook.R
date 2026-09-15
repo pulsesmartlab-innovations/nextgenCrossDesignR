@@ -548,10 +548,33 @@ ng_cpw_scoring_method <- function(trait_mean_source = NULL, effect_summary = NUL
       }
     }
   }
+  # A transform applied and not reported is the defect this release exists to remove --
+  # the same rule as the mean-basis and variance-method rows. A breeder reading
+  # <trait>_mean for a declared index is reading a normal score, not the number they
+  # computed, and the sheet has to say so.
+  idx_row <- NULL
+  if (!is.null(effect_summary) && NROW(effect_summary)) {
+    esd <- as.data.frame(effect_summary, stringsAsFactors = FALSE)
+    vk <- as.character(esd$value_kind %||% NA_character_)
+    tk <- as.character(esd$trait %||% seq_len(nrow(esd)))
+    is_idx <- !is.na(vk) & vk == "index"
+    if (any(is_idx)) {
+      idx_row <- paste0(
+        paste(sort(tk[is_idx]), collapse = ", "),
+        ": supplied as a pre-computed INDEX, not measured trait data. A rank-based ",
+        "inverse normal transform was applied before scoring, so this trait's reported ",
+        "mid-parent and merit are in normal-score units and NOT on the scale you ",
+        "supplied. The transform is monotone, so it preserves the order of the parent ",
+        "values; it is not affine, so the reported numbers do not map back by any ",
+        "centre-and-scale pair. Measured traits in this run are untouched and keep ",
+        "their own units.")
+    }
+  }
   data.frame(
     Section = c(
       if (!is.null(basis_row)) "Cross-mean basis (this run)",
       if (!is.null(var_row)) "Within-family variance method (this run)",
+      if (!is.null(idx_row)) "Supplied index traits (this run)",
       "Selection engine",
       "Priority tiering",
       "Evidence columns",
@@ -562,6 +585,7 @@ ng_cpw_scoring_method <- function(trait_mean_source = NULL, effect_summary = NUL
     Details = c(
       if (!is.null(basis_row)) basis_row,
       if (!is.null(var_row)) var_row,
+      if (!is.null(idx_row)) idx_row,
       "Crosses are ranked from supplied trait directions, trait weights, kinship, threshold penalties, and parent-use constraints.",
       "Priority tiers divide the selected plan into practical execution groups; users can change tier breaks and crossing capacity.",
       "top_favorable_traits and top_risk_traits summarize objective trait evidence from the selected cross table.",
