@@ -550,6 +550,21 @@ ng_run_cp_trait_value <- function(scored_trait,
 # points -- so they are always "maximize". Anything that ranks or takes a conservative tail of
 # the `_value` column (posterior top-N, robust mate allocation) must use THIS, not the raw
 # direction; see ng_optimize_robust_mating_plan() in R/30.
+# Which within-family variance the RISK layer should spread.
+#
+# Mirrors ng_run_cp_variance_col()'s resolution but returns the bare suffix, because the
+# risk layer addresses per-trait columns as `<trait>_<suffix>` on the assembled cross
+# table rather than a single scored-trait table. `var_complex` resolves to usefulness on
+# PMV (see ng_cp__build_ctx), and the two variance-free metrics fall back to the pure
+# genetic variance since no selection exists to honour.
+ng_cp__risk_variance_suffix <- function(trait_value_metric, uc_variance_source) {
+  m <- trimws(tolower(as.character(trait_value_metric)[[1L]]))
+  if (m %in% c("mean", "parent_distance")) return("vpm")
+  if (m %in% c("vpm", "pmv")) return(m)
+  src <- trimws(tolower(as.character(uc_variance_source)[[1L]]))
+  if (identical(src, "vpm")) "vpm" else "pmv"
+}
+
 ng_run_cp_value_orientation <- function(direction, trait_value_metric = "usefulness") {
   metric <- trimws(tolower(as.character(trait_value_metric[[1L]])))
   if (metric %in% c("vpm", "pmv", "parent_distance", "le")) return("maximize")
@@ -1919,6 +1934,32 @@ ng_cp__stage_rank <- function(ctx) {
   # tests/resolved_tokens_reach_the_stages.R pins both invariants.
   effect_based_x <- !(trait_value_metric %in% c("mean", "parent_distance"))
   lvl_cols <- paste0(traits_clean, "_mean_gebv")
+  # The risk layer must spread the variance the breeder SELECTED, not a fixed one.
+  #
+  # This was hardcoded to `<trait>_vpm`, so cross_upside was sqrt(VPM) whatever
+  # uc_variance_source said: a default PMV run ranked on PMV while the upside beside
+  # it -- and the portfolio quadrants and risk tertiles derived from that upside --
+  # came from a different estimand. PMV = VPM + tr(R Sigma_beta) and the gap varies
+  # per cross, so the median split on upside genuinely lands differently; a cross with
+  # poorly estimated effects gains relatively more PMV than one with sharp effects,
+  # which is the very distinction the split acts on.
+  #
+  # `mean` and `parent_distance` carry no within-family variance, so there is nothing
+  # the breeder could have selected. They keep the pure genetic variance as a
+  # documented fallback -- the layer still needs a spread.
+  # SINGLE-TRAIT ONLY. The multi-trait index below keeps the pure genetic variance, and
+  # that is a scientific constraint rather than an oversight: its cross_upside is
+  # sqrt(w'Sigma w) over the EXACT within-family covariance matrix (wf_var_<t> on the
+  # diagonal, wf_cov_<t>_<s> off it, from ng_cross_trait_within_family_cov). There is no
+  # PMV analogue for the off-diagonals -- marker-effect uncertainty is not estimated
+  # ACROSS traits -- so inflating only the diagonal would leave Sigma internally
+  # inconsistent, potentially not positive semi-definite, and not the variance of
+  # anything. A coherent VPM-basis Sigma beats a mixed-basis one.
+  risk_var_suffix <- ng_cp__risk_variance_suffix(trait_value_metric, uc_variance_source)
+  risk_cols <- paste0(traits_clean, "_", risk_var_suffix)
+  missing_risk_var <- !(risk_cols %in% names(scored_crosses))
+  if (any(missing_risk_var)) risk_cols[missing_risk_var] <-
+    paste0(traits_clean[missing_risk_var], "_vpm")
   vpm_cols <- paste0(traits_clean, "_vpm")
   pev_cols <- paste0(traits_clean, "_midparent_pev")
 
@@ -1927,11 +1968,11 @@ ng_cp__stage_rank <- function(ctx) {
     tn_col <- paste0(traits_clean, "_post_topn")
     ann_one <- function(tbl) {
       if (!nrow(tbl)) return(tbl)
-      if (!all(c(lvl_cols, vpm_cols, "parent1", "parent2") %in% names(tbl))) return(tbl)
+      if (!all(c(lvl_cols, risk_cols, "parent1", "parent2") %in% names(tbl))) return(tbl)
       pev <- if (pev_cols %in% names(tbl)) suppressWarnings(as.numeric(tbl[[pev_cols]])) else NULL
       psd <- if (sd_col %in% names(tbl)) suppressWarnings(as.numeric(tbl[[sd_col]])) else NULL
       ptn <- if (tn_col %in% names(tbl)) suppressWarnings(as.numeric(tbl[[tn_col]])) else NULL
-      ng_annotate_cross_priority(tbl, level = tbl[[lvl_cols]], vpm = tbl[[vpm_cols]],
+      ng_annotate_cross_priority(tbl, level = tbl[[lvl_cols]], vpm = tbl[[risk_cols]],
                                  pev = pev, effect_based_x = effect_based_x,
                                  post_sd = psd, prob_top_tier = ptn)
     }
