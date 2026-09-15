@@ -1,7 +1,19 @@
 local({ .h <- file.path("tools", "ng_project_libpath.R"); if (file.exists(.h)) { source(.h); ng_prepend_project_lib(".Rlib") } else .libPaths(c(normalizePath(".Rlib", mustWork = FALSE), .libPaths())) })
 
-source("nextgen_cross_design/R/load.R")
-ng_load("nextgen_cross_design", use_cpp = Sys.getenv("NG_USE_CPP", "0") != "0")
+# Resolved through the one shared resolver. This used to hardcode
+# getwd()/nextgen_cross_design, which is not where the package lives: it is where an
+# untracked stale COPY used to sit. With that copy removed the script could not find
+# the package at all.
+local({
+  cands <- file.path(c(".", "..", "../..", "nextgen_cross_design",
+                       "../nextgen_cross_design"), "tools", "ng_find_package_root.R")
+  hit <- cands[file.exists(cands)]
+  if (!length(hit)) stop("cannot locate tools/ng_find_package_root.R", call. = FALSE)
+  source(hit[[1L]], local = FALSE)
+})
+root <- ng_find_package_root(getwd())
+source(file.path(root, "R", "load.R"))
+ng_load(root, use_cpp = Sys.getenv("NG_USE_CPP", "0") != "0")
 
 if (!requireNamespace("AlphaSimR", quietly = TRUE)) {
   stop("AlphaSimR is required for this diagnostic.", call. = FALSE)

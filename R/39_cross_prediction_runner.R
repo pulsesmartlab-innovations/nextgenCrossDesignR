@@ -550,6 +550,21 @@ ng_run_cp_trait_value <- function(scored_trait,
 # points -- so they are always "maximize". Anything that ranks or takes a conservative tail of
 # the `_value` column (posterior top-N, robust mate allocation) must use THIS, not the raw
 # direction; see ng_optimize_robust_mating_plan() in R/30.
+# Which within-family variance the RISK layer should spread.
+#
+# Mirrors ng_run_cp_variance_col()'s resolution but returns the bare suffix, because the
+# risk layer addresses per-trait columns as `<trait>_<suffix>` on the assembled cross
+# table rather than a single scored-trait table. `var_complex` resolves to usefulness on
+# PMV (see ng_cp__build_ctx), and the two variance-free metrics fall back to the pure
+# genetic variance since no selection exists to honour.
+ng_cp__risk_variance_suffix <- function(trait_value_metric, uc_variance_source) {
+  m <- trimws(tolower(as.character(trait_value_metric)[[1L]]))
+  if (m %in% c("mean", "parent_distance")) return("vpm")
+  if (m %in% c("vpm", "pmv")) return(m)
+  src <- trimws(tolower(as.character(uc_variance_source)[[1L]]))
+  if (identical(src, "vpm")) "vpm" else "pmv"
+}
+
 ng_run_cp_value_orientation <- function(direction, trait_value_metric = "usefulness") {
   metric <- trimws(tolower(as.character(trait_value_metric[[1L]])))
   if (metric %in% c("vpm", "pmv", "parent_distance", "le")) return("maximize")
@@ -633,7 +648,9 @@ ng_run_cp_output_files <- function(output_dir,
                                    include_trait_gebv = FALSE,
                                    trait_check_reference = NULL,
                                    multi_trait_meta = NULL,
-                                   trait_value_metric = NULL) {
+                                   trait_value_metric = NULL,
+                                   trait_mean_source = NULL,
+                                   effect_summary = NULL) {
   files <- list()
   if (!isTRUE(write_outputs) && !isTRUE(write_figures)) return(files)
   if (is.null(output_dir) || !nzchar(as.character(output_dir[[1L]]))) {
@@ -689,7 +706,10 @@ ng_run_cp_output_files <- function(output_dir,
       figures = figures,
       n_crosses_requested = n_crosses,
       include_trait_gebv = isTRUE(include_trait_gebv),
-      trait_check_reference = trait_check_reference
+      trait_check_reference = trait_check_reference,
+      trait_mean_source = trait_mean_source,
+      trait_value_metric = trait_value_metric,
+      effect_summary = effect_summary
     )
   }
   files
@@ -725,8 +745,17 @@ ng_cp__build_ctx <- function(config) {
   # so it maps to BOTH fields to preserve its exact (UC-PMV) behavior.
   # Preserve the user's ORIGINAL choices so result$settings echoes what they
   # supplied (e.g. "var_complex"/"family_variance"), not the normalized token.
-  ctx$trait_value_metric_input <- ctx$trait_value_metric
-  ctx$uc_variance_source_input <- ctx$uc_variance_source
+  # Scalarise first. These are captured BEFORE match.arg(), and when the caller supplies
+  # nothing the formal's default is still its whole choice VECTOR -- so the field that
+  # reports "what you asked for" reported seven values for trait_value_metric and four
+  # for uc_variance_source, none of which the caller typed. Through the JSON bridge that
+  # becomes an array where every consumer expects a string.
+  #
+  # match.arg() takes the first element, so element one IS the value the run will use:
+  # reporting it is truthful for the defaulted case, and an explicitly supplied value is
+  # already length one and passes through untouched.
+  ctx$trait_value_metric_input <- as.character(ctx$trait_value_metric)[[1L]]
+  ctx$uc_variance_source_input <- as.character(ctx$uc_variance_source)[[1L]]
   .tv <- ng_normalize_metric_token(ctx$trait_value_metric)
   if (identical(.tv, "var_complex")) {
     ctx$trait_value_metric <- "usefulness"
@@ -737,6 +766,27 @@ ng_cp__build_ctx <- function(config) {
   }
   ctx$trait_value_metric <- match.arg(ctx$trait_value_metric, c("usefulness", "pmv", "vpm", "parent_distance", "le", "var_complex", "mean"))
   ctx$uc_variance_source <- match.arg(ctx$uc_variance_source, c("pmv", "vpm", "parent_distance", "le"))
+  # Canonicalise the deprecated `le` spelling so everything downstream -- and every
+  # field the run reports -- carries one name per concept. The raw string is kept in
+  # *_input, so nothing about what the caller typed is lost.
+  if (identical(ctx$trait_value_metric, "le")) ctx$trait_value_metric <- "parent_distance"
+  if (identical(ctx$uc_variance_source, "le")) ctx$uc_variance_source <- "parent_distance"
+  # Reject the impossible pairing HERE, at config time, before a single genotype is
+  # read. A relationship distance is not a trait variance, so mu + i*sqrt(distance)
+  # is not a quantity. The legality of this pairing does not depend on the data, so
+  # it must not be discovered during scoring -- which is where it used to surface:
+  # per trait, after marker effects were fitted, possibly inside a parallel worker
+  # where the message is mangled or lost. Same lesson as multi_trait_method, which
+  # sat behind the whole posterior pipeline and cost 40.6 hours on a real run.
+  # The check at ng_run_cp_variance_col() stays as a defence for direct callers.
+  if (identical(ctx$trait_value_metric, "usefulness") &&
+      identical(ctx$uc_variance_source, "parent_distance")) {
+    ng_stop("uc_variance_source = 'parent_distance' cannot be combined with ",
+            "trait_value_metric = 'usefulness': genomic distance is not a trait variance. ",
+            "Use uc_variance_source = 'pmv' or 'vpm', or set ",
+            "trait_value_metric = 'parent_distance' to rank on distance alone.")
+  }
+  ctx$effect_gate <- match.arg(ctx$effect_gate, c("on", "off"))
   ctx$threshold_policy <- match.arg(ctx$threshold_policy, c("soft", "strict"))
   ctx$recomb_model <- match.arg(ctx$recomb_model, c("haldane", "kosambi"))
   ctx$grm_method <- match.arg(ctx$grm_method, c("vanraden", "yang"))
@@ -888,6 +938,48 @@ ng_cp__stage_qc <- function(ctx) {
   ctx
 }
 
+# The cheap marker-effect pass: fit only, retain nothing marker-sized.
+#
+# Shared verbatim by the in-run reliability gate and ng_preview_marker_effects(),
+# which is the entire reason the preview is trustworthy. A preview that fitted
+# separately could drift from the run -- a different seed, a different training
+# augmentation, a different pruned marker set -- and a preview that can disagree
+# with its run is a second opinion, not a preview.
+#
+# It never requests return_beta_cov_full and keeps no beta, so it does not hold T
+# dense m x m matrices (4.9 GB at m = 6000, T = 17) the way a "fit all then score
+# all" restructure would. Cost is O(n^2 m + n^3) plus k folds -- noise against the
+# scoring it guards.
+ng_cp__fit_trait_effects <- function(trait_spec, pheno, geno, ids, training_set, seed) {
+  rows <- lapply(seq_len(nrow(trait_spec)), function(i) {
+    column <- trait_spec$column[[i]]
+    if (!(column %in% names(pheno))) return(NULL)
+    y0 <- suppressWarnings(as.numeric(pheno[[column]])); names(y0) <- rownames(pheno)
+    if (sum(is.finite(y0)) < 2L) return(NULL)
+    # The SAME training augmentation the real pass performs, so the fit it reports
+    # is the fit the run will get.
+    fg <- geno; fy <- y0; fi <- ids
+    if (!is.null(training_set)) {
+      tr <- suppressWarnings(as.numeric(training_set$pheno[[column]]))
+      names(tr) <- training_set$ids
+      keep <- is.finite(tr)
+      if (any(keep)) {
+        fg <- rbind(geno, training_set$geno[keep, , drop = FALSE])
+        fy <- c(y0, tr[keep]); fi <- c(ids, training_set$ids[keep])
+      }
+    }
+    f <- ng_fit_ridge_effects(geno = fg, y = fy, ids = fi, seed = seed,
+                              return_beta_cov_full = FALSE)
+    data.frame(trait = trait_spec$trait[[i]],
+               cv_predictive_r2 = f$cv_predictive_r2,
+               cv_available = isTRUE(f$cv_available),
+               cv_unavailable_reason = as.character(f$cv_unavailable_reason %||% NA_character_),
+               marker_effect_training_n = as.integer(length(fi)),
+               stringsAsFactors = FALSE)
+  })
+  do.call(rbind, rows[!vapply(rows, is.null, logical(1))])
+}
+
 ng_cp__stage_predict <- function(ctx) {
   list2env(ctx, environment())
   # Optional LD pruning of the marker matrix (same capability as ng_design_crosses): drop
@@ -997,6 +1089,7 @@ ng_cp__stage_predict <- function(ctx) {
       target = target,
       selection_prop = selection_prop,
       min_effect_reliability = min_effect_reliability,
+      min_cv_predictive_r2 = min_cv_predictive_r2,
       recomb_model = recomb_model,
       use_cpp = use_cpp,
       parent_type = parent_type,
@@ -1052,6 +1145,18 @@ ng_cp__stage_predict <- function(ctx) {
         target = target,
         selection_prop = selection_prop,
         min_effect_reliability = min_effect_reliability,
+        # ng_posterior_cross_predict() DOES select a mean source: it builds its
+        # point-estimate table with ng_score_crosses() (R/30:536), which calls
+        # ng_choose_mean_source(). Omitting this threshold made that call use the
+        # 0.35 default while the run used its own, so on a 0.20 run
+        # posterior_predictions$mean_source read "adjusted_pheno" for six traits
+        # whose cross_mean WAS the GEBV mid-parent, contradicting
+        # effect_summary$mean_source in the same result.json.
+        #
+        # (An earlier comment here asserted the opposite -- that the threshold was
+        # meaningless to this function. That was wrong, and is what let the split
+        # policy persist. See tests/mean_source_policy_parity.R.)
+        min_cv_predictive_r2 = min_cv_predictive_r2,
         recomb_model = recomb_model,
         use_cpp = use_cpp,
         parent_type = parent_type,
@@ -1137,13 +1242,91 @@ ng_cp__stage_predict <- function(ctx) {
         marker_effect_training_n = as.integer(n_effect_training),
         ridge_lambda = fit$lambda,
         method_varPMV = method_varPMV,
+        # pmv_column_used names the column this method_varPMV setting SELECTS,
+        # whether or not the run used PMV at all. variance_column_used names the
+        # column ng_run_cp_trait_value() actually READ. They differ on a vpm or
+        # mean run, and only the second is the honest answer to "which variance
+        # produced these numbers". uc_variance_source was absent from
+        # effect_summary entirely, so PMV-vs-VPM was previously unreportable per
+        # trait even though fast-vs-full PMV was reported.
         pmv_column_used = pmv_used_col,
+        variance_column_used = ng_run_cp_variance_col(
+          trait_value_metric, uc_variance_source, scored_trait, method_varPMV),
+        trait_value_metric_resolved = trait_value_metric,
+        uc_variance_source_resolved = uc_variance_source,
+        # The basis decision and the REASON for it, carried from the scored table
+        # so a reader sees the verdict and its justification on one row.
+        mean_source_criterion = as.character(
+          (scored_trait$mean_source_criterion %||% NA_character_)[[1L]]),
+        beta_var_available = identical(
+          as.character((scored_trait$beta_var_source %||% NA_character_)[[1L]]), "supplied"),
+        pmv_is_degenerate = isTRUE((scored_trait$pmv_is_degenerate %||% NA)[[1L]]),
+        n_crosses_het_corrected = sum(
+          as.character(scored_trait$variance_estimator %||% "") == "phased_het_general"),
         posterior_prediction = isTRUE(run_posterior_prediction),
         posterior_method = if (isTRUE(run_posterior_prediction)) posterior_method else NA_character_,
         posterior_draws = if (isTRUE(run_posterior_prediction)) posterior_n_draws else NA_integer_,
         stringsAsFactors = FALSE
       )
     )
+  }
+
+  # Input validity BEFORE model quality. A marker-reliability verdict computed from
+  # invalid parent dosages is not meaningful, and the data problem is the more
+  # actionable of the two -- so it must be the one the user hears about.
+  ng_validate_parent_dosage(geno, parent_type = parent_type, ploidy = marker_ploidy %||% 2L,
+                            phased_haplotypes = phased_haplotypes)
+
+  # ---- RELIABILITY GATE: decide before paying for the expensive work --------
+  #
+  # cv_predictive_r2 is known immediately after the ridge fit, which is cheap
+  # (O(n^2 m + n^3) plus k folds). Everything costly comes after it: the dense
+  # O(M^2) recombination kernel, the posterior draws, the cross-trait covariance.
+  # Leaving the verdict until those have run is how a 17-trait study came to be
+  # delivered with every cross mean silently phenotypic.
+  #
+  # This pass deliberately refits. It never requests return_beta_cov_full and keeps
+  # no marker-sized object, so it does not hold T dense m x m matrices (4.9 GB at
+  # m = 6000, T = 17) the way a "fit all then score all" restructure would. It uses
+  # the same geno, the same training augmentation and the same seed as
+  # run_trait_job, so the cv_predictive_r2 it reports is the one that run will get.
+  if (!identical(effect_gate, "off")) {
+    pre_rows <- ng_cp__fit_trait_effects(trait_spec, pheno, geno, ids, training_set, seed)
+    if (!is.null(pre_rows) && nrow(pre_rows)) {
+      gate_thresh <- if (is.null(effect_gate_min_cv_predictive_r2)) min_cv_predictive_r2
+                     else effect_gate_min_cv_predictive_r2
+      verdicts <- ng_evaluate_marker_reliability(pre_rows, trait_value_metric = trait_value_metric,
+                                                 min_cv_predictive_r2 = gate_thresh)
+      adv <- ng_advisory_empty()
+      for (k in seq_len(nrow(verdicts))) {
+        if (verdicts$verdict[[k]] %in% c("gebv", "not_applicable")) next
+        id <- if (identical(verdicts$verdict[[k]], "refuse")) {
+          if (isTRUE(pre_rows$cv_available[[k]])) "marker_effects_negative" else "cv_unavailable"
+        } else "mean_source_phenotype_fallback"
+        adv <- ng_advisory_add(adv, id = id,
+          severity = if (identical(verdicts$verdict[[k]], "refuse")) "blocker" else "warning",
+          stage = "predict", trait = verdicts$trait[[k]],
+          message = sprintf("%s: %s. %s", verdicts$trait[[k]], verdicts$reason[[k]],
+                            if (is.na(verdicts$remedy[[k]])) "" else verdicts$remedy[[k]]))
+      }
+      ctx_advisories <- adv
+      # Emitted HERE, in the parent. run_trait_job runs under mclapply/parLapply and
+      # a warning() raised in a forked child or PSOCK worker never reaches the
+      # caller's handlers, so it would never appear in the JSON envelope. An
+      # advisory nobody receives is the defect this work exists to remove.
+      ng_emit_advisories(adv[adv$severity == "warning", , drop = FALSE])
+      refused <- verdicts[verdicts$verdict == "refuse", , drop = FALSE]
+      if (nrow(refused)) {
+        ng_stop("Marker-effect reliability gate refused this run before cross scoring.\n",
+                paste(sprintf("  %s: %s", refused$trait, refused$reason), collapse = "\n"),
+                "\nThe requested trait_value_metric ('", trait_value_metric,
+                "') ranks crosses on a within-family variance computed from these marker ",
+                "effects, so the plan would rest on a model with no demonstrated predictive ",
+                "ability.\nRemedies: ", refused$remedy[[1L]],
+                "; or set trait_value_metric = 'parent_distance' or 'mean', which do not use ",
+                "marker-derived variance; or effect_gate = 'off' to proceed deliberately.")
+      }
+    }
   }
 
   trait_results <- ng_run_cp_apply(
@@ -1193,7 +1376,18 @@ ng_cp__stage_predict <- function(ctx) {
       posterior_effects_list[[trait]] <- item$posterior_effects
       posterior_predictions_list[[trait]] <- item$posterior_scores
     }
-    effect_summary[[j]] <- item$effect_summary
+    # The cross-mean basis rides on effect_summary so it reaches result.json.
+    # `trait_mean_source` is returned at top level too, but the JSON app assembles
+    # result.json from a fixed whitelist of fields and does not pick that up -- and
+    # the app is owned elsewhere. effect_summary IS whitelisted, and the basis
+    # belongs beside cv_predictive_r2 regardless: that number is the evidence, this
+    # is the decision taken on it. See tests/effect_summary_reports_mean_source.R.
+    es_row <- item$effect_summary
+    if (is.data.frame(es_row) && NROW(es_row)) {
+      src <- scored_trait$mean_source[[1L]]
+      es_row$mean_source <- if (is.null(src)) NA_character_ else as.character(src)[[1L]]
+    }
+    effect_summary[[j]] <- es_row
   }
 
   # EXACT within-family cross-trait covariance (multi-trait only): Cov(t, s | cross) = a_t' R a_s,
@@ -1338,6 +1532,7 @@ ng_cp__stage_predict <- function(ctx) {
     posterior_multitrait = posterior_multitrait,
     cross_table = cross_table,
     trait_mean_source = trait_mean_source,
+    advisories = if (exists("ctx_advisories", inherits = FALSE)) ctx_advisories else ng_advisory_empty(),
     ctc = ctc,
     parallel_backend = parallel_backend,
     parallel_cores_used = parallel_cores_used,
@@ -1727,13 +1922,44 @@ ng_cp__stage_rank <- function(ctx) {
   priority_risk_diagnostics <- NULL
   traits_clean <- vapply(trait_spec$trait, ng_run_cp_clean_trait_name, character(1L),
                          USE.NAMES = FALSE)
-  # The merit's sqrt(X) term is effect-based (i.e. draws on marker-effect estimation error,
-  # not just the mid-parent mean) for every metric except mean/parent_distance, and for
-  # usefulness only when its variance source isn't the effect-free parent_distance proxy.
-  effect_based_x <- !(trait_value_metric %in% c("mean", "parent_distance", "le")) &&
-    !(identical(trait_value_metric, "usefulness") &&
-      uc_variance_source %in% c("parent_distance", "le"))
+  # The merit's sqrt(X) term is effect-based (i.e. draws on marker-effect estimation
+  # error, not just the mid-parent mean) for every metric except mean and
+  # parent_distance -- the two the reliability gate exempts, for the same reason.
+  #
+  # This used to also test uc_variance_source against parent_distance/"le". Both were
+  # unreachable: ng_cp__build_ctx() canonicalises "le" -> "parent_distance" and
+  # hard-errors on the usefulness + parent_distance pair before any stage runs, so a
+  # stage only ever sees resolved tokens. The branch quietly implied that combination
+  # was supported here, which is the opposite of what the engine does.
+  # tests/resolved_tokens_reach_the_stages.R pins both invariants.
+  effect_based_x <- !(trait_value_metric %in% c("mean", "parent_distance"))
   lvl_cols <- paste0(traits_clean, "_mean_gebv")
+  # The risk layer must spread the variance the breeder SELECTED, not a fixed one.
+  #
+  # This was hardcoded to `<trait>_vpm`, so cross_upside was sqrt(VPM) whatever
+  # uc_variance_source said: a default PMV run ranked on PMV while the upside beside
+  # it -- and the portfolio quadrants and risk tertiles derived from that upside --
+  # came from a different estimand. PMV = VPM + tr(R Sigma_beta) and the gap varies
+  # per cross, so the median split on upside genuinely lands differently; a cross with
+  # poorly estimated effects gains relatively more PMV than one with sharp effects,
+  # which is the very distinction the split acts on.
+  #
+  # `mean` and `parent_distance` carry no within-family variance, so there is nothing
+  # the breeder could have selected. They keep the pure genetic variance as a
+  # documented fallback -- the layer still needs a spread.
+  # SINGLE-TRAIT ONLY. The multi-trait index below keeps the pure genetic variance, and
+  # that is a scientific constraint rather than an oversight: its cross_upside is
+  # sqrt(w'Sigma w) over the EXACT within-family covariance matrix (wf_var_<t> on the
+  # diagonal, wf_cov_<t>_<s> off it, from ng_cross_trait_within_family_cov). There is no
+  # PMV analogue for the off-diagonals -- marker-effect uncertainty is not estimated
+  # ACROSS traits -- so inflating only the diagonal would leave Sigma internally
+  # inconsistent, potentially not positive semi-definite, and not the variance of
+  # anything. A coherent VPM-basis Sigma beats a mixed-basis one.
+  risk_var_suffix <- ng_cp__risk_variance_suffix(trait_value_metric, uc_variance_source)
+  risk_cols <- paste0(traits_clean, "_", risk_var_suffix)
+  missing_risk_var <- !(risk_cols %in% names(scored_crosses))
+  if (any(missing_risk_var)) risk_cols[missing_risk_var] <-
+    paste0(traits_clean[missing_risk_var], "_vpm")
   vpm_cols <- paste0(traits_clean, "_vpm")
   pev_cols <- paste0(traits_clean, "_midparent_pev")
 
@@ -1742,11 +1968,11 @@ ng_cp__stage_rank <- function(ctx) {
     tn_col <- paste0(traits_clean, "_post_topn")
     ann_one <- function(tbl) {
       if (!nrow(tbl)) return(tbl)
-      if (!all(c(lvl_cols, vpm_cols, "parent1", "parent2") %in% names(tbl))) return(tbl)
+      if (!all(c(lvl_cols, risk_cols, "parent1", "parent2") %in% names(tbl))) return(tbl)
       pev <- if (pev_cols %in% names(tbl)) suppressWarnings(as.numeric(tbl[[pev_cols]])) else NULL
       psd <- if (sd_col %in% names(tbl)) suppressWarnings(as.numeric(tbl[[sd_col]])) else NULL
       ptn <- if (tn_col %in% names(tbl)) suppressWarnings(as.numeric(tbl[[tn_col]])) else NULL
-      ng_annotate_cross_priority(tbl, level = tbl[[lvl_cols]], vpm = tbl[[vpm_cols]],
+      ng_annotate_cross_priority(tbl, level = tbl[[lvl_cols]], vpm = tbl[[risk_cols]],
                                  pev = pev, effect_based_x = effect_based_x,
                                  post_sd = psd, prob_top_tier = ptn)
     }
@@ -1951,7 +2177,9 @@ ng_cp__stage_rank <- function(ctx) {
     include_trait_gebv = include_trait_gebv,
     trait_check_reference = ctx$trait_check_reference,
     multi_trait_meta = ctx$multi_trait_meta,
-    trait_value_metric = ctx$trait_value_metric
+    trait_value_metric = ctx$trait_value_metric,
+    trait_mean_source = ctx$trait_mean_source,
+    effect_summary = do.call(rbind, ctx$effect_summary)
   )
   ctx <- ng_ctx_put(
     ctx,
@@ -1995,7 +2223,7 @@ utils::globalVariables(c(
   "map_pos_col", "map_position_unit", "marker_map", "marker_map_std",
   "marker_ploidy", "marker_target_spec", "mate_relatedness", "mate_relatedness_weight",
   "max_crosses_per_parent", "max_pair_kinship", "method_varPMV", "min_crosses_per_parent",
-  "min_effect_reliability", "min_unique_parents", "multi_trait_method", "n_candidates_pre_lethal",
+  "min_cv_predictive_r2", "min_effect_reliability", "min_unique_parents", "multi_trait_method", "n_candidates_pre_lethal",
   "n_crosses", "n_iter", "n_threads", "objective",
   "ocs_iter", "optimizer", "optimizer_method", "output_dir",
   "output_file", "output_files", "parallel_backend", "parallel_cores_used",
@@ -2010,6 +2238,7 @@ utils::globalVariables(c(
   "threshold_penalty_weight", "threshold_policy", "training_genotype", "training_genotype_file",
   "training_genotype_id_col", "training_ids", "training_only_count", "training_phenotype",
   "training_phenotype_file", "training_phenotype_id_col",
+  "effect_gate", "effect_gate_min_cv_predictive_r2", "advisories", "advisory_summary",
   "trait_check_reference", "trait_checks", "trait_direction", "trait_mean_source",
   "trait_scores", "trait_spec", "trait_value_metric", "trait_value_metric_input",
   "uc_variance_source_input", "trait_weights",
@@ -2052,6 +2281,16 @@ ng_cp__assemble_result <- function(ctx) {
       trait_columns = trait_spec$column
     ),
     effect_summary = do.call(rbind, effect_summary),
+    # The per-trait cross-mean basis chosen by ng_choose_mean_source(). Emitted at
+    # top level because the only other record was inside posterior_predictions,
+    # which is absent entirely when run_posterior_prediction = FALSE -- so a run
+    # could finish, be delivered and be read with no way to tell whether the mean
+    # was genomic or phenotypic. See tests/workbook_reports_mean_source.R.
+    trait_mean_source = trait_mean_source,
+    # The post-effects advisory channel: what the run learned about its own marker
+    # effects, in the same shape as qc$issues so one renderer serves both.
+    advisories = advisories,
+    advisory_summary = ng_advisory_rollup(advisories),
     marker_effects = effects_list,
     trait_scores = trait_scores,
     posterior_effects = posterior_effects_list,
@@ -2073,8 +2312,15 @@ ng_cp__assemble_result <- function(ctx) {
     priority_risk_diagnostics = priority_risk_diagnostics,
     output_files = output_files,
     settings = list(
-      trait_value_metric = trait_value_metric_input,
-      uc_variance_source = uc_variance_source_input,
+      # RESOLVED, not the raw string. `var_complex` is rewritten to
+      # usefulness + pmv before anything runs (and several friendly aliases
+      # likewise), so echoing the input left the artifact unable to say which
+      # metric actually produced its numbers. The raw string is preserved
+      # alongside so provenance is not lost.
+      trait_value_metric = trait_value_metric,
+      uc_variance_source = uc_variance_source,
+      trait_value_metric_input = trait_value_metric_input,
+      uc_variance_source_input = uc_variance_source_input,
       method_varPMV = method_varPMV,
       multi_trait_method = multi_trait_method,
       progeny = target,
@@ -2159,6 +2405,12 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
                                     recomb_model = c("haldane", "kosambi"),
                                     selection_prop = 0.10,
                                     min_effect_reliability = 0.35,
+                                    min_cv_predictive_r2 = 0.35,
+                                    # The reliability gate is ON by default. "off" is an
+                                    # explicit, recorded opt-out for benchmark harnesses that
+                                    # deliberately drive weak-marker scenarios.
+                                    effect_gate = getOption("ngcd.effect_gate", "on"),
+                                    effect_gate_min_cv_predictive_r2 = NULL,
                                     grm_method = c("vanraden", "yang"),
                                     method_varPMV = c("fast", "full_posterior"),
                                     ril_mode = "infinite",
@@ -2260,6 +2512,10 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
   # lines) block het as a data error; 'ril' accepts residual het. Legacy
   # assume_inbred is deprecated (reconciled with a one-time warning). Canonicalise
   # once here so the staged config and inner calls carry a single clean value.
+  # Reject an unknown index method HERE, before any modelling. Its legal values do
+  # not depend on the data, and the downstream match.arg() that used to catch it
+  # sits behind the entire posterior pipeline -- 40.6 hours on a real 17-trait run.
+  multi_trait_method <- ng_multitrait_validate_method(multi_trait_method)
   parent_type <- ng_reconcile_parent_type(parent_type, assume_inbred)
   assume_inbred <- NULL
   config$parent_type <- parent_type

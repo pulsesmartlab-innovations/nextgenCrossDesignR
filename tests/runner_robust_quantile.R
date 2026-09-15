@@ -11,23 +11,33 @@ source(helper[file.exists(helper)][[1L]])
 tmp <- tempfile("ng_runner_robust_quantile_")
 dir.create(tmp, recursive = TRUE)
 
-ids <- paste0("P", sprintf("%02d", 1:10))
+# A ten-line panel over 12 markers cross-validates negative, so the reliability gate
+# refuses the run and the robust-quantile behaviour this file checks never executes.
+# Generated rather than hand-written so the panel can be realistic while the file stays
+# short. This test is about posterior quantiles and robust mate allocation, not marker
+# quality, and its assertions are about direction/ordering rather than fixed numbers.
 set.seed(4242L)
-geno <- data.frame(NAME = ids, matrix(2L * rbinom(10L * 12L, 1L, 0.5), nrow = 10L,
-                                      dimnames = list(NULL, sprintf("M%02d", 1:12))),
-                   check.names = FALSE, stringsAsFactors = FALSE)
+n_lines <- 60L; n_mk <- 20L
+ids <- sprintf("P%02d", seq_len(n_lines))
+gmat <- matrix(2L * rbinom(n_lines * n_mk, 1L, 0.5), nrow = n_lines,
+               dimnames = list(ids, sprintf("M%02d", seq_len(n_mk))))
+geno <- data.frame(NAME = ids, gmat, check.names = FALSE, stringsAsFactors = FALSE)
+
+gv_y <- as.numeric(gmat %*% c(1.2, -0.9, 0.7, 0, 1.0, -0.6, rep(0, n_mk - 6L)))
+gv_d <- as.numeric(gmat %*% c(-0.5, 0.8, 0, 0.9, -1.1, 0.6, rep(0, n_mk - 6L)))
 phenotype <- data.frame(
   NAME = ids,
-  yield = c(58, 60, 53, 68, 55, 64, 59, 63, 61, 57),
-  disease = c(4.0, 3.4, 5.1, 2.5, 4.7, 2.9, 3.6, 3.0, 3.9, 4.4),
+  yield   = 60 + 5 * as.numeric(scale(gv_y + rnorm(n_lines, 0, 0.2 * stats::sd(gv_y)))),
+  disease = 4  + 1 * as.numeric(scale(gv_d + rnorm(n_lines, 0, 0.2 * stats::sd(gv_d)))),
   stringsAsFactors = FALSE
 )
 marker_map <- data.frame(
-  SNP_code = sprintf("M%02d", 1:12),
-  Chromosome = rep(1:2, each = 6L),
-  Position_BP = rep(c(0, 2, 5, 9, 14, 20), 2) * 1e6,
+  SNP_code = colnames(gmat),
+  Chromosome = rep(1:2, each = n_mk / 2L),
+  Position_BP = rep(seq_len(n_mk / 2L) - 1L, 2) * 2e6,
   stringsAsFactors = FALSE
 )
+
 direction <- data.frame(
   Trait = c("yield", "disease"),
   PhenotypeColumn = c("yield", "disease"),

@@ -4,6 +4,12 @@ helper <- c(file.path("tests", "helper_load.R"), "helper_load.R",
             file.path("..", "tests", "helper_load.R"))
 source(helper[file.exists(helper)][[1L]])
 
+# Synthetic fixture: random genotypes against a random phenotype, so the marker
+# model has no signal BY CONSTRUCTION (cv_predictive_r2 is negative or unevaluable).
+# The reliability gate is therefore correct to refuse it -- this file tests scoring,
+# outputs and plumbing, not marker quality, so it opts out explicitly.
+options(ngcd.effect_gate = "off")
+
 # This test exercises the FULL runner (ng_run_cross_prediction -> ng_cp_pipeline stages ->
 # ng_run_cp_output_files -> ng_write_cross_priority_workbook) with write_outputs = TRUE, twice:
 # once with no checks at all (the most common real call pattern) and once with checks. Every

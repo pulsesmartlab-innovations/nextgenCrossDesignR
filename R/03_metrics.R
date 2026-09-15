@@ -28,6 +28,46 @@ ng_reconcile_parent_type <- function(parent_type = c("inbred", "dh", "ril"),
 # for which residual heterozygosity is a data error rather than biology.
 ng_parent_type_blocks_het <- function(parent_type) parent_type %in% c("inbred", "dh")
 
+# Parent-dosage validity: the checks that must run BEFORE any model-quality verdict.
+#
+# Data validity and model quality are different classes of verdict, and validity
+# comes first. "Your RIL parents are heterozygous and you supplied no phase" is a
+# fact about the inputs -- unambiguous and fixable. "Your markers do not predict
+# this trait" is a judgement about a model fitted FROM those inputs, and if the
+# inputs are wrong that judgement is not yet meaningful.
+#
+# Extracted so the runner can run it before the reliability gate. Without that, a
+# user with both problems was told about the markers, when the missing phase data
+# was the more fundamental and more actionable of the two. ng_score_crosses() still
+# calls it, so direct callers keep the check.
+ng_validate_parent_dosage <- function(geno, parent_type = "inbred", ploidy = 2L,
+                                      inbred_tolerance = 0.05,
+                                      inbred_marker_fraction = 0.02,
+                                      dh_marker_fraction = 0.005,
+                                      phased_haplotypes = NULL) {
+  geno <- ng_as_numeric_matrix(geno, "geno")
+  # Resolve to a scalar first. Callers reach this both after match.arg (a single
+  # value) and straight from a default (the full c("inbred","dh","ril") vector), and
+  # a length-3 logical in `&&` is an error, not a warning, in current R.
+  parent_type <- as.character(parent_type)[[1L]]
+  block_het <- isTRUE(ng_parent_type_blocks_het(parent_type))
+  frac <- if (identical(parent_type, "dh")) dh_marker_fraction else inbred_marker_fraction
+  audit <- ng_audit_inbred_dosage(geno, ploidy = ploidy, tolerance = inbred_tolerance,
+                                  fraction_tolerance = frac)
+  if (block_het && length(audit$violators)) {
+    ng_stop(sprintf(
+      "%d / %d parents carry heterozygous loci beyond tolerance (max het-marker frac = %.3f, examples: %s), but parent_type = '%s' declares fully fixed lines. A doubled-haploid (DH) line is homozygous by construction, so heterozygous loci in DH / fixed material indicate a genotyping or data error -- BLOCKED, do not proceed. If these are RILs (which legitimately retain residual heterozygosity at a few loci after finite selfing), set parent_type = 'ril' to proceed. With phased_haplotypes supplied, het-parent crosses then get the exact residual-het variance (ng_gms_additive_var_general); without phased haplotypes the a'Ra kernel treats parents as inbred and is biased low at the het loci.",
+      length(audit$violators), nrow(geno), audit$max_fraction,
+      paste(utils::head(audit$violators, 4L), collapse = ", "), parent_type))
+  }
+  if (!block_het && any(audit$fraction > 0) && is.null(phased_haplotypes)) {
+    ng_stop("parent_type = 'ril' includes residual-heterozygous parents, but phased_haplotypes ",
+            "was not supplied. The inbred a'Ra kernel is biased low for these parents; ",
+            "supply complete phased haplotypes or use fully inbred parents.")
+  }
+  invisible(audit)
+}
+
 ng_score_crosses <- function(geno,
                              effects,
                              marker_map = NULL,
@@ -41,6 +81,7 @@ ng_score_crosses <- function(geno,
                              parent_type = c("inbred", "dh", "ril"),
                              selection_prop = 0.10,
                              min_effect_reliability = 0.35,
+                             min_cv_predictive_r2 = 0.35,
                              recomb_model = c("haldane", "kosambi"),
                              window_cm = Inf,
                              use_cpp = TRUE,
@@ -76,7 +117,23 @@ ng_score_crosses <- function(geno,
   if (length(intercept_input) != 1L || !is.finite(intercept_input)) {
     ng_stop("effects$intercept must be one finite number")
   }
+  # An ABSENT beta_var makes PMV algebraically identical to VPM -- the marker-effect
+  # uncertainty term is all zeros -- while the column is still reported as `pmv`.
+  # That is a legitimate quantity but must not be indistinguishable from a PMV that
+  # carries real effect uncertainty, so the provenance is recorded and the surprise
+  # case is announced.
+  #
+  # A SUPPLIED all-zero beta_var is deliberately silent: R/30_posterior_prediction.R
+  # passes explicit zeros per draw because the effect uncertainty is carried by the
+  # draws themselves, and warning there would train users to ignore the warning that
+  # matters.
+  beta_var_source <- "supplied"
   if (is.null(effects$beta_var)) {
+    beta_var_source <- "absent_zero_filled"
+    warning("effects$beta_var is NULL: PMV is computed with zero marker-effect ",
+            "uncertainty and is numerically identical to VPM. The reported `pmv` ",
+            "column is a degenerate PMV (see the pmv_is_degenerate column).",
+            call. = FALSE)
     beta_var_input <- stats::setNames(rep(0, ncol(geno)), colnames(geno))
   } else {
     if (is.null(names(effects$beta_var)) || anyDuplicated(names(effects$beta_var))) {
@@ -109,6 +166,11 @@ ng_score_crosses <- function(geno,
   # not audited for a blocker. The per-dosage `inbred_tolerance` (numeric
   # rounding, e.g. 1.998 -> 2) applies in all cases. ploidy is threaded so the
   # audit does not misread a homozygous polyploid dosage as heterozygous.
+  ng_validate_parent_dosage(geno, parent_type = parent_type, ploidy = ploidy,
+                            inbred_tolerance = inbred_tolerance,
+                            inbred_marker_fraction = inbred_marker_fraction,
+                            dh_marker_fraction = dh_marker_fraction,
+                            phased_haplotypes = phased_haplotypes)
   het_marker_fraction <- if (identical(parent_type, "dh")) dh_marker_fraction else inbred_marker_fraction
   inbred_audit <- ng_audit_inbred_dosage(
     geno, ploidy = ploidy, tolerance = inbred_tolerance,
@@ -154,7 +216,8 @@ ng_score_crosses <- function(geno,
     blue = blue,
     blup = blup,
     ids = ids,
-    min_reliability = min_effect_reliability
+    min_reliability = min_effect_reliability,
+    min_cv_predictive_r2 = min_cv_predictive_r2
   )
   # Reuse a caller-supplied kinship matrix when given (avoids recomputing the O(n^2*m)
   # VanRaden G on identical genotypes across a per-trait scoring loop); else compute it.
@@ -257,12 +320,14 @@ ng_score_crosses <- function(geno,
   # of het-parent crosses with the exact phased-haplotype variance
   # (ng_gms_additive_var_general). Inbred-parent crosses and the no-phase / DH /
   # inbred paths are untouched.
+  het_corrected <- rep(FALSE, nrow(pairs))
   if (identical(parent_type, "ril") && !is.null(phased_haplotypes)) {
     corr <- ng_apply_het_parent_correction(
       dh_var, dh_pmv, dh_pmv_full, phased_haplotypes, sorted, pairs,
       target = target, recomb_model = recomb_model,
       beta_var = sorted$beta_var, beta_cov_full = posterior_cov_full)
     dh_var <- corr$vpm; dh_pmv <- corr$pmv; dh_pmv_full <- corr$pmv_full
+    het_corrected <- corr$corrected
   }
   effect_rel <- suppressWarnings(as.numeric(mean_source$reliability[[1L]]))
   if (!is.finite(effect_rel)) effect_rel <- NA_real_
@@ -272,6 +337,12 @@ ng_score_crosses <- function(geno,
 
   out <- pairs
   out$mean_source <- mean_source$source
+  # WHY that basis was chosen, not just which. ng_choose_mean_source() sets this in
+  # all four branches and, until now, nothing read it -- so the package recorded the
+  # decision while discarding the reason. "below_threshold" (measured and lost) and
+  # "cv_predictive_r2" (cleared the bar) have different remedies, and a reader who
+  # only sees `mean_source` cannot tell them apart.
+  out$mean_source_criterion <- as.character(mean_source$mean_source_criterion %||% NA_character_)[[1L]]
   out$effect_reliability <- effect_rel
   out$effect_reliability_is_calibrated <- isTRUE(mean_source$reliability_is_calibrated)
   out$effect_cv_predictive_r2 <- suppressWarnings(as.numeric((mean_source$cv_predictive_r2 %||% NA_real_)[[1L]]))
@@ -307,6 +378,26 @@ ng_score_crosses <- function(geno,
   } else {
     out$pmv_full_posterior <- NA_real_
   }
+  # PER-ROW ESTIMATOR PROVENANCE.
+  #
+  # The het-parent correction above replaces vpm/pmv for a SUBSET of rows using a
+  # different kernel (ng_gms_additive_var_general) that is dense and to which
+  # window_cm does not apply. Without these columns, two rows in the same table can
+  # carry variances from two estimators under two truncation regimes with nothing
+  # to tell them apart -- a breeder comparing them is comparing incomparable
+  # numbers and cannot know it. The polyploid scorer already does this correctly
+  # with its per-row `variance_model` column (R/46); this brings the diploid path
+  # into line.
+  base_estimator <- if (!is.null(posterior_cov_full)) "dh_recomb_full_posterior" else "dh_recomb_aRa"
+  out$variance_estimator <- ifelse(het_corrected, "phased_het_general", base_estimator)
+  # The window ACTUALLY applied to this row, not the run's nominal setting.
+  out$variance_window_cm <- ifelse(het_corrected, Inf, as.numeric(window_cm))
+  # TRUE means the pmv column carries no marker-effect uncertainty and is therefore
+  # numerically identical to vpm. Legitimate (the posterior path does it on purpose)
+  # but it must be visible.
+  out$beta_var_source <- beta_var_source
+  out$pmv_is_degenerate <- !any(as.numeric(beta_var_input) > 0)
+  attr(out, "variance_estimator_counts") <- table(out$variance_estimator)
   # Usefulness criteria are mu + i * sigma in genetic-value units. Two
   # variance choices (VPM = vpm; PMV = pmv) crossed with four
   # mean sources. Pre-v0.1.0 columns usefulness_pmv_scaled, uc_gated, uc_hybrid (and
@@ -896,6 +987,11 @@ ng_apply_het_parent_correction <- function(vpm, pmv, pmv_full,
   beta <- sorted$effects[markers]
   bc_diag <- diag(as.numeric(beta_var[markers]), length(markers)); dimnames(bc_diag) <- list(markers, markers)
   bc_full <- if (!is.null(beta_cov_full)) beta_cov_full[markers, markers, drop = FALSE] else NULL
+  # `corrected` is the point of this vector: these rows carry a variance from a
+  # DIFFERENT estimator (ng_gms_additive_var_general, dense, window_cm does not
+  # apply) than every other row in the same table. Returning it is what lets the
+  # caller label the rows instead of silently mixing two estimators.
+  corrected <- rep(FALSE, nrow(pairs))
   for (i in seq_len(nrow(pairs))) {
     p1 <- as.character(pairs$parent1[i]); p2 <- as.character(pairs$parent2[i])
     if ((het_of(p1) || het_of(p2)) && p1 %in% ids_ph && p2 %in% ids_ph) {
@@ -904,7 +1000,8 @@ ng_apply_het_parent_correction <- function(vpm, pmv, pmv_full,
       if (!is.null(bc_full) && !is.null(pmv_full)) {
         pmv_full[i] <- ng_gms_additive_var_general(p1, p2, hap_rows, beta, R, beta_cov = bc_full, target = target)[["PMV"]]
       }
+      corrected[i] <- TRUE
     }
   }
-  list(vpm = vpm, pmv = pmv, pmv_full = pmv_full)
+  list(vpm = vpm, pmv = pmv, pmv_full = pmv_full, corrected = corrected)
 }

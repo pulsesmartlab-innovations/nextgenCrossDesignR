@@ -7,15 +7,24 @@ if (nzchar(installed_lib)) {
   ))
   library(nextgenCrossDesign)
 } else {
-  root_candidates <- c(
-    file.path(getwd(), "nextgen_cross_design"),
-    getwd(),
-    file.path("..", "nextgen_cross_design"),
-    file.path("..")
-  )
-  root_hits <- root_candidates[file.exists(file.path(root_candidates, "R", "load.R"))]
-  stopifnot(length(root_hits) > 0L)
-  root <- normalizePath(root_hits[[1]], mustWork = TRUE)
+  # This preamble used to try getwd()/nextgen_cross_design BEFORE getwd(), so an
+  # untracked stale copy of the package beside the real sources won. In this working
+  # tree one exists at 0.19.0 -- eleven releases back, with no reliability gate -- so
+  # this file passed locally while testing an obsolete package, and failed on CI where
+  # no such copy exists. A green local run was not evidence of anything here.
+  #
+  # Commit ac35088 fixed this for eight harness tests; this file and
+  # user_cross_prediction_var_complex_alphamate.R were missed. Both now use the one
+  # shared resolver, which prefers a directory that is ITSELF the package over any copy
+  # nested inside it and requires DESCRIPTION to name this package.
+  local({
+    cands <- file.path(c(".", "..", "../..", "nextgen_cross_design",
+                         "../nextgen_cross_design"), "tools", "ng_find_package_root.R")
+    hit <- cands[file.exists(cands)]
+    if (!length(hit)) stop("cannot locate tools/ng_find_package_root.R", call. = FALSE)
+    source(hit[[1L]], local = FALSE)
+  })
+  root <- normalizePath(ng_find_package_root(getwd()), mustWork = TRUE)
   source(file.path(root, "tools", "ng_project_libpath.R")); ng_prepend_project_lib(file.path(dirname(root), ".Rlib"))
   source(file.path(root, "R", "load.R"))
   ng_load(root, use_cpp = FALSE, verbose = FALSE)
@@ -24,29 +33,31 @@ if (nzchar(installed_lib)) {
 tmp <- tempfile("ng_var_complex_alphamate_")
 dir.create(tmp, recursive = TRUE)
 
-ids <- paste0("P", sprintf("%02d", 1:7))
-geno <- data.frame(
-  NAME = ids,
-  M01 = c(0, 0, 2, 2, 0, 2, 0),
-  M02 = c(0, 2, 0, 2, 0, 2, 2),
-  M03 = c(2, 0, 2, 0, 2, 0, 2),
-  M04 = c(2, 2, 0, 0, 2, 0, 0),
-  M05 = c(0, 0, 2, 0, 2, 2, 2),
-  M06 = c(2, 0, 0, 2, 2, 0, 0),
-  M07 = c(0, 2, 2, 2, 0, 0, 2),
-  M08 = c(2, 2, 2, 0, 2, 0, 0),
-  check.names = FALSE
-)
+# Seven lines cannot be cross-validated, so the reliability gate refuses the run before
+# the var_complex + AlphaMate allocation path this file checks can execute. Generated
+# rather than hand-written so the panel is realistic while the file stays short; the
+# assertions here are about the allocation wrapper and metric plumbing, not about the
+# particular numbers.
+set.seed(8675L)
+n_lines <- 60L; n_mk <- 20L
+ids <- sprintf("P%02d", seq_len(n_lines))
+gm <- matrix(2L * rbinom(n_lines * n_mk, 1L, 0.5), nrow = n_lines,
+             dimnames = list(ids, paste0("M", sprintf("%02d", seq_len(n_mk)))))
+geno <- data.frame(NAME = ids, gm, check.names = FALSE, stringsAsFactors = FALSE)
+
+gv_y <- as.numeric(gm %*% c(1.2, -0.9, 0.7, 0, 1.0, -0.6, rep(0, n_mk - 6L)))
+gv_d <- as.numeric(gm %*% c(-0.5, 0.8, 0, 0.9, -1.1, 0.6, rep(0, n_mk - 6L)))
 phenotype <- data.frame(
   NAME = ids,
-  yield = c(58, 61, 53, 67, 55, 64, 60),
-  disease = c(4.0, 3.1, 5.2, 2.6, 4.6, 2.9, 3.4),
+  yield   = 60 + 5 * as.numeric(scale(gv_y + rnorm(n_lines, 0, 0.2 * stats::sd(gv_y)))),
+  disease = 4  + 1 * as.numeric(scale(gv_d + rnorm(n_lines, 0, 0.2 * stats::sd(gv_d)))),
   stringsAsFactors = FALSE
 )
+
 marker_map <- data.frame(
-  SNP_code = paste0("M", sprintf("%02d", 1:8)),
-  Chromosome = c(1, 1, 1, 1, 2, 2, 2, 2),
-  Position_BP = c(0, 1, 2, 3, 0, 1, 2, 3) * 1e6,
+  SNP_code = colnames(gm),
+  Chromosome = rep(1:2, each = n_mk / 2L),
+  Position_BP = rep(seq_len(n_mk / 2L) - 1L, 2) * 1e6,
   stringsAsFactors = FALSE
 )
 direction <- data.frame(
@@ -96,7 +107,18 @@ result <- ng_run_cross_prediction(
 )
 
 stopifnot(inherits(result, "ng_cross_prediction_result"))
-stopifnot(identical(result$settings$trait_value_metric, "var_complex"))
+# `var_complex` is a REQUEST, not a resolved method: ng_cp__build_ctx() maps it to
+# trait_value_metric = "usefulness" + uc_variance_source = "pmv" (unchanged since at
+# least 0.30.0). settings$trait_value_metric therefore carries the resolved token and
+# settings$trait_value_metric_input carries what the caller actually typed -- which is
+# the pair this assertion should check, not one of them alone.
+#
+# The old assertion expected "var_complex" back from settings and passed only because
+# this file was loading a stale 0.19.0 copy of the package, which predates the
+# normalisation. Against the real package it was always wrong.
+stopifnot(identical(result$settings$trait_value_metric_input, "var_complex"))
+stopifnot(identical(result$settings$trait_value_metric, "usefulness"))
+stopifnot(identical(result$effect_summary$trait_value_metric_resolved[[1L]], "usefulness"))
 stopifnot(identical(result$settings$allocation_method, "alphamate_style"))
 stopifnot(nrow(result$selected_crosses) == 4L)
 stopifnot(identical(result$plan_summary$alphamate_style, "native_proxy"))

@@ -23,7 +23,13 @@ stopifnot(identical(suppressWarnings(ng_reconcile_parent_type("ril",    assume_i
 
 ## --- integration: end-to-end governance through ng_run_cross_prediction ---
 set.seed(20240804L)
-n <- 30L; m <- 240L; ids <- sprintf("L%03d", seq_len(n)); snps <- sprintf("S%03d", seq_len(m))
+# n was 30 against 240 markers with noise at the genetic SD: unpredictable by
+# construction, so the reliability gate refused the run before the governance this test
+# exists to check could be exercised. Enlarged to 80 lines over 120 markers with
+# concentrated signal. m stays at 240: the DH-floor assertions further down depend on
+# it arithmetically (1/240 = 0.42% below the 0.5% floor, 2/240 = 0.83% above it), so
+# changing the marker count silently rewrites what those cases test.
+n <- 80L; m <- 240L; ids <- sprintf("L%03d", seq_len(n)); snps <- sprintf("S%03d", seq_len(m))
 G <- matrix(sample(c(0L, 2L), n * m, replace = TRUE), n, m, dimnames = list(NULL, snps))
 Ghet <- G; Ghet[1, 1:8] <- 1L                     # 8/120 = 6.7% het in one line (> 2% QC tol)
 mm <- data.frame(SNP_code = snps, Chromosome = rep(1:6, each = 40),
@@ -32,7 +38,7 @@ qtl <- sort(sample(m, 20)); bq <- rnorm(length(qtl))
 gv <- as.numeric(scale((G[, qtl] - 1) %*% bq))
 run <- function(geno, ...) do.call(ng_run_cross_prediction, c(list(
   genotype = data.frame(NAME = ids, geno, check.names = FALSE),
-  phenotype = data.frame(NAME = ids, yield = gv + rnorm(n)),
+  phenotype = data.frame(NAME = ids, yield = gv + rnorm(n, 0, 0.2)),
   trait_direction = data.frame(Trait = "yield", Selection_direction = "increase"),
   marker_map = mm, id_col = "NAME", map_position_unit = "bp", bp_per_cm = 1e6,
   n_crosses = 8L, progeny = "DH", seed = 1L), list(...)))

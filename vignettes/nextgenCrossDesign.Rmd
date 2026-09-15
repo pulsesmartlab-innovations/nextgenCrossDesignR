@@ -348,36 +348,56 @@ summarized here; the full decision tables live in `docs/BACKEND_USER_GUIDE.md`.
 
 ## The cross-scoring metric
 
-`trait_value_metric` decides how each candidate cross is scored:
+`trait_value_metric` decides how each candidate cross is scored. Two of these rank on the
+**variance itself**, not on a usefulness criterion — a distinction that changes the ranking, so
+it is worth reading the table rather than assuming:
 
 ```text
-trait_value_metric = "var_complex"  native PopVar-style usefulness (default): mean +/- i * within-family SD
-trait_value_metric = "pmv"          usefulness using PMV as the within-family variance
-trait_value_metric = "vpm"          usefulness using recombination variance (VPM)
-trait_value_metric = "usefulness"           usefulness criterion; pair with uc_variance_source
-trait_value_metric = "le"   relationship-distance diversity proxy (screening only)
-trait_value_metric = "mean"         cross mean only, no within-family variance
+trait_value_metric = "usefulness"       DEFAULT. Oriented cross mean +/- i * within-family SD.
+                                        uc_variance_source picks which variance (default "pmv").
+trait_value_metric = "var_complex"      Usefulness, with the variance chosen for you: PMV when
+                                        available, otherwise VPM. Implemented natively; does NOT
+                                        call PopVar.
+trait_value_metric = "pmv"              Ranks on the raw PMV within-family variance ALONE.
+                                        No cross mean enters the score.
+trait_value_metric = "vpm"              Ranks on the raw VPM recombination variance ALONE.
+                                        No cross mean enters the score.
+trait_value_metric = "mean"             Cross mean only, no within-family variance.
+trait_value_metric = "parent_distance"  GRM distance between the parents: a diversity proxy for
+                                        screening. It is NOT a variance and NOT a merit metric.
 ```
 
-When `trait_value_metric = "usefulness"`, `uc_variance_source` picks the variance column:
+`"le"` is a deprecated alias for `"parent_distance"`; the engine canonicalises it at config time,
+and `result$settings$uc_variance_source_input` preserves whichever spelling you supplied.
+
+When `trait_value_metric = "usefulness"`, `uc_variance_source` picks the variance column. **In
+practice there are two choices, not four:**
 
 ```text
-uc_variance_source = "pmv"        -> pmv
-uc_variance_source = "vpm"        -> vpm
-uc_variance_source = "le"        -> parent_distance
+uc_variance_source = "pmv"              -> pmv       (default)
+uc_variance_source = "vpm"              -> vpm
+uc_variance_source = "parent_distance"  REFUSED with trait_value_metric = "usefulness"
+uc_variance_source = "le"               same thing under the deprecated name -- also refused
 ```
+
+The refusal is deliberate and happens at config time, before any marker effect is fitted: genomic
+distance between parents is not a trait variance, so `mean + i * sqrt(distance)` is not a
+usefulness. If you want to rank on parental divergence, set `trait_value_metric =
+"parent_distance"` and rank on distance alone.
 
 ```{r}
 result <- ng_run_cross_prediction(
   phenotype = pheno, genotype = geno, marker_map = map, trait_direction = direction,
   id_col = "NAME", map_position_unit = "bp", bp_per_cm = 1e6,
-  trait_value_metric = "pmv"        # try "var_complex", "vpm", "mean", ...
+  trait_value_metric = "usefulness",  # the default; try "var_complex", "vpm", "mean", ...
+  uc_variance_source = "pmv"
 )
 ```
 
-`var_complex` is implemented natively — it does **not** call PopVar. It uses the usefulness idea
-breeders expect (oriented cross mean plus or minus selection intensity times within-family SD),
-preferring PMV variance when available and falling back to recombination variance or `parent_distance`.
+Whichever you pick, the run records what it actually did: `result$effect_summary` carries
+`trait_value_metric_resolved` and `variance_column_used` per trait (`var_complex` reports the
+variance it settled on, not the string you passed), and the `Scoring_Method` sheet of the Excel
+workbook states the cross-mean basis and the within-family variance method in prose.
 
 **Key evidence — single-round ranking is not long-term gain.** For a **single** selection round,
 `var_complex`/`pmv`/`vpm` rank crosses almost identically, and `mean` is competitive only for
@@ -390,7 +410,32 @@ is the central finding of `tools/run_method_optimizer_metric_study.R` (10 reps x
 ## Enlarging the marker-effect training set
 
 Every metric except `parent_distance` is driven by estimated **marker effects**, and those effects are
-sharper when they are trained on more genotyped + phenotyped individuals. You can enlarge the
+sharper when they are trained on more genotyped + phenotyped individuals.
+
+This matters more than it sounds, because **the engine refuses to run when it cannot demonstrate
+that the marker effects predict anything.** After the ridge fit — and before the expensive cross
+scoring — each trait's out-of-fold `cv_predictive_r2` is checked:
+
+```text
+cv_predictive_r2 unevaluable (NA: n < 10) or negative  -> the run REFUSES, naming the traits
+0 <= cv_predictive_r2 < min_cv_predictive_r2 (0.35)    -> cross MEANS fall back to the phenotypic
+                                                          mid-parent; a warning says so per trait
+cv_predictive_r2 >= min_cv_predictive_r2               -> GEBV cross means
+```
+
+The refusal applies to every metric whose delivered value contains a within-family variance —
+`usefulness`, `var_complex`, `pmv`, `vpm` — because every within-family variance in this package
+is a quadratic form in the estimated marker effects. `mean` and `parent_distance` are exempt: the
+first falls back to phenotype and so carries no marker content, the second never uses marker
+effects at all. Both are honest non-genomic analyses, correctly labelled.
+
+Note the asymmetry in the middle tier: a fallback replaces the *mean* with a phenotypic mid-parent
+but leaves the *variance* marker-derived. `result$effect_summary` reports both bases so the
+combination is visible rather than implied.
+
+`ng_preview_marker_effects(config)` runs QC and the marker-effect fits only — no cross is scored —
+and returns the per-trait `cv_predictive_r2` and the verdict the gate will reach. Use it to find
+out whether a run is worth launching before committing hours to it. You can enlarge the
 training set with extra individuals ("others") that are **not** crossing candidates — they inform
 the ridge fit only and never appear in the crossing plan.
 

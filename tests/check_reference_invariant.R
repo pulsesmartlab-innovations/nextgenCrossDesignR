@@ -4,6 +4,12 @@ helper <- c(file.path("tests", "helper_load.R"), "helper_load.R",
             file.path("..", "tests", "helper_load.R"))
 source(helper[file.exists(helper)][[1L]])
 
+# Synthetic fixture: random genotypes against a random phenotype, so the marker
+# model has no signal BY CONSTRUCTION (cv_predictive_r2 is negative or unevaluable).
+# The reliability gate is therefore correct to refuse it -- this file tests the
+# check-reference invariant, not marker quality, so it opts out explicitly.
+options(ngcd.effect_gate = "off")
+
 set.seed(202)
 n_p <- 14L; n_m <- 50L
 ids <- paste0("P", seq_len(n_p))

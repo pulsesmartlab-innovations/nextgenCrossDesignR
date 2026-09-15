@@ -9,9 +9,33 @@ ng_backend_registry_timestamp <- function(generated_at = Sys.time()) {
 ng_backend_controls <- function() {
   ch <- function(x) unname(Map(function(v, l) list(value = v, label = unname(l)), names(x), x))
   enum <- function(id, label, group, default, x, capability = NA_character_,
-                   depends_on = NA_character_) {
+                   depends_on = NA_character_, status = NA_character_,
+                   note = NA_character_) {
     list(id = id, label = label, group = group, type = "enum", default = default,
-         capability = capability, depends_on = depends_on, choices = ch(x))
+         capability = capability, depends_on = depends_on, status = status,
+         note = note, choices = ch(x))
+  }
+  # Numeric controls. The registry could previously describe only enums, so every
+  # numeric parameter was invisible to the contract and a frontend had no option but to
+  # hardcode it. The consequence was the worst available case: the workbench shipped a
+  # hardcoded numericInput for `min_effect_reliability`, which governs no run, while
+  # `min_cv_predictive_r2` -- the threshold deciding whether cross means are genomic --
+  # could not be named at all. A UI cannot be blamed for surfacing the wrong dial when
+  # the contract cannot describe the right one.
+  #
+  # `status` carries the same meaning it does on an enum CHOICE: "guarded" or
+  # "experimental" marks something a frontend should not offer. Note that the workbench's
+  # ngcd_control_choices() currently filters CHOICES by status, not whole controls, so a
+  # guarded numeric still needs a frontend change to disappear -- declaring it is what
+  # makes that change possible, not what performs it.
+  num <- function(id, label, group, default, min = NA_real_, max = NA_real_,
+                  step = NA_real_, capability = NA_character_,
+                  depends_on = NA_character_, status = NA_character_,
+                  note = NA_character_) {
+    list(id = id, label = label, group = group, type = "number",
+         default = as.numeric(default), min = as.numeric(min), max = as.numeric(max),
+         step = as.numeric(step), capability = capability, depends_on = depends_on,
+         status = status, note = note)
   }
   list(
     enum("map_position_unit", "Map position unit", "data", "bp",
@@ -36,6 +60,27 @@ ng_backend_controls <- function() {
       c(family_variance          = "Family variance",
         reliable_family_variance = "Prediction-aware family variance (PMV)"),
       depends_on = "trait_value_metric=usefulness"),
+    # --- marker-effect reliability gate -------------------------------------------
+    num("min_cv_predictive_r2", "Minimum marker predictive ability (out-of-fold R2)",
+        "scoring", 0.35, min = 0, max = 1, step = 0.05,
+        capability = "dh_ril_pmv_scoring",
+        note = paste0("THE reliability threshold. Per trait, the out-of-fold predictive ",
+                      "R2 the marker model must reach before cross MEANS are genomic ",
+                      "(GEBV). Below it the mean falls back to the phenotypic mid-parent ",
+                      "while the within-family variance stays marker-derived. An ",
+                      "unevaluable (fewer than 10 records) or negative R2 refuses the run ",
+                      "for any metric carrying a variance.")),
+    enum("effect_gate", "Marker-effect reliability gate", "scoring", "on",
+      c(on  = "On (refuse a run the markers cannot support)",
+        off = "Off (diagnostics only)"),
+      capability = "dh_ril_pmv_scoring"),
+    num("min_effect_reliability", "Min marker-effect reliability", "scoring", 0.35,
+        min = 0, max = 1, step = 0.05, status = "guarded",
+        note = paste0("RESERVED and currently inert: it gates the calibrated-reliability ",
+                      "branch of mean selection, and nothing in this package sets a ",
+                      "calibrated reliability, so changing it governs no run. Kept as the ",
+                      "hook for a future PEV-based reliability. Do not surface this as ",
+                      "the reliability control -- min_cv_predictive_r2 is the live one.")),
     enum("method_varPMV", "Variance accuracy", "scoring", "fast",
       c(fast           = "Standard (fast)",
         full_posterior = "High-accuracy (full, slower)"),

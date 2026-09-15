@@ -6,7 +6,14 @@ helper <- c(file.path("tests", "helper_load.R"), "helper_load.R",
 source(helper[file.exists(helper)][[1L]])
 
 set.seed(808)
-ids <- sprintf("P%02d", 1:14)
+# The phenotype used to be rnorm(60, 5) -- pure noise, with no relationship to the
+# markers at all. No ridge fit can predict that, so the reliability gate refuses the
+# run, correctly: a genomic prediction on an unlinked phenotype is meaningless. This
+# test is about the runner's integration surface (lethal-locus carriers, per-parent
+# caps, diagnostics), so the phenotype is now genuinely marker-driven and the panel
+# is large enough to cross-validate. The M10 lethal structure below is unchanged and
+# still has exactly P01 and P02 as carriers.
+ids <- sprintf("P%02d", 1:60)
 mk <- sprintf("M%02d", 1:10)
 # inbred lines (homozygous 0/2) so the DH recombination-variance kernel is valid
 gm <- matrix(2L * rbinom(length(ids) * length(mk), 1, 0.5),
@@ -15,8 +22,9 @@ gm <- matrix(2L * rbinom(length(ids) * length(mk), 1, 0.5),
 # rest are homozygous-safe (0). Carrier x carrier = P01 x P02.
 gm[, "M10"] <- 0L; gm[c(1, 2), "M10"] <- 2L
 genotype <- data.frame(NAME = ids, gm, check.names = FALSE, stringsAsFactors = FALSE)
+gv <- as.numeric(gm[, 1:6] %*% rnorm(6L, 0, 1))
 phenotype <- data.frame(NAME = ids,
-                        yield = rnorm(length(ids), 60, 5),
+                        yield = 60 + 5 * as.numeric(scale(gv + rnorm(length(ids), 0, 0.2 * stats::sd(gv)))),
                         stringsAsFactors = FALSE)
 marker_map <- data.frame(SNP_code = mk, Chromosome = rep(1:2, each = 5),
                          Position_BP = rep(c(0, 1, 2, 3, 4) * 1e6, 2),

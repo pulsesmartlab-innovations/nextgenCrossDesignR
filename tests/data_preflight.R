@@ -1,8 +1,14 @@
+# Repository root FIRST. Checking `nextgen_cross_design/` ahead of getwd() made
+# these tests load a STALE 0.19.0 copy of the package that sits in the working
+# tree under exactly that name -- so they validated a package eleven versions old
+# while appearing to cover the current one. The ones that failed were the lucky
+# case; the ones that passed gave false assurance. ng_load() already resolves in
+# this order; only these hand-rolled preambles inverted it.
 root_candidates <- c(
-  file.path(getwd(), "nextgen_cross_design"),
   getwd(),
-  file.path("..", "nextgen_cross_design"),
-  file.path("..")
+  file.path(".."),
+  file.path(getwd(), "nextgen_cross_design"),
+  file.path("..", "nextgen_cross_design")
 )
 root_hits <- root_candidates[file.exists(file.path(root_candidates, "R", "load.R"))]
 stopifnot(length(root_hits) > 0L)

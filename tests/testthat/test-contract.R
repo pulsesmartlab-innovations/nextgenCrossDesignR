@@ -18,10 +18,25 @@ test_that("the controls section enumerates dropdowns with valid defaults", {
   ids <- vapply(reg$controls, function(x) x$id, character(1))
   expect_true(all(c("trait_value_metric", "multi_trait_method", "optimizer",
                     "allocation_method", "progeny") %in% ids))
+  # Type-aware. This demanded `choices` of EVERY control, which is exactly what pinned
+  # the registry to enums: no numeric parameter could be declared, so the workbench had
+  # to hardcode each one -- and ended up exposing the inert min_effect_reliability while
+  # min_cv_predictive_r2, the threshold that governs mean selection, was undeclarable.
   for (ctl in reg$controls) {
-    expect_true(all(c("id", "label", "group", "type", "default", "choices") %in% names(ctl)))
-    vals <- vapply(ctl$choices, function(x) x$value, character(1))
-    expect_true(length(vals) >= 2L && ctl$default %in% vals)
+    expect_true(all(c("id", "label", "group", "type", "default") %in% names(ctl)))
+    if (identical(ctl$type, "enum")) {
+      expect_true("choices" %in% names(ctl))
+      vals <- vapply(ctl$choices, function(x) x$value, character(1))
+      expect_true(length(vals) >= 2L && ctl$default %in% vals)
+    } else if (identical(ctl$type, "number")) {
+      expect_true(all(c("min", "max", "step") %in% names(ctl)))
+      expect_true(is.numeric(ctl$default) && length(ctl$default) == 1L &&
+                    is.finite(ctl$default))
+      expect_true(is.finite(ctl$min) && is.finite(ctl$max) && ctl$min < ctl$max)
+      expect_true(ctl$default >= ctl$min && ctl$default <= ctl$max)
+    } else {
+      fail(paste("unknown control type in the registry:", ctl$type))
+    }
   }
 })
 

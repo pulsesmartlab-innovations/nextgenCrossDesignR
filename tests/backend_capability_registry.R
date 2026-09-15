@@ -9,10 +9,25 @@ stopifnot(identical(registry$generated_at, "2026-05-07T00:00:00Z"))
 
 # controls section: enumerable UI controls the frontend renders dropdowns from
 stopifnot(is.list(registry$controls), length(registry$controls) >= 15L)
+# Every control carries the common fields; the type-specific ones differ. Enums must
+# offer choices; numbers must carry a bounded, renderable range instead. This used to
+# demand `choices` of everything, which silently meant the registry could describe only
+# enums -- so no numeric parameter could be declared and a frontend had to hardcode
+# every one of them. See tests/registry_declares_numeric_controls.R.
 for (ctl in registry$controls) {
-  stopifnot(all(c("id", "label", "group", "type", "default", "choices") %in% names(ctl)))
-  stopifnot(is.list(ctl$choices), length(ctl$choices) >= 2L)
-  for (cho in ctl$choices) stopifnot(all(c("value", "label") %in% names(cho)))
+  stopifnot(all(c("id", "label", "group", "type", "default") %in% names(ctl)))
+  if (identical(ctl$type, "enum")) {
+    stopifnot("choices" %in% names(ctl))
+    stopifnot(is.list(ctl$choices), length(ctl$choices) >= 2L)
+    for (cho in ctl$choices) stopifnot(all(c("value", "label") %in% names(cho)))
+  } else if (identical(ctl$type, "number")) {
+    stopifnot(all(c("min", "max", "step") %in% names(ctl)))
+    stopifnot(is.numeric(ctl$default), length(ctl$default) == 1L, is.finite(ctl$default))
+    stopifnot(is.finite(ctl$min), is.finite(ctl$max), ctl$min < ctl$max)
+    stopifnot(ctl$default >= ctl$min, ctl$default <= ctl$max)
+  } else {
+    stop("unknown control type in the registry: ", ctl$type, call. = FALSE)
+  }
 }
 ctl_ids <- vapply(registry$controls, function(x) x$id, character(1))
 stopifnot(all(c("trait_value_metric", "multi_trait_method", "optimizer",
@@ -21,8 +36,9 @@ stopifnot(all(c("trait_value_metric", "multi_trait_method", "optimizer",
 mtm <- registry$controls[[which(ctl_ids == "multi_trait_method")]]
 mtm_vals <- vapply(mtm$choices, function(x) x$value, character(1))
 stopifnot(all(c("auto", "weighted", "economic_index", "desired_gain", "threshold") %in% mtm_vals))
-# defaults must be valid choices
+# defaults must be valid choices (enums only -- a number's default is range-checked above)
 for (ctl in registry$controls) {
+  if (!identical(ctl$type, "enum")) next
   vals <- vapply(ctl$choices, function(x) x$value, character(1))
   stopifnot(ctl$default %in% vals)
 }

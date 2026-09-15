@@ -6,29 +6,35 @@ source(helper[file.exists(helper)][[1L]])
 tmp <- tempfile("ng_user_cross_prediction_posterior_params_")
 dir.create(tmp, recursive = TRUE)
 
-ids <- paste0("P", sprintf("%02d", 1:8))
-geno <- data.frame(
-  NAME = ids,
-  M01 = c(0, 0, 2, 2, 0, 2, 0, 2),
-  M02 = c(0, 0, 2, 2, 0, 2, 0, 2),
-  M03 = c(2, 0, 2, 0, 2, 0, 2, 0),
-  M04 = c(2, 0, 2, 0, 2, 0, 2, 0),
-  M05 = c(0, 2, 0, 2, 0, 2, 2, 0),
-  M06 = c(2, 2, 0, 0, 2, 0, 0, 2),
-  check.names = FALSE
-)
+# An eight-line panel cannot be cross-validated: below ten genotyped-and-phenotyped
+# records cv_predictive_r2 is unevaluable, so the reliability gate refuses the run and
+# the parameter plumbing this file checks never executes. The panel is generated rather
+# than hand-written so it can be a realistic size while the file stays short; this test
+# asserts that posterior SETTINGS round-trip (n_iter, burn_in, posterior_n_draws,
+# method_varPMV, ril_mode), which does not depend on the particular numbers.
+#
+# 20 markers rather than 6: with 6 biallelic markers a 60-line panel is mostly duplicate
+# genotypes, which changes what QC does to the panel before scoring.
+set.seed(2718L)
+n_lines <- 60L; n_mk <- 20L
+ids <- sprintf("P%02d", seq_len(n_lines))
+gm <- matrix(2L * rbinom(n_lines * n_mk, 1L, 0.5), nrow = n_lines,
+             dimnames = list(ids, paste0("M", sprintf("%02d", seq_len(n_mk)))))
+geno <- data.frame(NAME = ids, gm, check.names = FALSE, stringsAsFactors = FALSE)
 
+gv_y <- as.numeric(gm %*% c(1.2, -0.9, 0.7, 0, 1.0, -0.6, rep(0, n_mk - 6L)))
+gv_d <- as.numeric(gm %*% c(-0.5, 0.8, 0, 0.9, -1.1, 0.6, rep(0, n_mk - 6L)))
 phenotype <- data.frame(
   NAME = ids,
-  yield = c(58, 60, 53, 68, 55, 64, 59, 63),
-  disease = c(4.0, 3.4, 5.1, 2.5, 4.7, 2.9, 3.6, 3.0),
+  yield   = 60 + 5 * as.numeric(scale(gv_y + rnorm(n_lines, 0, 0.2 * stats::sd(gv_y)))),
+  disease = 4  + 1 * as.numeric(scale(gv_d + rnorm(n_lines, 0, 0.2 * stats::sd(gv_d)))),
   stringsAsFactors = FALSE
 )
 
 marker_map <- data.frame(
-  SNP_code = paste0("M", sprintf("%02d", 1:6)),
-  Chromosome = c(1, 1, 1, 1, 2, 2),
-  Position_BP = c(0, 1, 3, 6, 0, 2) * 1e6,
+  SNP_code = colnames(gm),
+  Chromosome = rep(1:2, each = n_mk / 2L),
+  Position_BP = rep(seq_len(n_mk / 2L) - 1L, 2) * 1e6,
   stringsAsFactors = FALSE
 )
 

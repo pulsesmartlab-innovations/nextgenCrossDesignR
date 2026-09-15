@@ -461,6 +461,13 @@ ng_posterior_cross_predict <- function(geno,
                                        parent_type = c("inbred", "dh", "ril"),
                                        selection_prop = 0.10,
                                        min_effect_reliability = 0.35,
+                                     # Threaded, not defaulted. Omitting it made this
+                                     # path apply 0.35 while the run used its own
+                                     # threshold, so posterior_predictions$mean_source
+                                     # contradicted effect_summary$mean_source in the
+                                     # same result.json. See
+                                     # tests/mean_source_policy_parity.R.
+                                     min_cv_predictive_r2 = 0.35,
                                        recomb_model = c("haldane", "kosambi"),
                                        window_cm = Inf,
                                        use_cpp = TRUE,
@@ -539,6 +546,7 @@ ng_posterior_cross_predict <- function(geno,
     include_self = include_self, target = target,
     selection_prop = selection_prop,
     min_effect_reliability = min_effect_reliability,
+    min_cv_predictive_r2 = min_cv_predictive_r2,
     recomb_model = recomb_model, window_cm = window_cm, use_cpp = use_cpp,
     parent_type = parent_type
   )
@@ -581,7 +589,15 @@ ng_posterior_cross_predict <- function(geno,
       target = target, selection_prop = selection_prop,
       min_effect_reliability = min_effect_reliability,
       recomb_model = recomb_model, window_cm = window_cm, use_cpp = use_cpp,
-      parent_type = parent_type
+      parent_type = parent_type,
+      # The run's threshold, not ng_score_crosses()'s default. Without this the draws
+      # ran a DIFFERENT mean-source policy than the run: a run that fell back to the
+      # phenotypic mid-parent could have every draw resolve to GEBV, so the mean varied
+      # across draws and the risk layer reported a posterior interval for a quantity
+      # that is constant by construction. A phenotypic mid-parent does not depend on
+      # beta; its posterior SD is exactly zero and the honest report is
+      # relative_precision_unavailable.
+      min_cv_predictive_r2 = min_cv_predictive_r2
     )
     pmv_mat[, s] <- scored[[var_col]]
     if (!is.null(mu_mat)) mu_mat[, s] <- scored$cross_mean_gebv

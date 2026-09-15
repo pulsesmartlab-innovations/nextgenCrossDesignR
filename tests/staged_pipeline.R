@@ -2,6 +2,12 @@ ng_test_use_cpp <- TRUE
 helper <- c(file.path("tests", "helper_load.R"), "helper_load.R", file.path("nextgen_cross_design", "tests", "helper_load.R"), file.path("..", "tests", "helper_load.R"))
 source(helper[file.exists(helper)][[1L]])
 
+# Synthetic fixture: random genotypes against a random phenotype, so the marker
+# model has no signal BY CONSTRUCTION (cv_predictive_r2 is negative or unevaluable).
+# The reliability gate is therefore correct to refuse it -- this file tests scoring,
+# outputs and plumbing, not marker quality, so it opts out explicitly.
+options(ngcd.effect_gate = "off")
+
 # --- synthetic inputs (self-contained; no external golden fixture) -------
 # 40 lines x 240 markers over 6 chromosomes. The staged==monolith equivalence
 # below holds for ANY valid input, and the monolith baseline is computed at

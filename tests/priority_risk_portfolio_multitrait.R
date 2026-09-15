@@ -101,21 +101,37 @@ cat("ng_multitrait_index_pev test passed\n")
 
 # --- e2e: a 2-trait run gets the SAME six columns the single-trait run gets ---
 set.seed(11)
-n <- 20L; mk <- 80L; gid <- sprintf("P%02d", seq_len(n))
+# n was 20 against 80 markers: cross-validates negative, so the reliability gate refuses
+# before the two-trait columns this block checks can be produced. Enlarged with the signal
+# concentrated on 12 QTL. The ANTAGONISM (b2 = -0.8 * b1) is the structure under test and
+# is preserved exactly -- shared QTL with opposite signs, giving negative within-family
+# covariance.
+n <- 80L; mk <- 80L; gid <- sprintf("P%02d", seq_len(n))
 gm <- matrix(2L * rbinom(n * mk, 1, 0.5), n, mk,
              dimnames = list(gid, sprintf("M%03d", seq_len(mk))))
 # antagonistic traits: shared QTL with opposite signs -> negative within-family covariance
-b1 <- rnorm(mk, 0, 0.1)
-b2 <- -0.8 * b1 + rnorm(mk, 0, 0.03)
-y1 <- as.numeric(gm %*% b1) + rnorm(n, 0, 0.5)
-y2 <- as.numeric(gm %*% b2) + rnorm(n, 0, 0.5)
+b1 <- c(rnorm(12L, 0, 1), rep(0, mk - 12L))
+# 0.35, not 0.05: with the signal concentrated on 12 QTL, a near-deterministic
+# b2 = -0.8 * b1 makes the genetic covariance matrix effectively rank-one, and the
+# economic-index path then rejects P - G as not positive definite. This keeps the
+# antagonism the test is about while leaving G well conditioned.
+b2 <- -0.8 * b1 + c(rnorm(12L, 0, 0.35), rep(0, mk - 12L))
+gv1 <- as.numeric(gm %*% b1); gv2 <- as.numeric(gm %*% b2)
+e_sd1 <- 0.45 * stats::sd(gv1); e_sd2 <- 0.45 * stats::sd(gv2)
+y1 <- gv1 + rnorm(n, 0, e_sd1)
+y2 <- gv2 + rnorm(n, 0, e_sd2)
 genotype  <- data.frame(NAME = gid, gm, check.names = FALSE, stringsAsFactors = FALSE)
 phenotype <- data.frame(NAME = gid, yield = y1, protein = y2, stringsAsFactors = FALSE)
-P_econ <- stats::cov(cbind(yield = y1, protein = y2))
-G_econ <- stats::cov(cbind(
-  yield = as.numeric(gm %*% b1),
-  protein = as.numeric(gm %*% b2)
-))
+# P is built as G + R rather than as cov(y). The economic-index path requires
+# P - G to be positive definite, and at finite n the sample cov(y) - cov(gv) is
+# cov(e) PLUS the sample cross-covariance between gv and e, which is O(1/sqrt(n))
+# and can tip an eigenvalue negative however the noise is scaled. Supplying a
+# consistent pair is what a caller should do anyway: R is the residual covariance
+# by construction, so the pair cannot be internally contradictory.
+G_econ <- stats::cov(cbind(yield = gv1, protein = gv2))
+P_econ <- G_econ + diag(c(e_sd1, e_sd2)^2)
+dimnames(P_econ) <- dimnames(G_econ)
+stopifnot(all(eigen(P_econ - G_econ, symmetric = TRUE, only.values = TRUE)$values > 0))
 runmm <- data.frame(SNP = colnames(gm), chr = rep(1:2, length.out = mk),
                     bp = rep(seq(0, 100, length.out = 40), 2)[seq_len(mk)] * 1e6)
 dir2 <- data.frame(trait = c("yield", "protein"), column = c("yield", "protein"),
@@ -258,12 +274,22 @@ dir_n <- data.frame(trait = c("yield", "protein", "noise"),
                     column = c("yield", "protein", "noise"),
                     direction = c("increase", "increase", "increase"),
                     weight = c(0.5, 0.4, 0.1))
-res_n <- ng_run_cross_prediction(
+# effect_gate = "off" is correct HERE and nowhere else in this file. The `noise` trait
+# is a deliberate null -- rnorm(n), unrelated to any marker -- and the assertion at the
+# bottom of this block is that the CV diagnostic RANKS it below a real trait. The
+# reliability gate refuses exactly that trait, for exactly the right reason, so with the
+# gate on this run cannot start and the diagnostic can never be observed.
+#
+# This is the diagnostics escape hatch the gate documents, used for its stated purpose.
+# It is not a way around a fixture that is merely too small: every other fixture in this
+# file was enlarged to clear the gate on its merits instead. A null trait cannot be
+# enlarged into a predictable one without deleting the thing under test.
+res_n <- suppressWarnings(ng_run_cross_prediction(
   phenotype = phen_n, genotype = genotype, marker_map = runmm, trait_direction = dir_n,
   id_col = "NAME", map_marker_col = "SNP", map_chr_col = "chr", map_pos_col = "bp",
   map_pos_cm_divisor = 1e6, trait_value_metric = "usefulness", n_crosses = 8L,
   max_crosses_per_parent = 3L, use_ocs = TRUE, write_outputs = FALSE, write_figures = FALSE,
-  seed = 5L)
+  seed = 5L, effect_gate = "off"))
 dn <- res_n$priority_risk_diagnostics; cn2 <- res_n$candidate_crosses
 stopifnot(all(c("risk_driver_trait", "risk_driver_share") %in% names(cn2)))
 stopifnot(all(c("risk_driver_trait", "risk_driver_share") %in% names(res_n$selected_crosses)))
