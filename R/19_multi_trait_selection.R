@@ -14,7 +14,7 @@
 # "pesek_baker" are the names this package's OWN comments and `source` labels use
 # for economic_index and desired_gain, so they are the obvious things to type.
 ng_multitrait_methods <- function() {
-  c("auto", "weighted", "threshold", "economic_index", "desired_gain")
+  c("auto", "weighted", "threshold", "economic_index", "desired_gain", "rank_sum")
 }
 
 ng_multitrait_validate_method <- function(method, arg = "multi_trait_method") {
@@ -23,7 +23,10 @@ ng_multitrait_validate_method <- function(method, arg = "multi_trait_method") {
   if (m %in% methods) return(m)
   alias <- c(smith_hazel = "economic_index", `smith-hazel` = "economic_index",
              smithhazel = "economic_index", pesek_baker = "desired_gain",
-             `pesek-baker` = "desired_gain", pesekbaker = "desired_gain")
+             `pesek-baker` = "desired_gain", pesekbaker = "desired_gain",
+             mulamba_mock = "rank_sum", `mulamba-mock` = "rank_sum",
+             mulambamock = "rank_sum", rsi = "rank_sum",
+             rank_summation = "rank_sum", rank_summation_index = "rank_sum")
   hint <- if (m %in% names(alias)) {
     paste0(" -- \"", m, "\" is this package's internal label for the ",
            alias[[m]], " solve, not a value of ", arg, "; use \"", alias[[m]], "\"")
@@ -42,6 +45,7 @@ ng_multitrait_method_family <- function(method) {
   if (identical(method, "weighted")) return("weighted_index")
   if (identical(method, "economic_index")) return("economic_index")
   if (identical(method, "desired_gain")) return("desired_gain")
+  if (identical(method, "rank_sum")) return("rank_sum")
   "other"
 }
 
@@ -49,7 +53,8 @@ ng_multitrait_policy_select <- function(method = "auto",
                                         available_methods = NULL,
                                         source = ng_multitrait_default_source()) {
   method <- trimws(tolower(as.character(method)[[1]]))
-  candidates <- c("auto", "threshold", "weighted", "economic_index", "desired_gain")
+  candidates <- c("auto", "threshold", "weighted", "economic_index", "desired_gain",
+                  "rank_sum")
   if (!(method %in% candidates)) ng_stop("method must be one of: ", paste(candidates, collapse = ", "))
   candidates <- unique(c(method, candidates))
   available_methods <- if (is.null(available_methods)) {
@@ -242,7 +247,10 @@ ng_breeder_selection_objective <- function(trait,
                                            source = "breeder_selection_objective_2026_06_20") {
   threshold_policy <- match.arg(threshold_policy)
   method <- trimws(tolower(as.character(method)[[1]]))
-  allowed <- c("auto", "weighted", "economic_index", "desired_gain")
+  # rank_sum resolves its weights exactly as "weighted" does -- plain per-trait weights,
+  # equal by default -- so it belongs in this list. What differs is what the weights
+  # multiply: raw ranks rather than normal scores. See ng_add_multitrait_score().
+  allowed <- c("auto", "weighted", "economic_index", "desired_gain", "rank_sum")
   if (!(method %in% allowed)) ng_stop("method must be one of: ", paste(allowed, collapse = ", "))
 
   direction_missing <- FALSE
@@ -1110,6 +1118,38 @@ ng_add_multitrait_score <- function(scores,
                                                        genetic_covariance = genetic_covariance,
                                                        value_scales = value_scales)
     weighted_score <- as.numeric(value_z %*% economic_index$coefficients)
+  } else if (identical(method, "rank_sum")) {
+    # RANK SUMMATION INDEX (Mulamba & Mock 1978), weighted.
+    #
+    # Deliberately NOT the z matrix. `z` is ng_rank_normalize()'s output -- ranks pushed
+    # through qnorm() and standardised -- which re-imposes Gaussian spacing: the gap
+    # between the top two entries stretches and the middle compresses. That spacing is
+    # exactly what an RSI exists to discard, so using z here would produce a normal-score
+    # index wearing this method's name.
+    #
+    # Raw ranks, oriented so that a HIGHER rank is a better cross, then summed with the
+    # trait weights. The classic index ranks 1 = best and selects the smallest sum; this
+    # is the same ordering reversed, and reversing it keeps "higher is better" true for
+    # every family in the package -- which ng_run_cp_value_orientation() and the whole
+    # priority layer rely on.
+    #
+    # With equal weights sum(1 * rank_i) IS the classic unweighted index, so
+    # Mulamba-Mock is the default case rather than a separate mode.
+    rk <- matrix(0, nrow = nrow(scores), ncol = nrow(traits))
+    for (i in seq_len(nrow(traits))) {
+      x <- suppressWarnings(as.numeric(scores[[traits$column[[i]]]]))
+      oriented <- if (identical(traits$direction[[i]], "maximize")) x else -x
+      ok <- is.finite(oriented)
+      r_i <- rep(NA_real_, length(oriented))
+      # Non-finite entries cannot be ranked against the others. They take the worst rank
+      # rather than being dropped, so a cross missing a trait is penalised on that trait
+      # instead of silently scoring as if the trait did not exist.
+      if (any(ok)) r_i[ok] <- rank(oriented[ok], ties.method = "average")
+      r_i[!ok] <- 0
+      rk[, i] <- r_i
+    }
+    colnames(rk) <- traits$trait
+    weighted_score <- as.numeric(rk %*% weights)
   } else {
     weighted_score <- as.numeric(z %*% weights)
   }
