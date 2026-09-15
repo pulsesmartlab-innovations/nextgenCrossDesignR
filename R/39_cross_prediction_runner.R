@@ -988,35 +988,6 @@ ng_cp__stage_qc <- function(ctx) {
 # dense m x m matrices (4.9 GB at m = 6000, T = 17) the way a "fit all then score
 # all" restructure would. Cost is O(n^2 m + n^3) plus k folds -- noise against the
 # scoring it guards.
-# Inverse normal transform, applied to every column declared an INDEX and nothing else.
-#
-# Rank -> (r - 0.5)/N -> qnorm, with the probabilities clamped strictly inside (0, 1) so
-# the extremes cannot map to +/-Inf. This is the Blom / van der Waerden transform.
-#
-# WHY THIS AND NOT CENTRE-AND-SCALE. A supplied index has an arbitrary DISTRIBUTION, not
-# merely an arbitrary scale: it is a weighted composite, so its skew and spread come from
-# weights the breeder chose. Standardising fixes location and spread and leaves the shape
-# untouched. The rank transform is invariant to ANY monotone re-expression of the index,
-# which is the right invariance for a quantity whose units nobody can check.
-#
-# It is MONOTONE, so it preserves order. That matters more than it looks: a supplied index
-# may be a rank summation index, where LOWER is better, or a Smith-Hazel index, where
-# higher is. Orientation stays with the trait's own `direction` and this transform cannot
-# silently flip it.
-#
-# It is NOT affine, so there is no centre/scale pair that maps the reported numbers back.
-# The run reports the transform it applied rather than pretending an inverse exists.
-ng_inverse_normal_transform <- function(x) {
-  x <- suppressWarnings(as.numeric(x))
-  ranks <- rank(x, na.last = "keep", ties.method = "average")
-  n <- sum(!is.na(ranks))
-  if (!n) return(rep(NA_real_, length(x)))
-  scaled <- (ranks - 0.5) / n
-  eps <- 1e-6
-  scaled <- pmin(pmax(scaled, eps), 1 - eps)
-  stats::qnorm(scaled)
-}
-
 # Applies it to the declared-index columns only. A measured trait keeps its own units:
 # <trait>_mean is the mid-parent a breeder reads first, and reporting yield in normal
 # scores takes away the one thing a mid-parent is for.
