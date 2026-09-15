@@ -1,3 +1,97 @@
+# nextgenCrossDesign 0.33.0
+
+Two things a breeder could not express, and one duplication that should never have
+existed.
+
+## The rank summation index was missing
+
+The package shipped five multi-trait methods and none was Mulamba & Mock (1978). The
+gap was easy to miss because "rank" is everywhere: `auto` resolves to a family called
+`rank_threshold` and scoring runs through `ng_rank_normalize()`. But that is
+`rank -> qnorm -> standardize`, a van der Waerden / Blom **normal-score** transform.
+Rank-based, yes; a rank summation index, no. The `qnorm` step re-imposes Gaussian
+spacing -- the gap between the top two crosses stretches, the middle compresses --
+which is exactly the spacing an RSI exists to discard. A breeder choosing the existing
+rank family for its robustness was not getting it.
+
+`multi_trait_method = "rank_sum"` sums the **raw ranks**, weighted, equal by default,
+so `sum(1 * rank_i)` is the classic unweighted index. The property that justifies the
+method is asserted directly: making the best entry `1e6` leaves the score bit-identical,
+because it was already rank 1 and still is.
+
+## A supplied index could not say so
+
+A column could be measured trait data or an index computed elsewhere, and the engine
+could not tell. `prediction_mode = "index_as_trait"` looked like the distinction but
+only renamed the trait to `selection_index`; it reached no scoring decision and no
+output field.
+
+`value_kind` is now a per-trait property on the direction table, `"trait"` (default) or
+`"index"`. A declared index -- and only a declared index -- receives a rank-based
+inverse normal transform before scoring. Measured traits keep their own units, because
+a mid-parent reported in normal scores is not the number a breeder reads.
+
+It matters because a supplied index has an arbitrary **distribution**, not merely an
+arbitrary scale: its shape came from weights nobody else can check, so a threshold, a
+check value or a covariance entry stated against it means something different from the
+same number against a real trait.
+
+**This changes which crosses are selected.** The transform is monotone but not affine,
+so the mid-parent of transformed values is not the transform of the mid-parent and the
+within-family variance moves non-proportionally. That is the point rather than a side
+effect: ranking on a raw supplied index means ranking on spacing that came from weights
+nobody can check. Being monotone, it preserves the order of the parent values and
+cannot invert a lower-is-better index -- orientation stays with the trait's own
+`direction`, which matters because a supplied index may be a rank summation index
+(lower is better) or a Smith-Hazel index (higher is).
+
+`effect_summary` carries `value_kind` and `index_transform`, and the workbook's
+`Scoring_Method` sheet names any trait supplied as an index and says its reported
+mid-parent is in normal-score units. A transform applied and not reported is the defect
+0.32.0 existed to remove.
+
+## One field answers "is this column an index?"
+
+`prediction_mode = "index_as_trait"` and `value_kind` asserted the same fact, one at the
+run level and one per trait. Two sources of truth that can disagree is the defect this
+package already fixed once -- `posterior_predictions$mean_source` and
+`effect_summary$mean_source` both answered "which basis?" and gave opposite answers, and
+the fix was to make one field answer the question, not to validate the two against each
+other.
+
+`index_as_trait` is **deprecated** and maps onto `value_kind = "index"`, warning and
+naming the replacement. Mapping beats guarding: downstream one mechanism exists, so
+nothing can contradict. The `selection_index` rename is kept, so output column names are
+unchanged. Existing users of that mode will see different rankings, because it now
+transforms where it previously did nothing.
+
+## The contract could silently lag the engine
+
+`tests/contract_declares_what_the_engine_does.R` checked only schema -> engine: it failed
+when the schema offered something the engine rejects, and said nothing when the ENGINE
+gained a value the schema never learned. That is precisely how `rank_sum` shipped in the
+backend while `config_schema.json` still listed five methods -- a frontend rendering from
+the contract could not offer it, and no test complained.
+
+The reverse check is now strict, using the true authority per parameter
+(`ng_multitrait_methods()` for `multi_trait_method`, whose formal is just `"auto"`).
+Deliberate narrowings are named with a reason rather than inferred; there is one today.
+It caught `rank_sum` on its first run.
+
+`tests/backend_capability_registry.R` said its choice list "must be exhaustive" and then
+asserted `%in%` against a hardcoded five, passing while violating its own stated intent.
+Now `setequal` against the real authority.
+
+## Also
+
+`ng_rank_normalize()` and the new `ng_inverse_normal_transform()` were the same transform
+written twice -- correlation 1, identical ordering, differing only by a final
+standardisation. The former now delegates to the latter, keeping its two policies
+(direction, and NA to the middle of the axis). A line inside it,
+`out[!finite] <- min(out[finite]) - 1`, could never execute and implied the transform
+penalised missing values; it never did -- `ng_add_multitrait_score()` applies that
+penalty and raises a violation flag. Removed, with the real location pinned by test.
+
 # nextgenCrossDesign 0.32.0
 
 A breeder reading a delivered 17-trait barley study reported that the mid-parent

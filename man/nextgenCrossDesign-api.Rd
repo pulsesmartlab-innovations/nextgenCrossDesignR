@@ -194,6 +194,34 @@ threshold for the calibrated-reliability branch and is reserved: nothing in
 this package sets a calibrated reliability, so it governs no run today.
 \code{min_cv_predictive_r2} is the threshold that governs mean selection.
 
+Multi-trait scoring offers \code{auto}, \code{weighted}, \code{threshold},
+\code{economic_index} (Smith-Hazel), \code{desired_gain} (Pesek-Baker) and
+\code{rank_sum}. The first three are rank-BASED but not rank-summation indices:
+each oriented trait passes through rank, \code{qnorm} and standardisation, a van
+der Waerden / Blom normal-score transform whose \code{qnorm} step re-imposes
+Gaussian spacing. \code{rank_sum} is the rank summation index of Mulamba and Mock
+(1978) and sums the RAW ranks, weighted, with equal weights by default, so the
+default case is the classic unweighted index. It is the choice when a trait's
+extreme outlier should count as exactly one rank step however extreme.
+
+The trait direction table carries \code{trait}, \code{column} and
+\code{direction}, and optionally \code{weight}, the threshold columns, and
+\code{value_kind}. \code{value_kind} is \code{"trait"} (default) or
+\code{"index"} and states whether a column is measured trait data or an index the
+breeder computed elsewhere. A supplied index has an arbitrary distribution, its
+shape coming from weights that cannot be checked, so a threshold, a check value or
+a covariance entry stated against it does not mean what the same number means
+against a real trait. A declared index -- and only a declared index -- receives a
+rank-based inverse normal transform before scoring; measured traits keep their own
+units, because a mid-parent reported in normal scores is not the quantity a
+breeder reads. \code{effect_summary} reports \code{value_kind} and
+\code{index_transform}. The transform is monotone, so orientation remains with
+\code{direction} and a lower-is-better index cannot be silently inverted; it is
+not affine, so declaring a column an index changes which crosses are selected and
+the reported values do not map back by any centre-and-scale pair.
+\code{prediction_mode = "index_as_trait"} is a deprecated spelling that maps onto
+\code{value_kind = "index"} and warns.
+
 A marker-effect reliability gate is evaluated per trait immediately after the
 ridge fit, before any cross is scored. An unevaluable \code{cv_predictive_r2}
 (fewer than the cross-validation minimum of ten genotyped and phenotyped
