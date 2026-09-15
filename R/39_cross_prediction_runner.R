@@ -597,6 +597,33 @@ ng_run_cp_trait_spec <- function(direction,
     out <- out[keep, , drop = FALSE]
   }
   if (!nrow(out)) ng_stop("No traits remain after applying traits_to_use")
+  # Is this column a MEASURED TRAIT or an INDEX the breeder already computed?
+  #
+  # The engine could not tell. prediction_mode = "index_as_trait" looks like the
+  # distinction but only renames the trait to "selection_index"; it reaches no scoring
+  # decision and no output field, and being run-level it cannot say "these three are
+  # traits and that one is an index I built".
+  #
+  # It matters because an externally computed index has an ARBITRARY scale and origin:
+  # it is a linear combination with weights the breeder chose, so its raw numbers carry
+  # no units anyone can check, and a threshold, a check value or a covariance entry
+  # stated against it means something different from the same number against a real
+  # trait. A declared index is standardised at ingestion (see ng_cp__normalize_declared
+  # _indices), so everything downstream is in SD units of that index and reports the
+  # affine map back to the breeder's own scale.
+  #
+  # Default "trait": every existing config keeps its current behaviour untouched.
+  if (!("value_kind" %in% names(out))) out$value_kind <- "trait"
+  out$value_kind <- trimws(tolower(as.character(out$value_kind)))
+  out$value_kind[!nzchar(out$value_kind) | is.na(out$value_kind)] <- "trait"
+  bad_kind <- !(out$value_kind %in% c("trait", "index"))
+  if (any(bad_kind)) {
+    ng_stop("value_kind must be \"trait\" or \"index\"; got ",
+            paste(sprintf("%s = '%s'", out$trait[bad_kind], out$value_kind[bad_kind]),
+                  collapse = ", "),
+            ". Use \"index\" for a column you computed elsewhere, so the engine ",
+            "standardises its arbitrary scale and says so.")
+  }
   if (!("weight" %in% names(out))) out$weight <- NA_real_
   if (!is.null(trait_weights)) {
     tw <- suppressWarnings(as.numeric(trait_weights))
@@ -921,6 +948,19 @@ ng_cp__stage_qc <- function(ctx) {
       paste(missing_trait_cols, collapse = ", ")
     )
   }
+  # Standardise ONLY the columns declared value_kind = "index". A measured trait keeps
+  # its own units, because <trait>_mean is the mid-parent a breeder reads first and the
+  # whole point of it is being on the scale they supplied -- reporting yield in SD units
+  # would take that away. A supplied index has no such scale to protect: its origin and
+  # spread come from weights the breeder chose, so SD units are the honest way to read
+  # it, and the affine map back to their own numbers is reported alongside.
+  #
+  # Done at ingestion so every consumer sees one scale: the cheap gate fit, the real
+  # fit, the cross scoring and the phenotypic mid-parent all read `pheno`.
+  .idx_norm <- ng_cp__normalize_declared_indices(pheno, trait_spec)
+  pheno <- .idx_norm$pheno
+  trait_spec$index_center <- as.numeric(.idx_norm$center)
+  trait_spec$index_scale  <- as.numeric(.idx_norm$scale)
   marker_map_std <- ng_run_cp_align_marker_map(geno, cleaned$marker_map)
   ctx <- ng_ctx_put(
     ctx,
@@ -950,6 +990,37 @@ ng_cp__stage_qc <- function(ctx) {
 # dense m x m matrices (4.9 GB at m = 6000, T = 17) the way a "fit all then score
 # all" restructure would. Cost is O(n^2 m + n^3) plus k folds -- noise against the
 # scoring it guards.
+# Standardise every column declared an INDEX -- and nothing else.
+#
+# The loop skips anything not declared an index, and that scoping is the point: a
+# measured trait must come back in its own units, so normalising every column would
+# destroy the one thing a mid-parent is for. An index has no units worth protecting --
+# its origin and spread come from the breeder's own weights -- so SD units are the
+# honest reading, and the centre and scale are reported so the numbers map back.
+ng_cp__normalize_declared_indices <- function(pheno, trait_spec) {
+  kinds <- as.character(trait_spec$value_kind %||% rep("trait", nrow(trait_spec)))
+  out <- list(pheno = pheno,
+              center = stats::setNames(rep(NA_real_, nrow(trait_spec)), trait_spec$trait),
+              scale  = stats::setNames(rep(NA_real_, nrow(trait_spec)), trait_spec$trait))
+  for (i in seq_len(nrow(trait_spec))) {
+    if (!identical(kinds[[i]], "index")) next
+    col <- trait_spec$column[[i]]
+    if (!(col %in% names(out$pheno))) next
+    x <- suppressWarnings(as.numeric(out$pheno[[col]]))
+    ok <- is.finite(x)
+    if (sum(ok) < 2L) next
+    ctr <- mean(x[ok]); scl <- stats::sd(x[ok])
+    # A constant index carries no information to rescale; leave it and let the ordinary
+    # downstream checks report it rather than dividing by zero here.
+    if (!is.finite(scl) || scl <= 0) next
+    x[ok] <- (x[ok] - ctr) / scl
+    out$pheno[[col]] <- x
+    out$center[[i]] <- ctr
+    out$scale[[i]]  <- scl
+  }
+  out
+}
+
 ng_cp__fit_trait_effects <- function(trait_spec, pheno, geno, ids, training_set, seed) {
   rows <- lapply(seq_len(nrow(trait_spec)), function(i) {
     column <- trait_spec$column[[i]]
@@ -1254,6 +1325,24 @@ ng_cp__stage_predict <- function(ctx) {
           trait_value_metric, uc_variance_source, scored_trait, method_varPMV),
         trait_value_metric_resolved = trait_value_metric,
         uc_variance_source_resolved = uc_variance_source,
+        # Whether this column was a MEASURED TRAIT or an INDEX the breeder computed
+        # elsewhere, and -- for an index -- the affine map used to standardise its
+        # arbitrary scale. A reader needs the centre and scale to read the reported
+        # numbers back into the index they built: raw = reported * scale + centre.
+        # Matched by trait NAME, not by position: this row is built inside a per-trait
+        # closure and the surrounding order is not guaranteed to be trait_spec's.
+        value_kind = {
+          .ti <- match(trait, trait_spec$trait)
+          if (is.na(.ti)) "trait" else as.character(trait_spec$value_kind[[.ti]] %||% "trait")
+        },
+        index_center = {
+          .ti <- match(trait, trait_spec$trait)
+          if (is.na(.ti)) NA_real_ else as.numeric(trait_spec$index_center[[.ti]] %||% NA_real_)
+        },
+        index_scale = {
+          .ti <- match(trait, trait_spec$trait)
+          if (is.na(.ti)) NA_real_ else as.numeric(trait_spec$index_scale[[.ti]] %||% NA_real_)
+        },
         # The basis decision and the REASON for it, carried from the scored table
         # so a reader sees the verdict and its justification on one row.
         mean_source_criterion = as.character(
