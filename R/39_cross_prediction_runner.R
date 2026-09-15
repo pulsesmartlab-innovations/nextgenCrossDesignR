@@ -948,19 +948,17 @@ ng_cp__stage_qc <- function(ctx) {
       paste(missing_trait_cols, collapse = ", ")
     )
   }
-  # Standardise ONLY the columns declared value_kind = "index". A measured trait keeps
-  # its own units, because <trait>_mean is the mid-parent a breeder reads first and the
-  # whole point of it is being on the scale they supplied -- reporting yield in SD units
-  # would take that away. A supplied index has no such scale to protect: its origin and
-  # spread come from weights the breeder chose, so SD units are the honest way to read
-  # it, and the affine map back to their own numbers is reported alongside.
+  # Inverse-normal-transform ONLY the columns declared value_kind = "index". A measured
+  # trait keeps its own units: <trait>_mean is the mid-parent a breeder reads first and
+  # the whole point of it is being on the scale they supplied. A supplied index has no
+  # such scale to protect -- its shape and spread come from weights the breeder chose --
+  # so a rank-based normal score is the honest reading.
   #
   # Done at ingestion so every consumer sees one scale: the cheap gate fit, the real
   # fit, the cross scoring and the phenotypic mid-parent all read `pheno`.
   .idx_norm <- ng_cp__normalize_declared_indices(pheno, trait_spec)
   pheno <- .idx_norm$pheno
-  trait_spec$index_center <- as.numeric(.idx_norm$center)
-  trait_spec$index_scale  <- as.numeric(.idx_norm$scale)
+  trait_spec$index_transform <- as.character(.idx_norm$transform)
   marker_map_std <- ng_run_cp_align_marker_map(geno, cleaned$marker_map)
   ctx <- ng_ctx_put(
     ctx,
@@ -990,33 +988,51 @@ ng_cp__stage_qc <- function(ctx) {
 # dense m x m matrices (4.9 GB at m = 6000, T = 17) the way a "fit all then score
 # all" restructure would. Cost is O(n^2 m + n^3) plus k folds -- noise against the
 # scoring it guards.
-# Standardise every column declared an INDEX -- and nothing else.
+# Inverse normal transform, applied to every column declared an INDEX and nothing else.
 #
-# The loop skips anything not declared an index, and that scoping is the point: a
-# measured trait must come back in its own units, so normalising every column would
-# destroy the one thing a mid-parent is for. An index has no units worth protecting --
-# its origin and spread come from the breeder's own weights -- so SD units are the
-# honest reading, and the centre and scale are reported so the numbers map back.
+# Rank -> (r - 0.5)/N -> qnorm, with the probabilities clamped strictly inside (0, 1) so
+# the extremes cannot map to +/-Inf. This is the Blom / van der Waerden transform.
+#
+# WHY THIS AND NOT CENTRE-AND-SCALE. A supplied index has an arbitrary DISTRIBUTION, not
+# merely an arbitrary scale: it is a weighted composite, so its skew and spread come from
+# weights the breeder chose. Standardising fixes location and spread and leaves the shape
+# untouched. The rank transform is invariant to ANY monotone re-expression of the index,
+# which is the right invariance for a quantity whose units nobody can check.
+#
+# It is MONOTONE, so it preserves order. That matters more than it looks: a supplied index
+# may be a rank summation index, where LOWER is better, or a Smith-Hazel index, where
+# higher is. Orientation stays with the trait's own `direction` and this transform cannot
+# silently flip it.
+#
+# It is NOT affine, so there is no centre/scale pair that maps the reported numbers back.
+# The run reports the transform it applied rather than pretending an inverse exists.
+ng_inverse_normal_transform <- function(x) {
+  x <- suppressWarnings(as.numeric(x))
+  ranks <- rank(x, na.last = "keep", ties.method = "average")
+  n <- sum(!is.na(ranks))
+  if (!n) return(rep(NA_real_, length(x)))
+  scaled <- (ranks - 0.5) / n
+  eps <- 1e-6
+  scaled <- pmin(pmax(scaled, eps), 1 - eps)
+  stats::qnorm(scaled)
+}
+
+# Applies it to the declared-index columns only. A measured trait keeps its own units:
+# <trait>_mean is the mid-parent a breeder reads first, and reporting yield in normal
+# scores takes away the one thing a mid-parent is for.
 ng_cp__normalize_declared_indices <- function(pheno, trait_spec) {
   kinds <- as.character(trait_spec$value_kind %||% rep("trait", nrow(trait_spec)))
   out <- list(pheno = pheno,
-              center = stats::setNames(rep(NA_real_, nrow(trait_spec)), trait_spec$trait),
-              scale  = stats::setNames(rep(NA_real_, nrow(trait_spec)), trait_spec$trait))
+              transform = stats::setNames(rep(NA_character_, nrow(trait_spec)),
+                                          trait_spec$trait))
   for (i in seq_len(nrow(trait_spec))) {
     if (!identical(kinds[[i]], "index")) next
     col <- trait_spec$column[[i]]
     if (!(col %in% names(out$pheno))) next
     x <- suppressWarnings(as.numeric(out$pheno[[col]]))
-    ok <- is.finite(x)
-    if (sum(ok) < 2L) next
-    ctr <- mean(x[ok]); scl <- stats::sd(x[ok])
-    # A constant index carries no information to rescale; leave it and let the ordinary
-    # downstream checks report it rather than dividing by zero here.
-    if (!is.finite(scl) || scl <= 0) next
-    x[ok] <- (x[ok] - ctr) / scl
-    out$pheno[[col]] <- x
-    out$center[[i]] <- ctr
-    out$scale[[i]]  <- scl
+    if (sum(is.finite(x)) < 2L) next
+    out$pheno[[col]] <- ng_inverse_normal_transform(x)
+    out$transform[[i]] <- "inverse_normal_rank"
   }
   out
 }
@@ -1335,13 +1351,13 @@ ng_cp__stage_predict <- function(ctx) {
           .ti <- match(trait, trait_spec$trait)
           if (is.na(.ti)) "trait" else as.character(trait_spec$value_kind[[.ti]] %||% "trait")
         },
-        index_center = {
+        # The transform APPLIED, not a centre/scale pair: the inverse normal transform is
+        # rank-based and not affine, so no two numbers map the reported values back. Saying
+        # which transform ran is the honest report; implying an inverse would not be.
+        index_transform = {
           .ti <- match(trait, trait_spec$trait)
-          if (is.na(.ti)) NA_real_ else as.numeric(trait_spec$index_center[[.ti]] %||% NA_real_)
-        },
-        index_scale = {
-          .ti <- match(trait, trait_spec$trait)
-          if (is.na(.ti)) NA_real_ else as.numeric(trait_spec$index_scale[[.ti]] %||% NA_real_)
+          if (is.na(.ti)) NA_character_
+          else as.character(trait_spec$index_transform[[.ti]] %||% NA_character_)
         },
         # The basis decision and the REASON for it, carried from the scored table
         # so a reader sees the verdict and its justification on one row.

@@ -47,29 +47,54 @@ stopifnot(identical(as.character(r_t$effect_summary$value_kind[[1L]]), "trait"))
 # a measured trait is left on its own scale
 stopifnot(abs(mean(r_t$candidate_crosses$my_index_mean) - mean(idx)) < 5)
 
-# ---- 2. declaring it an index standardises it, and records the transform --
+# ---- 2. declaring it an index applies the inverse normal transform -------
 r_i <- run(d_index)
 stopifnot(identical(as.character(r_i$effect_summary$value_kind[[1L]]), "index"))
-ctr <- r_i$effect_summary$index_center[[1L]]
-scl <- r_i$effect_summary$index_scale[[1L]]
-stopifnot(is.finite(ctr), is.finite(scl), scl > 0)
-stopifnot(abs(ctr - mean(idx)) < 1e-8)
-stopifnot(abs(scl - stats::sd(idx)) < 1e-8)
-# the cross means are now in SD units of the index, centred near zero
+stopifnot(identical(as.character(r_i$effect_summary$index_transform[[1L]]),
+                    "inverse_normal_rank"))
+# the reported values are now normal scores, not the breeder's arbitrary scale
 stopifnot(abs(mean(r_i$candidate_crosses$my_index_mean)) < 0.5)
 stopifnot(abs(mean(r_t$candidate_crosses$my_index_mean)) > 100)   # the untouched scale
 
-# ---- 3. the transform is recoverable: it is a stated affine map ----------
-# A breeder must be able to get back to their own units from the reported numbers.
-back <- r_i$candidate_crosses$my_index_mean * scl + ctr
-stopifnot(max(abs(sort(back) - sort(r_t$candidate_crosses$my_index_mean))) < 1e-6)
+# ---- 3. the transform itself: rank-based, clamped, monotone --------------
+# Asserted directly on the function, because these are the properties that make it the
+# right choice for a quantity whose units nobody can check.
+set.seed(1); xx <- c(rlnorm(200), NA, NA)          # heavily skewed, with gaps
+tt <- ng_inverse_normal_transform(xx)
+stopifnot(length(tt) == length(xx))
+stopifnot(all(is.na(tt[is.na(xx)])))                        # NA in, NA out
+stopifnot(all(is.finite(tt[!is.na(xx)])))                   # eps clamp: never +/-Inf
+stopifnot(identical(order(tt[!is.na(xx)]), order(xx[!is.na(xx)])))   # MONOTONE
+fin <- tt[!is.na(tt)]
+stopifnot(abs(mean(fin)) < 0.05, abs(stats::sd(fin) - 1) < 0.1)     # ~ standard normal
+# invariant to ANY monotone re-expression -- the property centre-and-scale does not have
+stopifnot(isTRUE(all.equal(tt, ng_inverse_normal_transform(exp(xx / 3)))))
+stopifnot(isTRUE(all.equal(tt, ng_inverse_normal_transform(1e6 * xx + 500))))
+# ties share a value (average ranks), rather than being broken by input order
+tie <- ng_inverse_normal_transform(c(5, 5, 1, 9))
+stopifnot(isTRUE(all.equal(tie[[1L]], tie[[2L]])))
 
-# ---- 4. normalising does NOT perturb the ranking -------------------------
-# Standardisation is affine and the merit is affine in the mean, so a single-trait
-# ordering is invariant. Worth asserting: it tells a breeder the declaration changes
-# the REPORTED UNITS, not which crosses are chosen.
-stopifnot(identical(paste(r_t$selected_crosses$parent1, r_t$selected_crosses$parent2),
-                    paste(r_i$selected_crosses$parent1, r_i$selected_crosses$parent2)))
+# ---- 4. declaring an index CHANGES the selection, and that is the point ---
+# The inverse normal transform is monotone but NOT affine, so unlike centre-and-scale it
+# does not leave the ranking alone: the mid-parent of transformed values is not the
+# transform of the mid-parent, and the within-family variance moves non-proportionally.
+#
+# This is a real consequence a breeder must be told, not a side effect to hide. Ranking
+# on a raw supplied index means ranking on a scale whose spacing came from weights
+# nobody can check; the transform replaces that with a defensible one. Asserting the
+# difference here keeps it an explicit, tested decision.
+sel_t <- paste(r_t$selected_crosses$parent1, r_t$selected_crosses$parent2)
+sel_i <- paste(r_i$selected_crosses$parent1, r_i$selected_crosses$parent2)
+stopifnot(!identical(sel_t, sel_i))
+# ...and the transformed run is still a well formed plan, not merely a different one
+stopifnot(nrow(r_i$selected_crosses) == nrow(r_t$selected_crosses))
+stopifnot(all(is.finite(r_i$selected_crosses$my_index_value)))
+stopifnot(all(sel_i %in% paste(r_i$candidate_crosses$parent1,
+                               r_i$candidate_crosses$parent2)))
+
+# PARENT-level order is preserved, which is what "monotone" buys: the transform never
+# reorders the lines themselves, only the family-level arithmetic built on them.
+stopifnot(identical(order(ng_inverse_normal_transform(idx)), order(idx)))
 
 # ---- 5. an unknown value_kind is refused at entry, before any fitting ----
 bad <- cbind(d_trait, value_kind = "composite", stringsAsFactors = FALSE)
@@ -93,8 +118,9 @@ r_m <- ng_run_cross_prediction(
 es <- r_m$effect_summary
 stopifnot(identical(as.character(es$value_kind[match("yield", es$trait)]), "trait"))
 stopifnot(identical(as.character(es$value_kind[match("my_index", es$trait)]), "index"))
-stopifnot(!is.finite(es$index_scale[match("yield", es$trait)]))   # untouched
-stopifnot(is.finite(es$index_scale[match("my_index", es$trait)]))
+stopifnot(is.na(es$index_transform[match("yield", es$trait)]))          # untouched
+stopifnot(identical(as.character(es$index_transform[match("my_index", es$trait)]),
+                    "inverse_normal_rank"))
 
 # ---- 7. DIRECTION is honoured for an index, because it is not always "higher" -----
 # A supplied index may itself be a rank summation index, where LOWER is better, or a
@@ -105,9 +131,9 @@ d_idx_dn <- data.frame(trait = "my_index", column = "my_index", direction = "dec
 r_dn <- run(d_idx_dn)
 r_up <- run(d_index)
 stopifnot(identical(as.character(r_dn$effect_summary$value_kind[[1L]]), "index"))
-# same normalisation either way -- direction is orientation, not scale
-stopifnot(isTRUE(all.equal(r_dn$effect_summary$index_scale[[1L]],
-                           r_up$effect_summary$index_scale[[1L]])))
+# same transform either way -- direction is orientation, not a rescaling
+stopifnot(identical(as.character(r_dn$effect_summary$index_transform[[1L]]),
+                    as.character(r_up$effect_summary$index_transform[[1L]])))
 # but the merit points the other way: with "decrease", usefulness sits BELOW the mean
 i10 <- ng_selection_intensity(r_dn$settings$selection_prop)
 cu <- r_up$candidate_crosses; cd <- r_dn$candidate_crosses
@@ -117,8 +143,8 @@ stopifnot(all(cd$my_index_value <= cd$my_index_mean + 1e-9))   # decrease: mean 
 stopifnot(!identical(paste(r_up$selected_crosses$parent1, r_up$selected_crosses$parent2),
                      paste(r_dn$selected_crosses$parent1, r_dn$selected_crosses$parent2)))
 
-# normalisation never flips sign: the standardised column must preserve the raw order
-stopifnot(isTRUE(all.equal(order(cu$my_index_mean),
-                           order(r_t$candidate_crosses$my_index_mean))))
+# the transform never flips direction: a monotone map cannot invert "higher is better"
+stopifnot(cor(cu$my_index_mean, r_t$candidate_crosses$my_index_mean,
+              method = "spearman") > 0.95)
 
 cat("declared_index_is_normalized: PASS\n")
