@@ -7,7 +7,18 @@
 
 local({ .h <- file.path("tools", "ng_project_libpath.R"); if (file.exists(.h)) { source(.h); ng_prepend_project_lib(".Rlib") } else .libPaths(c(normalizePath(".Rlib", mustWork = FALSE), .libPaths())) })
 
-root <- normalizePath(file.path(getwd(), "nextgen_cross_design"), mustWork = FALSE)
+# Resolved through the one shared resolver. This used to hardcode
+# getwd()/nextgen_cross_design, which is not where the package lives: it is where an
+# untracked stale COPY used to sit. With that copy removed the script could not find
+# the package at all.
+local({
+  cands <- file.path(c(".", "..", "../..", "nextgen_cross_design",
+                       "../nextgen_cross_design"), "tools", "ng_find_package_root.R")
+  hit <- cands[file.exists(cands)]
+  if (!length(hit)) stop("cannot locate tools/ng_find_package_root.R", call. = FALSE)
+  source(hit[[1L]], local = FALSE)
+})
+root <- ng_find_package_root(getwd())
 if (!dir.exists(root)) root <- normalizePath(file.path(".."), mustWork = TRUE)
 source(file.path(root, "R", "load.R"))
 ng_use_cpp <- tolower(trimws(Sys.getenv("NG_USE_CPP", unset = "0"))) %in% c("1", "true", "yes", "y")

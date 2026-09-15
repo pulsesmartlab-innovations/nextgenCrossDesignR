@@ -1,9 +1,15 @@
-root_candidates <- unique(normalizePath(c(
-  file.path(getwd(), "nextgen_cross_design"),
-  getwd(),
-  file.path("..", "nextgen_cross_design"),
-  file.path("..")
-), winslash = "/", mustWork = FALSE))
+# Resolved through the one shared resolver. This used to probe
+# getwd()/nextgen_cross_design BEFORE getwd(), so an untracked stale copy of the
+# package beside the real sources won -- the defect that had two harness tests
+# silently validating a 0.19.0 package while appearing green.
+local({
+  cands <- file.path(c(".", "..", "../..", "nextgen_cross_design",
+                       "../nextgen_cross_design"), "tools", "ng_find_package_root.R")
+  hit <- cands[file.exists(cands)]
+  if (!length(hit)) stop("cannot locate tools/ng_find_package_root.R", call. = FALSE)
+  source(hit[[1L]], local = FALSE)
+})
+root_candidates <- ng_find_package_root(getwd())
 root_hits <- root_candidates[file.exists(file.path(root_candidates, "DESCRIPTION")) &
   file.exists(file.path(root_candidates, "R", "load.R"))]
 if (!length(root_hits)) stop("Could not locate nextgenCrossDesign package root", call. = FALSE)
