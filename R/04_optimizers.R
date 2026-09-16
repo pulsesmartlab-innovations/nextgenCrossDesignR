@@ -449,17 +449,60 @@ ng_gain_scale <- function(x, n_crosses, pool_multiplier = 10L, min_pool = 100L) 
   scale
 }
 
+# Inverse normal transform, applied to every column declared an INDEX and nothing else.
+#
+# Rank -> (r - 0.5)/N -> qnorm, with the probabilities clamped strictly inside (0, 1) so
+# the extremes cannot map to +/-Inf. This is the Blom / van der Waerden transform.
+#
+# WHY THIS AND NOT CENTRE-AND-SCALE. A supplied index has an arbitrary DISTRIBUTION, not
+# merely an arbitrary scale: it is a weighted composite, so its skew and spread come from
+# weights the breeder chose. Standardising fixes location and spread and leaves the shape
+# untouched. The rank transform is invariant to ANY monotone re-expression of the index,
+# which is the right invariance for a quantity whose units nobody can check.
+#
+# It is MONOTONE, so it preserves order. That matters more than it looks: a supplied index
+# may be a rank summation index, where LOWER is better, or a Smith-Hazel index, where
+# higher is. Orientation stays with the trait's own `direction` and this transform cannot
+# silently flip it.
+#
+# It is NOT affine, so there is no centre/scale pair that maps the reported numbers back.
+# The run reports the transform it applied rather than pretending an inverse exists.
+ng_inverse_normal_transform <- function(x) {
+  x <- suppressWarnings(as.numeric(x))
+  ranks <- rank(x, na.last = "keep", ties.method = "average")
+  n <- sum(!is.na(ranks))
+  if (!n) return(rep(NA_real_, length(x)))
+  scaled <- (ranks - 0.5) / n
+  eps <- 1e-6
+  scaled <- pmin(pmax(scaled, eps), 1 - eps)
+  stats::qnorm(scaled)
+}
+
+# The rank-based inverse normal transform, plus this caller's two policies.
+#
+# The transform itself lives in ng_inverse_normal_transform() (R/39) and is shared with
+# the declared-index path, so a clamp or a fix applies to both. It was duplicated here;
+# measured on real input the two agreed to correlation 1 and identical ordering, with
+# only ng_standardize() separating them -- a latent divergence waiting to happen.
+#
+# The two policies this wrapper adds, and which the shared transform deliberately does
+# NOT have:
+#   * DIRECTION. The index families orient inside the transform; the declared-index path
+#     leaves orientation to the trait's own `direction` field.
+#   * NA -> 0, the middle of the axis. Note this is NOT a penalty: the penalty a missing
+#     trait deserves is applied by ng_add_multitrait_score(), which pushes the entry
+#     below the minimum and raises a violation flag. A previous line here,
+#     `out[!finite] <- min(out[finite]) - 1`, could never execute -- `out` is
+#     initialised to 0 and 0 is finite, so the subset was always empty -- and reading it
+#     one would conclude this function penalised missing values. It never did. Removed;
+#     tests/one_inverse_normal_transform.R pins where the penalty actually lives.
 ng_rank_normalize <- function(x, bigger_is_better = TRUE) {
   x <- as.numeric(x)
   out <- rep(0, length(x))
   ok <- is.finite(x)
   if (sum(ok) <= 1L) return(out)
   value <- if (isTRUE(bigger_is_better)) x[ok] else -x[ok]
-  r <- rank(value, ties.method = "average")
-  p <- (r - 0.5) / length(r)
-  out[ok] <- stats::qnorm(p)
-  finite <- is.finite(out)
-  if (any(finite)) out[!finite] <- min(out[finite], na.rm = TRUE) - 1
+  out[ok] <- ng_inverse_normal_transform(value)
   out <- ng_standardize(out)
   out[!is.finite(out)] <- 0
   out

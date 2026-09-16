@@ -262,6 +262,7 @@ ng_run_cp_align_parent_tables <- function(geno, phenotype) {
 }
 
 ng_run_cp_direction_table <- function(direction,
+                                      direction_value_kind_col = NULL,
                                       direction_trait_col = NULL,
                                       direction_column_col = NULL,
                                       direction_direction_col = NULL) {
@@ -295,6 +296,19 @@ ng_run_cp_direction_table <- function(direction,
     ng_stop("direction_file is missing direction_direction_col: ", direction_direction_col)
   }
 
+  # value_kind is optional and already travels through `other_cols` when the breeder
+  # names it "value_kind". direction_value_kind_col exists for the same reason its three
+  # siblings do: a breeder's own file may call the column something else, and the
+  # contract advertises a mapping knob for every direction column the engine reads.
+  if (!is.null(direction_value_kind_col) && nzchar(direction_value_kind_col)) {
+    if (!(direction_value_kind_col %in% names(direction))) {
+      ng_stop("direction_file is missing direction_value_kind_col: ", direction_value_kind_col)
+    }
+    if (!identical(direction_value_kind_col, "value_kind")) {
+      direction[["value_kind"]] <- direction[[direction_value_kind_col]]
+      direction[[direction_value_kind_col]] <- NULL
+    }
+  }
   other_cols <- setdiff(names(direction), c(direction_trait_col, direction_column_col, direction_direction_col))
   out <- data.frame(
     trait = direction[[direction_trait_col]],
@@ -597,6 +611,33 @@ ng_run_cp_trait_spec <- function(direction,
     out <- out[keep, , drop = FALSE]
   }
   if (!nrow(out)) ng_stop("No traits remain after applying traits_to_use")
+  # Is this column a MEASURED TRAIT or an INDEX the breeder already computed?
+  #
+  # The engine could not tell. prediction_mode = "index_as_trait" looks like the
+  # distinction but only renames the trait to "selection_index"; it reaches no scoring
+  # decision and no output field, and being run-level it cannot say "these three are
+  # traits and that one is an index I built".
+  #
+  # It matters because an externally computed index has an ARBITRARY scale and origin:
+  # it is a linear combination with weights the breeder chose, so its raw numbers carry
+  # no units anyone can check, and a threshold, a check value or a covariance entry
+  # stated against it means something different from the same number against a real
+  # trait. A declared index is standardised at ingestion (see ng_cp__normalize_declared
+  # _indices), so everything downstream is in SD units of that index and reports the
+  # affine map back to the breeder's own scale.
+  #
+  # Default "trait": every existing config keeps its current behaviour untouched.
+  if (!("value_kind" %in% names(out))) out$value_kind <- "trait"
+  out$value_kind <- trimws(tolower(as.character(out$value_kind)))
+  out$value_kind[!nzchar(out$value_kind) | is.na(out$value_kind)] <- "trait"
+  bad_kind <- !(out$value_kind %in% c("trait", "index"))
+  if (any(bad_kind)) {
+    ng_stop("value_kind must be \"trait\" or \"index\"; got ",
+            paste(sprintf("%s = '%s'", out$trait[bad_kind], out$value_kind[bad_kind]),
+                  collapse = ", "),
+            ". Use \"index\" for a column you computed elsewhere, so the engine ",
+            "standardises its arbitrary scale and says so.")
+  }
   if (!("weight" %in% names(out))) out$weight <- NA_real_
   if (!is.null(trait_weights)) {
     tw <- suppressWarnings(as.numeric(trait_weights))
@@ -614,15 +655,40 @@ ng_run_cp_trait_spec <- function(direction,
   out
 }
 
+# DEPRECATED PATH. `prediction_mode = "index_as_trait"` and the per-trait `value_kind`
+# asserted the same fact -- "this column is an index" -- one at the run level and one per
+# trait. Two sources of truth that can disagree is the defect this package already fixed
+# once: posterior_predictions$mean_source and effect_summary$mean_source both answered
+# "which basis?" and gave opposite answers, and the fix was to make ONE field answer the
+# question rather than to validate the two against each other.
+#
+# So this MAPS onto value_kind rather than co-existing with it. Mapping beats guarding:
+# downstream there is only one mechanism, so nothing can contradict and there is no
+# contradiction check to maintain. Same pattern as assume_inbred -> parent_type and
+# "le" -> parent_distance.
+#
+# The rename to "selection_index" is kept, so output column names are unchanged for
+# anyone already using the mode.
+#
+# The warning is raised HERE, at config time, in the parent process. A deprecation
+# emitted during fitting would run inside an mclapply worker, where warnings never reach
+# the caller (see R/52_advisories.R), and a silent deprecation is not a deprecation.
 ng_run_cp_index_spec <- function(index_col, index_direction) {
   if (is.null(index_col) || !nzchar(as.character(index_col[[1L]]))) {
     ng_stop("index_col is required when prediction_mode = 'index_as_trait'")
   }
+  col <- as.character(index_col[[1L]])
+  warning("prediction_mode = 'index_as_trait' is deprecated; declare value_kind = ",
+          "'index' for column '", col, "' on the direction table instead. It is a ",
+          "per-trait property, so it also lets a run mix measured traits with a ",
+          "supplied index, which a run-level mode cannot express. Mapping this run to ",
+          "value_kind = 'index'.", call. = FALSE)
   data.frame(
     trait = "selection_index",
-    column = as.character(index_col[[1L]]),
+    column = col,
     direction = ng_run_cp_direction(index_direction)[[1L]],
     weight = NA_real_,
+    value_kind = "index",
     stringsAsFactors = FALSE
   )
 }
@@ -851,7 +917,8 @@ ng_cp__stage_qc <- function(ctx) {
       direction_raw,
       direction_trait_col = direction_trait_col,
       direction_column_col = direction_column_col,
-      direction_direction_col = direction_direction_col
+      direction_direction_col = direction_direction_col,
+      direction_value_kind_col = direction_value_kind_col
     )
     direction_columns <- attr(direction_canonical, "direction_columns")
     ng_run_cp_trait_spec(direction_canonical, traits_to_use = traits_to_use, trait_weights = trait_weights)
@@ -921,6 +988,17 @@ ng_cp__stage_qc <- function(ctx) {
       paste(missing_trait_cols, collapse = ", ")
     )
   }
+  # Inverse-normal-transform ONLY the columns declared value_kind = "index". A measured
+  # trait keeps its own units: <trait>_mean is the mid-parent a breeder reads first and
+  # the whole point of it is being on the scale they supplied. A supplied index has no
+  # such scale to protect -- its shape and spread come from weights the breeder chose --
+  # so a rank-based normal score is the honest reading.
+  #
+  # Done at ingestion so every consumer sees one scale: the cheap gate fit, the real
+  # fit, the cross scoring and the phenotypic mid-parent all read `pheno`.
+  .idx_norm <- ng_cp__normalize_declared_indices(pheno, trait_spec)
+  pheno <- .idx_norm$pheno
+  trait_spec$index_transform <- as.character(.idx_norm$transform)
   marker_map_std <- ng_run_cp_align_marker_map(geno, cleaned$marker_map)
   ctx <- ng_ctx_put(
     ctx,
@@ -950,6 +1028,26 @@ ng_cp__stage_qc <- function(ctx) {
 # dense m x m matrices (4.9 GB at m = 6000, T = 17) the way a "fit all then score
 # all" restructure would. Cost is O(n^2 m + n^3) plus k folds -- noise against the
 # scoring it guards.
+# Applies it to the declared-index columns only. A measured trait keeps its own units:
+# <trait>_mean is the mid-parent a breeder reads first, and reporting yield in normal
+# scores takes away the one thing a mid-parent is for.
+ng_cp__normalize_declared_indices <- function(pheno, trait_spec) {
+  kinds <- as.character(trait_spec$value_kind %||% rep("trait", nrow(trait_spec)))
+  out <- list(pheno = pheno,
+              transform = stats::setNames(rep(NA_character_, nrow(trait_spec)),
+                                          trait_spec$trait))
+  for (i in seq_len(nrow(trait_spec))) {
+    if (!identical(kinds[[i]], "index")) next
+    col <- trait_spec$column[[i]]
+    if (!(col %in% names(out$pheno))) next
+    x <- suppressWarnings(as.numeric(out$pheno[[col]]))
+    if (sum(is.finite(x)) < 2L) next
+    out$pheno[[col]] <- ng_inverse_normal_transform(x)
+    out$transform[[i]] <- "inverse_normal_rank"
+  }
+  out
+}
+
 ng_cp__fit_trait_effects <- function(trait_spec, pheno, geno, ids, training_set, seed) {
   rows <- lapply(seq_len(nrow(trait_spec)), function(i) {
     column <- trait_spec$column[[i]]
@@ -1254,6 +1352,24 @@ ng_cp__stage_predict <- function(ctx) {
           trait_value_metric, uc_variance_source, scored_trait, method_varPMV),
         trait_value_metric_resolved = trait_value_metric,
         uc_variance_source_resolved = uc_variance_source,
+        # Whether this column was a MEASURED TRAIT or an INDEX the breeder computed
+        # elsewhere, and -- for an index -- the affine map used to standardise its
+        # arbitrary scale. A reader needs the centre and scale to read the reported
+        # numbers back into the index they built: raw = reported * scale + centre.
+        # Matched by trait NAME, not by position: this row is built inside a per-trait
+        # closure and the surrounding order is not guaranteed to be trait_spec's.
+        value_kind = {
+          .ti <- match(trait, trait_spec$trait)
+          if (is.na(.ti)) "trait" else as.character(trait_spec$value_kind[[.ti]] %||% "trait")
+        },
+        # The transform APPLIED, not a centre/scale pair: the inverse normal transform is
+        # rank-based and not affine, so no two numbers map the reported values back. Saying
+        # which transform ran is the honest report; implying an inverse would not be.
+        index_transform = {
+          .ti <- match(trait, trait_spec$trait)
+          if (is.na(.ti)) NA_character_
+          else as.character(trait_spec$index_transform[[.ti]] %||% NA_character_)
+        },
         # The basis decision and the REASON for it, carried from the scored table
         # so a reader sees the verdict and its justification on one row.
         mean_source_criterion = as.character(
@@ -2207,7 +2323,8 @@ utils::globalVariables(c(
   "ci_level", "robustness_quantile",
   "committed_crosses", "constraint_diagnostics", "cost_col",
   "cross_cost", "cross_table", "ctc", "direction_column_col", "direction_columns",
-  "direction_direction_col", "direction_file", "direction_trait_col", "diversity_emphasis",
+  "direction_direction_col", "direction_file", "direction_trait_col",
+  "direction_value_kind_col", "diversity_emphasis",
   "drop_lethal_carrier_crosses", "duplicate_action", "duplicate_maf_min", "duplicate_max_missing_prop",
   "duplicate_min_compared_markers", "duplicate_threshold", "effect_summary", "effects_list",
   "evol_iterations", "evol_seed", "evol_solutions", "evol_stop",
@@ -2380,6 +2497,7 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
                                     direction_trait_col = NULL,
                                     direction_column_col = NULL,
                                     direction_direction_col = NULL,
+                                    direction_value_kind_col = NULL,
                                     map_marker_col = NULL,
                                     map_chr_col = NULL,
                                     map_pos_col = NULL,

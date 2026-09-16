@@ -10,7 +10,7 @@
         {"name": "genotype_file", "type": "path", "required": true, "desc": "CSV: parents × markers, dosage 0..ploidy, plus an id column (or pass genotype in-memory)"},
         {"name": "phenotype_file", "type": "path", "required": true, "desc": "CSV: parents × traits (adjusted means / BLUE / BLUP)"},
         {"name": "map_file", "type": "path", "required": true, "desc": "CSV: marker, chromosome, position"},
-        {"name": "direction_file", "type": "path", "required": "when prediction_mode = trait_by_trait", "desc": "CSV: trait + selection direction (increase/decrease)"}
+        {"name": "direction_file", "type": "path", "required": "when prediction_mode = trait_by_trait", "desc": "CSV describing each trait. Columns: trait (name), column (phenotype column, defaults to trait), direction (increase/decrease), and optionally weight, min_value/max_value/threshold_column for thresholds, and value_kind. value_kind is \"trait\" (default) or \"index\": declare \"index\" for a column computed elsewhere and the engine applies a rank-based inverse normal transform to it, because a supplied index has an arbitrary distribution whose shape came from weights nobody can check. A measured trait keeps its own units."}
       ]
     },
     {
@@ -22,6 +22,7 @@
         {"name": "direction_trait_col", "type": "string", "default": null},
         {"name": "direction_column_col", "type": "string", "default": null},
         {"name": "direction_direction_col", "type": "string", "default": null},
+        {"name": "direction_value_kind_col", "type": "string", "default": null, "desc": "Column in the direction file holding value_kind (trait|index). Auto-detected as \"value_kind\" when absent."},
         {"name": "map_marker_col", "type": "string", "default": null},
         {"name": "map_chr_col", "type": "string", "default": null},
         {"name": "map_pos_col", "type": "string", "default": null},
@@ -87,7 +88,7 @@
     {
       "id": "multitrait", "label": "Multi-trait objective",
       "params": [
-        {"name": "multi_trait_method", "type": "enum", "allowed": ["auto", "weighted", "economic_index", "desired_gain", "threshold"], "default": "auto"},
+        {"name": "multi_trait_method", "type": "enum", "allowed": ["auto", "weighted", "economic_index", "desired_gain", "threshold", "rank_sum"], "default": "auto", "desc": "rank_sum is the weighted rank summation index (Mulamba-Mock): raw ranks summed with the trait weights, equal by default. Distinct from auto, which is rank-BASED but pushes ranks through qnorm and so re-imposes Gaussian spacing."},
         {"name": "trait_weights", "type": "object", "default": null, "desc": "Named numeric, e.g. {\"yield\":0.5,\"disease\":0.5}"},
         {"name": "threshold_policy", "type": "enum", "allowed": ["soft", "strict"], "default": "soft"},
         {"name": "threshold_penalty_weight", "type": "number", "default": 1.0},

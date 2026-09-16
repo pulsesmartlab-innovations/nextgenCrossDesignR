@@ -210,6 +210,34 @@ prefer physical positions in bp with `map_position_unit = "bp"` and a `bp_per_cm
 estimation, cross prediction, multi-trait scoring, mate allocation, and priority ranking. This is
 the call you will reuse and refine for the rest of the vignette.
 
+**Optional direction-file columns.** Beyond `Trait` and `Selection_direction`, the direction
+table accepts `weight` (relative importance), `min_value` / `max_value` / `threshold_column` (per
+trait constraints), and **`value_kind`**.
+
+`value_kind` is `"trait"` (the default) or `"index"`, and it answers a question the engine cannot
+work out for itself: is this column measured trait data, or an index you already computed
+elsewhere? It matters because a supplied index has an arbitrary *distribution* — its shape came
+from weights nobody else can check — so a threshold, a check value or a covariance entry stated
+against it means something different from the same number against a real trait.
+
+Declaring `value_kind = "index"` applies a rank-based inverse normal transform to that column
+before scoring, and only to that column: measured traits keep their own units, because a
+mid-parent reported in normal scores is not the number a breeder wants to read. The run reports
+what it did in `effect_summary$value_kind` and `effect_summary$index_transform`, and the workbook
+says so on the `Scoring_Method` sheet.
+
+Two consequences worth knowing. The transform is *monotone*, so it preserves the order of your
+parent values and cannot flip a lower-is-better index into a higher-is-better one — orientation
+stays with `Selection_direction`, which matters because a supplied index may be a rank summation
+index (lower is better) or a Smith–Hazel index (higher is). It is *not affine*, so declaring a
+column an index genuinely changes which crosses are selected, and the reported numbers do not map
+back to your scale by any centre-and-scale pair. That is deliberate: ranking on a raw supplied
+index means ranking on spacing that came from weights nobody can check.
+
+`prediction_mode = "index_as_trait"` is the deprecated spelling of the same idea. It still works
+and maps onto `value_kind = "index"`, but it warns: being run-level it cannot express a run that
+mixes measured traits with a supplied index, which `value_kind` can.
+
 ```{r}
 result <- ng_run_cross_prediction(
   phenotype       = pheno,
@@ -1033,8 +1061,18 @@ attr(scored_mt, "multi_trait")$breeder_objective_method_reason
 **Which method?** This is input-driven, not a performance race — the methods optimize different
 objectives. Use `auto` with only directions, `weighted` for declared weights, `economic_index` with
 economic weights plus validated phenotypic and genetic covariance matrices, `desired_gain` with
-target changes plus those same covariance matrices, and `threshold` for constraints. The package
-does not substitute candidate-cross score covariance for P or G.
+target changes plus those same covariance matrices, `threshold` for constraints, and `rank_sum`
+when you want the rank summation index. The package does not substitute candidate-cross score
+covariance for P or G.
+
+**`rank_sum` vs `auto` — both say "rank", and they are not the same.** `auto` and `weighted` are
+rank-*based*: each oriented trait goes through `rank → qnorm → standardize`, a van der Waerden /
+Blom normal-score transform. That `qnorm` step re-imposes Gaussian spacing — the gap between the
+top two crosses stretches, the middle compresses. `rank_sum` is the rank summation index of
+Mulamba and Mock (1978): it sums the **raw ranks**, weighted, with equal weights by default (so
+the default case is the classic unweighted index). Choose it when you want a trait's extreme
+outlier to count as exactly one rank step however extreme it is — that insensitivity is the whole
+point of the method, and the normal-score families do not have it.
 
 ## Under the hood: ng_multitrait_spec
 

@@ -556,11 +556,14 @@ Pick by your inputs:
 | reliable economic values AND trustworthy phenotypic (P) and genetic (G) covariance matrices | **`economic_index`** (Smith–Hazel) | maximizes aggregate economic merit with `b = P^-1 G a` |
 | target genetic changes per trait plus trustworthy P and G | **`desired_gain`** (Pesek–Baker) | uses `b` proportional to `G^-1 d`; P determines the index variance and response scale |
 | hard/soft minimum or maximum constraints per trait | **`threshold`** | keeps crosses within bounds (soft penalty by default); can combine with the above |
+| you want raw ranks summed, robust to outliers and to any monotone rescaling | **`rank_sum`** (Mulamba-Mock) | sums the raw ranks with your trait weights, equal by default; an extreme outlier counts as one rank step |
 
 Recommendation: **default to `auto`.** Economic-index is deliberately NOT the default because
 reliable economic weights are hard to obtain, and users often substitute *phenotypic* for
 *genetic* correlations, which violates the Smith–Hazel assumptions and can mislead -- when in
-doubt, the rank-normalized `auto` (a rank-summation-style index) is the safe choice. Use
+doubt, the rank-normalized `auto` is the safe choice. (It is rank-BASED, not a rank
+summation index -- it pushes ranks through `qnorm`, which re-imposes Gaussian spacing. For the
+actual Mulamba-Mock index, use `rank_sum`.) Use
 `economic_index` / `desired_gain` only when you genuinely have trustworthy targets and both P and
 G. Candidate-cross score covariance is not a substitute. See the per-method sections below and examples
 `10_multitrait_method_auto.R` … `13_multitrait_method_desired_gain.R`.
