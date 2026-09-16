@@ -49,9 +49,28 @@ mean-basis and variance-method rows beside it.
 `effect_gate = "off"` was labelled "diagnostics only". A breeder using it on a real
 run is not doing diagnostics, so the label misdescribed the choice; it now says the
 run proceeds without the gate, on markers the engine would refuse.
-`min_effect_reliability` stays reserved and inert, and its note now states explicitly
-that it is not the same quantity as `min_cv_predictive_r2`, since the two sit
-adjacent and the names invite conflation.
+## `min_effect_reliability` is retired
+
+One control now decides whether a trait's marker effects are good enough to use, and
+it is `min_cv_predictive_r2` — the bar a breeding programme sets for itself.
+
+`min_effect_reliability` gated a calibrated PEV-based reliability this package never
+computes. The deeper reason to retire rather than reserve it: **PEV reliability answers
+a question this package does not ask.** It exists to say how far to trust a GEBV for an
+*unphenotyped selection candidate*. Here every parent already has phenotypic records;
+marker effects are estimated to give those parents GEBVs and to feed the downstream
+quantities — the a'Ra within-family variance, the cross-trait covariance. Neither is
+"predict this individual", so the reserved hook was holding space for the wrong
+quantity.
+
+Two adjacent controls for one concept, one of them inert, is also the duplication this
+package has removed twice already: `posterior_predictions$mean_source` against
+`effect_summary$mean_source`, and `prediction_mode = "index_as_trait"` against
+`value_kind`. Reserving a hook for a quantity that may never arrive is the same thing
+with a longer horizon.
+
+Supplying it now warns and is ignored, so existing configs still run, and it is gone
+from the capability registry so no frontend can render a dial that governs nothing.
 
 # nextgenCrossDesign 0.33.0
 

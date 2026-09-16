@@ -56,16 +56,18 @@ vals <- vapply(g$choices, function(x) x$value, character(1))
 stopifnot(setequal(vals, c("on", "off")))
 stopifnot(identical(g$default, "on"))
 
-# ---- 4. the INERT knob is declared AND marked, not silently omitted ------
-# Omitting it would leave the frontend's hardcoded copy in place with nothing to say
-# it governs nothing. Declaring it guarded is what lets a UI retract it.
-r <- by_id("min_effect_reliability")
-if (is.null(r)) stop("min_effect_reliability is absent: the frontend hardcodes this ",
-                     "dial today, and nothing in the contract says it is inert",
-                     call. = FALSE)
-stopifnot(identical(r$status, "guarded"))
-stopifnot(!is.null(r$note), nzchar(r$note))
-stopifnot(grepl("reserved|inert|no effect|governs no", r$note, ignore.case = TRUE))
+# ---- 4. the RETIRED knob is gone from the contract ------------------------
+# min_effect_reliability used to be declared here as "guarded" so a UI could hide it.
+# It is now retired outright: one control decides whether a trait's marker effects are
+# good enough, and it is min_cv_predictive_r2. The retired one gated a PEV-based
+# reliability this package never computes -- and PEV reliability answers a question
+# about UNPHENOTYPED selection candidates, which this package does not have. Every
+# parent here is phenotyped; marker effects exist to give those parents GEBVs and to
+# feed the downstream variance, not to predict an individual with no data.
+#
+# A contract that still advertised it would invite a frontend to render a dial that
+# governs nothing.
+stopifnot(is.null(by_id("min_effect_reliability")))
 
 # ---- 5. every declared default RESOLVES to the engine's default ----------
 # The registry speaks the breeder vocabulary ("reliable_family_variance") and the engine
@@ -138,9 +140,6 @@ stopifnot(grepl("every trait|all traits|one threshold", mnote, ignore.case = TRU
 # statistic is not it. Two adjacent controls, one called reliability, would be read as
 # two settings for one thing.
 stopifnot(!grepl("reliability", as.character(m$label), ignore.case = TRUE))
-
-# ---- 9. the guarded knob says what it is NOT -----------------------------
-stopifnot(grepl("min_cv_predictive_r2", paste(unlist(r$note), collapse = " "), fixed = TRUE))
 
 # ---- 10. the override reads as a decision, not as a diagnostics mode -----
 # A breeder switching the gate off for a real run is not doing diagnostics; a label

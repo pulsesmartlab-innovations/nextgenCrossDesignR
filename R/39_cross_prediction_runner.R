@@ -852,6 +852,31 @@ ng_cp__build_ctx <- function(config) {
             "Use uc_variance_source = 'pmv' or 'vpm', or set ",
             "trait_value_metric = 'parent_distance' to rank on distance alone.")
   }
+  # `min_effect_reliability` is RETIRED. One control decides whether the marker effects
+  # are good enough for a trait, and it is min_cv_predictive_r2, which a breeding
+  # programme sets for itself.
+  #
+  # Reliability here was only ever a way to ask "is the marker-effect estimate for this
+  # trait any good?". It gated a calibrated-reliability branch nothing in this package
+  # can reach, kept as a hook for a PEV-based reliability -- and PEV reliability answers
+  # a question this package does not ask. It exists to say how far to trust a GEBV for an
+  # UNPHENOTYPED selection candidate. Here the parents are phenotyped: the marker effects
+  # form a mid-parent from lines that already have data, and give a'Ra a beta-hat to
+  # propagate into progeny segregation variance. Neither is "predict this individual", so
+  # the reserved hook was holding space for the wrong quantity.
+  #
+  # Two adjacent controls for one concept, one inert, is the duplication removed twice
+  # already here (posterior mean_source vs effect_summary mean_source; index_as_trait vs
+  # value_kind). Warned and ignored rather than errored, so existing configs still run.
+  if (!is.null(ctx$min_effect_reliability)) {
+    warning("min_effect_reliability is deprecated and ignored; use min_cv_predictive_r2, ",
+            "which is the bar a breeding programme sets for whether a trait's marker ",
+            "effects are good enough to use. min_effect_reliability gated a calibrated ",
+            "PEV-based reliability that this package never computes, and that answers a ",
+            "question about unphenotyped selection candidates rather than about phenotyped ",
+            "parents.", call. = FALSE)
+  }
+  ctx$min_effect_reliability <- 0.35
   ctx$effect_gate <- match.arg(ctx$effect_gate, c("on", "off"))
   ctx$threshold_policy <- match.arg(ctx$threshold_policy, c("soft", "strict"))
   ctx$recomb_model <- match.arg(ctx$recomb_model, c("haldane", "kosambi"))
@@ -2532,7 +2557,9 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
                                     progeny = "DH",
                                     recomb_model = c("haldane", "kosambi"),
                                     selection_prop = 0.10,
-                                    min_effect_reliability = 0.35,
+                                    # DEPRECATED. Default NULL so a supplied value is
+                                    # detectable; see ng_cp__build_ctx.
+                                    min_effect_reliability = NULL,
                                     min_cv_predictive_r2 = 0.35,
                                     # The reliability gate is ON by default. "off" is an
                                     # explicit, recorded opt-out for benchmark harnesses that

@@ -189,10 +189,14 @@ conversion.
 
 Ridge \code{cv_predictive_r2} is out-of-fold phenotype predictive ability, not
 breeding-value reliability or accuracy squared. Native fits therefore report
-uncalibrated reliability as missing. \code{min_effect_reliability} is the
-threshold for the calibrated-reliability branch and is reserved: nothing in
-this package sets a calibrated reliability, so it governs no run today.
-\code{min_cv_predictive_r2} is the threshold that governs mean selection.
+uncalibrated reliability as missing. \code{min_effect_reliability} is RETIRED:
+it warns and is ignored. \code{min_cv_predictive_r2} is the single control
+deciding whether a trait's marker effects are good enough to use. A calibrated
+PEV-based reliability was never computed here, and it answers a question this
+package does not ask -- how far to trust a GEBV for an UNPHENOTYPED selection
+candidate. Every parent here is phenotyped; marker effects are estimated to give
+those parents GEBVs and to supply \eqn{\beta} to the within-family variance and
+the cross-trait covariance.
 
 Multi-trait scoring offers \code{auto}, \code{weighted}, \code{threshold},
 \code{economic_index} (Smith-Hazel), \code{desired_gain} (Pesek-Baker) and
