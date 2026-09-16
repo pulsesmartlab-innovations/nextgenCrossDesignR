@@ -460,7 +460,6 @@ ng_posterior_cross_predict <- function(geno,
                                        target = c("DH", "RIL"),
                                        parent_type = c("inbred", "dh", "ril"),
                                        selection_prop = 0.10,
-                                       min_effect_reliability = 0.35,
                                      # Threaded, not defaulted. Omitting it made this
                                      # path apply 0.35 while the run used its own
                                      # threshold, so posterior_predictions$mean_source
@@ -545,7 +544,6 @@ ng_posterior_cross_predict <- function(geno,
     pairs = pairs, adjusted_pheno = adjusted_pheno, blue = blue, blup = blup,
     include_self = include_self, target = target,
     selection_prop = selection_prop,
-    min_effect_reliability = min_effect_reliability,
     min_cv_predictive_r2 = min_cv_predictive_r2,
     recomb_model = recomb_model, window_cm = window_cm, use_cpp = use_cpp,
     parent_type = parent_type
@@ -577,9 +575,10 @@ ng_posterior_cross_predict <- function(geno,
       intercept = mean(stats::na.omit(intercept_y)) -
                   sum(marker_mean_y * beta_draws[, s] - marker_mean_y * fit$beta),
       marker_mean = marker_mean_y,
-      reliability = fit$reliability,
-      cv_predictive_r2 = fit$cv_predictive_r2,
-      reliability_is_calibrated = FALSE
+      # No reliability field: the fit no longer reports one, because a calibrated
+      # PEV reliability is not computed here and answers a question about
+      # unphenotyped candidates. cv_predictive_r2 is what the basis decision uses.
+      cv_predictive_r2 = fit$cv_predictive_r2
     )
     # Centering shift: effects_s$intercept above keeps fitted ~ original.
     scored <- ng_score_crosses(
@@ -587,7 +586,6 @@ ng_posterior_cross_predict <- function(geno,
       pairs = base[, c("parent1", "parent2")],
       adjusted_pheno = adjusted_pheno, blue = blue, blup = blup,
       target = target, selection_prop = selection_prop,
-      min_effect_reliability = min_effect_reliability,
       recomb_model = recomb_model, window_cm = window_cm, use_cpp = use_cpp,
       parent_type = parent_type,
       # The run's threshold, not ng_score_crosses()'s default. Without this the draws

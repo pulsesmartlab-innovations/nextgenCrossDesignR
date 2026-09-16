@@ -17,7 +17,6 @@ ng_cheap_cross_screen <- function(geno,
                                   blue = NULL,
                                   blup = NULL,
                                   selection_prop = 0.10,
-                                  min_effect_reliability = 0.35,
                                   min_cv_predictive_r2 = 0.35,
                                   include_self = FALSE) {
   geno <- ng_as_numeric_matrix(geno, "geno")
@@ -31,7 +30,6 @@ ng_cheap_cross_screen <- function(geno,
     blue = blue,
     blup = blup,
     ids = ids,
-    min_reliability = min_effect_reliability,
     min_cv_predictive_r2 = min_cv_predictive_r2
   )
   K <- ng_parent_kinship(geno)
@@ -44,8 +42,8 @@ ng_cheap_cross_screen <- function(geno,
   out <- pairs
   out$mean_source <- mean_source$source
   out$mean_source_criterion <- as.character(mean_source$mean_source_criterion %||% NA_character_)[[1L]]
-  out$effect_reliability <- mean_source$reliability
-  out$effect_reliability_is_calibrated <- isTRUE(mean_source$reliability_is_calibrated)
+  # No effect_reliability column -- see R/03_metrics.R. The cheap screen must report the
+  # same fields as the full scorer, so it drops this alongside it.
   out$effect_cv_predictive_r2 <- suppressWarnings(as.numeric((mean_source$cv_predictive_r2 %||% NA_real_)[[1L]]))
   out$cross_mean <- 0.5 * (mean_source$value[p1] + mean_source$value[p2])
   out$mid_parent_value <- 0.5 * (gebv[p1] + gebv[p2])

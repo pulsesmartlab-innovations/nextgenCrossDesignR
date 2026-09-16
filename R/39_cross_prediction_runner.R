@@ -876,7 +876,7 @@ ng_cp__build_ctx <- function(config) {
             "question about unphenotyped selection candidates rather than about phenotyped ",
             "parents.", call. = FALSE)
   }
-  ctx$min_effect_reliability <- 0.35
+  ctx$min_effect_reliability <- NULL
   ctx$effect_gate <- match.arg(ctx$effect_gate, c("on", "off"))
   ctx$threshold_policy <- match.arg(ctx$threshold_policy, c("soft", "strict"))
   ctx$recomb_model <- match.arg(ctx$recomb_model, c("haldane", "kosambi"))
@@ -1211,7 +1211,6 @@ ng_cp__stage_predict <- function(ctx) {
       adjusted_pheno = y,
       target = target,
       selection_prop = selection_prop,
-      min_effect_reliability = min_effect_reliability,
       min_cv_predictive_r2 = min_cv_predictive_r2,
       recomb_model = recomb_model,
       use_cpp = use_cpp,
@@ -1267,7 +1266,6 @@ ng_cp__stage_predict <- function(ctx) {
         adjusted_pheno = y,
         target = target,
         selection_prop = selection_prop,
-        min_effect_reliability = min_effect_reliability,
         # ng_posterior_cross_predict() DOES select a mean source: it builds its
         # point-estimate table with ng_score_crosses() (R/30:536), which calls
         # ng_choose_mean_source(). Omitting this threshold made that call use the
@@ -2375,7 +2373,7 @@ utils::globalVariables(c(
   "map_pos_col", "map_position_unit", "marker_map", "marker_map_std",
   "marker_ploidy", "marker_target_spec", "mate_relatedness", "mate_relatedness_weight",
   "max_crosses_per_parent", "max_pair_kinship", "method_varPMV", "min_crosses_per_parent",
-  "min_cv_predictive_r2", "min_effect_reliability", "min_unique_parents", "multi_trait_method", "n_candidates_pre_lethal",
+  "min_cv_predictive_r2", "min_unique_parents", "multi_trait_method", "n_candidates_pre_lethal",
   "n_crosses", "n_iter", "n_threads", "objective",
   "ocs_iter", "optimizer", "optimizer_method", "output_dir",
   "output_file", "output_files", "parallel_backend", "parallel_cores_used",

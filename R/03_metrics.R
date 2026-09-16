@@ -80,7 +80,6 @@ ng_score_crosses <- function(geno,
                              target = c("DH", "RIL"),
                              parent_type = c("inbred", "dh", "ril"),
                              selection_prop = 0.10,
-                             min_effect_reliability = 0.35,
                              min_cv_predictive_r2 = 0.35,
                              recomb_model = c("haldane", "kosambi"),
                              window_cm = Inf,
@@ -216,7 +215,6 @@ ng_score_crosses <- function(geno,
     blue = blue,
     blup = blup,
     ids = ids,
-    min_reliability = min_effect_reliability,
     min_cv_predictive_r2 = min_cv_predictive_r2
   )
   # Reuse a caller-supplied kinship matrix when given (avoids recomputing the O(n^2*m)
@@ -329,8 +327,6 @@ ng_score_crosses <- function(geno,
     dh_var <- corr$vpm; dh_pmv <- corr$pmv; dh_pmv_full <- corr$pmv_full
     het_corrected <- corr$corrected
   }
-  effect_rel <- suppressWarnings(as.numeric(mean_source$reliability[[1L]]))
-  if (!is.finite(effect_rel)) effect_rel <- NA_real_
   # Compatibility name only: this is now the midpoint of the explicitly chosen
   # mean source, not an uncalibrated phenotype/GEBV interpolation.
   blended_mean <- parent_mean
@@ -343,8 +339,11 @@ ng_score_crosses <- function(geno,
   # "cv_predictive_r2" (cleared the bar) have different remedies, and a reader who
   # only sees `mean_source` cannot tell them apart.
   out$mean_source_criterion <- as.character(mean_source$mean_source_criterion %||% NA_character_)[[1L]]
-  out$effect_reliability <- effect_rel
-  out$effect_reliability_is_calibrated <- isTRUE(mean_source$reliability_is_calibrated)
+  # No effect_reliability column. It carried NA on every run this package can produce,
+  # because the reliability it named -- r^2 against true breeding value -- was never
+  # computed here and answers a question about unphenotyped selection candidates.
+  # effect_cv_predictive_r2 below is the statistic the basis decision was actually made
+  # on. See tests/calibrated_reliability_removed.R.
   out$effect_cv_predictive_r2 <- suppressWarnings(as.numeric((mean_source$cv_predictive_r2 %||% NA_real_)[[1L]]))
   out$progeny_target <- target
   out$mid_parent_value <- as.numeric(mpv_gebv)
