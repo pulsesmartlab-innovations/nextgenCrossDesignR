@@ -852,6 +852,31 @@ ng_cp__build_ctx <- function(config) {
             "Use uc_variance_source = 'pmv' or 'vpm', or set ",
             "trait_value_metric = 'parent_distance' to rank on distance alone.")
   }
+  # `min_effect_reliability` is RETIRED. One control decides whether the marker effects
+  # are good enough for a trait, and it is min_cv_predictive_r2, which a breeding
+  # programme sets for itself.
+  #
+  # Reliability here was only ever a way to ask "is the marker-effect estimate for this
+  # trait any good?". It gated a calibrated-reliability branch nothing in this package
+  # can reach, kept as a hook for a PEV-based reliability -- and PEV reliability answers
+  # a question this package does not ask. It exists to say how far to trust a GEBV for an
+  # UNPHENOTYPED selection candidate. Here the parents are phenotyped: the marker effects
+  # form a mid-parent from lines that already have data, and give a'Ra a beta-hat to
+  # propagate into progeny segregation variance. Neither is "predict this individual", so
+  # the reserved hook was holding space for the wrong quantity.
+  #
+  # Two adjacent controls for one concept, one inert, is the duplication removed twice
+  # already here (posterior mean_source vs effect_summary mean_source; index_as_trait vs
+  # value_kind). Warned and ignored rather than errored, so existing configs still run.
+  if (!is.null(ctx$min_effect_reliability)) {
+    warning("min_effect_reliability is deprecated and ignored; use min_cv_predictive_r2, ",
+            "which is the bar a breeding programme sets for whether a trait's marker ",
+            "effects are good enough to use. min_effect_reliability gated a calibrated ",
+            "PEV-based reliability that this package never computes, and that answers a ",
+            "question about unphenotyped selection candidates rather than about phenotyped ",
+            "parents.", call. = FALSE)
+  }
+  ctx$min_effect_reliability <- NULL
   ctx$effect_gate <- match.arg(ctx$effect_gate, c("on", "off"))
   ctx$threshold_policy <- match.arg(ctx$threshold_policy, c("soft", "strict"))
   ctx$recomb_model <- match.arg(ctx$recomb_model, c("haldane", "kosambi"))
@@ -1186,7 +1211,6 @@ ng_cp__stage_predict <- function(ctx) {
       adjusted_pheno = y,
       target = target,
       selection_prop = selection_prop,
-      min_effect_reliability = min_effect_reliability,
       min_cv_predictive_r2 = min_cv_predictive_r2,
       recomb_model = recomb_model,
       use_cpp = use_cpp,
@@ -1242,7 +1266,6 @@ ng_cp__stage_predict <- function(ctx) {
         adjusted_pheno = y,
         target = target,
         selection_prop = selection_prop,
-        min_effect_reliability = min_effect_reliability,
         # ng_posterior_cross_predict() DOES select a mean source: it builds its
         # point-estimate table with ng_score_crosses() (R/30:536), which calls
         # ng_choose_mean_source(). Omitting this threshold made that call use the
@@ -1352,6 +1375,16 @@ ng_cp__stage_predict <- function(ctx) {
           trait_value_metric, uc_variance_source, scored_trait, method_varPMV),
         trait_value_metric_resolved = trait_value_metric,
         uc_variance_source_resolved = uc_variance_source,
+        # The gate's state and the threshold that APPLIED, carried per trait so the
+        # workbook's Scoring_Method sheet can state them from the same effect_summary
+        # the mean-basis and variance-method rows are built from. A breeder is about to
+        # be able to switch the gate off deliberately; that decision has to survive into
+        # the file someone else reads, and effect_gate reached result.json but never the
+        # workbook.
+        effect_gate = as.character(effect_gate)[[1L]],
+        min_cv_predictive_r2_applied = as.numeric(
+          if (is.null(effect_gate_min_cv_predictive_r2)) min_cv_predictive_r2
+          else effect_gate_min_cv_predictive_r2),
         # Whether this column was a MEASURED TRAIT or an INDEX the breeder computed
         # elsewhere, and -- for an index -- the affine map used to standardise its
         # arbitrary scale. A reader needs the centre and scale to read the reported
@@ -2340,7 +2373,7 @@ utils::globalVariables(c(
   "map_pos_col", "map_position_unit", "marker_map", "marker_map_std",
   "marker_ploidy", "marker_target_spec", "mate_relatedness", "mate_relatedness_weight",
   "max_crosses_per_parent", "max_pair_kinship", "method_varPMV", "min_crosses_per_parent",
-  "min_cv_predictive_r2", "min_effect_reliability", "min_unique_parents", "multi_trait_method", "n_candidates_pre_lethal",
+  "min_cv_predictive_r2", "min_unique_parents", "multi_trait_method", "n_candidates_pre_lethal",
   "n_crosses", "n_iter", "n_threads", "objective",
   "ocs_iter", "optimizer", "optimizer_method", "output_dir",
   "output_file", "output_files", "parallel_backend", "parallel_cores_used",
@@ -2522,7 +2555,9 @@ ng_run_cross_prediction <- function(phenotype_file = NULL,
                                     progeny = "DH",
                                     recomb_model = c("haldane", "kosambi"),
                                     selection_prop = 0.10,
-                                    min_effect_reliability = 0.35,
+                                    # DEPRECATED. Default NULL so a supplied value is
+                                    # detectable; see ng_cp__build_ctx.
+                                    min_effect_reliability = NULL,
                                     min_cv_predictive_r2 = 0.35,
                                     # The reliability gate is ON by default. "off" is an
                                     # explicit, recorded opt-out for benchmark harnesses that

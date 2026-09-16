@@ -4,10 +4,17 @@
 # stopped reporting `reliability` (a phenotype CV statistic is not accuracy^2
 # against true breeding value, so calling it "reliability" would be wrong), but
 # ng_choose_mean_source still gated the GEBV branch on
-# `reliability_is_calibrated`. That flag is now always FALSE, so the branch
+# `reliability_is_calibrated`. That flag was always FALSE, so the branch
 # became unreachable: every run silently fell back to the adjusted-phenotype
 # mid-parent, no matter how well the markers predicted, and
 # `min_effect_reliability` became a knob with no effect at any value.
+#
+# 0.34.0 removed that machinery outright rather than leaving it reserved. A
+# calibrated PEV reliability answers a question this package does not ask -- how
+# far to trust a GEBV for an UNPHENOTYPED selection candidate -- and every parent
+# here is phenotyped. One statistic decides, cv_predictive_r2, and its bar is
+# min_cv_predictive_r2. So this call no longer passes min_reliability; the
+# behaviour it pins is unchanged.
 #
 # This test pins the behaviour that matters to a breeder: when the fit
 # demonstrably predicts out of sample, the cross mean must come from GEBVs.
@@ -41,7 +48,7 @@ chosen <- ng_choose_mean_source(
   effects = fit,
   adjusted_pheno = y,
   ids = ids,
-  min_reliability = 0.35
+  min_cv_predictive_r2 = 0.35
 )
 
 # THE ASSERTION: a well-predicting fit must yield GEBV-based means.

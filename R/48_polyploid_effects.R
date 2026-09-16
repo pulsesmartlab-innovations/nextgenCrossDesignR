@@ -89,8 +89,10 @@ ng_polyploid_fit_effects <- function(dosage,
     beta_dom = if (identical(model, "additive_dominance")) beta[(m_add + 1L):(2L * m_add)] else NULL,
     intercept = fit$intercept, allele_freq = p, hbar = hbar, b_orth = b_orth, markers = markers,
     ploidy = ploidy, model = model,
-    cv_predictive_r2 = fit$cv_predictive_r2,
-    reliability = NA_real_, reliability_is_calibrated = FALSE
+    # No reliability fields: a calibrated PEV reliability is not computed here and
+    # answers a question about unphenotyped selection candidates. cv_predictive_r2 is
+    # the statistic the mean-source decision uses.
+    cv_predictive_r2 = fit$cv_predictive_r2
   ), class = "ng_polyploid_effects")
 }
 

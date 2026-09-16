@@ -570,8 +570,69 @@ ng_cpw_scoring_method <- function(trait_mean_source = NULL, effect_summary = NUL
         "their own units.")
     }
   }
+  # Whether the refusal was in force, on a scale a breeder reads correctly.
+  #
+  # cv_predictive_r2 is an out-of-fold R2 against PHENOTYPE. Breeders reason in
+  # accuracy, and 0.35 R2 is r ~ 0.59 -- a demanding bar, not a modest one -- so the
+  # bare number invites exactly the wrong reading. The correlation is given alongside.
+  #
+  # The fallback sentence names the traits AND says their variance stayed
+  # marker-derived, because the fallback replaces the MEAN only and a mixed-basis plan
+  # cannot be read without knowing that.
+  gate_row <- NULL
+  if (!is.null(effect_summary) && NROW(effect_summary)) {
+    esg <- as.data.frame(effect_summary, stringsAsFactors = FALSE)
+    gate <- unique(as.character(esg$effect_gate %||% NA_character_))
+    gate <- gate[!is.na(gate) & nzchar(gate)]
+    if (length(gate)) {
+      thr <- suppressWarnings(as.numeric(esg$min_cv_predictive_r2_applied %||% NA_real_))
+      thr <- thr[is.finite(thr)]
+      thr1 <- if (length(thr)) thr[[1L]] else NA_real_
+      # The correlation equivalent is only meaningful while the threshold is a
+      # reachable R2. Above 1 no model can ever clear it -- sqrt() would print an
+      # impossible correlation, and an impossible statistic on a delivered sheet costs
+      # more trust than it buys. A threshold above 1 is a legitimate way to force
+      # phenotypic means; say that instead of inventing a number.
+      scale_note <- if (!is.finite(thr1)) {
+        "the configured out-of-fold R2"
+      } else if (thr1 > 1) {
+        sprintf(paste0("an out-of-fold R2 of at least %.2f, which no model can reach ",
+                       "because an R2 cannot exceed 1 -- every trait therefore falls ",
+                       "back to the phenotypic mid-parent by construction"), thr1)
+      } else {
+        sprintf(paste0("an out-of-fold R2 of at least %.2f (about r = %.2f on the ",
+                       "correlation scale breeders usually quote)"),
+                thr1, sqrt(max(thr1, 0)))
+      }
+      if (identical(gate[[1L]], "off")) {
+        gate_row <- paste0(
+          "Marker-effect reliability gate: OFF. This run was allowed to proceed on ",
+          "marker effects the engine would otherwise have REFUSED -- an unevaluable or ",
+          "negative out-of-fold R2 means the marker model has no demonstrated ability ",
+          "to predict this trait, so any within-family variance derived from it is not ",
+          "evidence. The override was deliberate; the numbers in this plan should be ",
+          "read as provisional.")
+      } else {
+        gate_row <- paste0(
+          "Marker-effect reliability gate: ON. Each trait had to reach ", scale_note,
+          " before its cross means were taken from the marker model. Note the scale: an ",
+          "R2 against PHENOTYPE is attenuated by heritability, so it understates accuracy ",
+          "against breeding value. One threshold applies to every trait in the run.")
+      }
+      ms <- as.character(esg$mean_source %||% NA_character_)
+      fb <- !is.na(ms) & ms != "GEBV"
+      if (any(fb)) {
+        gate_row <- paste0(gate_row, " ",
+          paste(sort(unique(as.character(esg$trait[fb]))), collapse = ", "),
+          ": fell back to the phenotypic mid-parent because the marker model did not ",
+          "reach the threshold. Their within-family VARIANCE remained marker-derived, so ",
+          "those rows mix a phenotypic mean with a marker-based spread.")
+      }
+    }
+  }
   data.frame(
     Section = c(
+      if (!is.null(gate_row)) "Marker-effect reliability gate (this run)",
       if (!is.null(basis_row)) "Cross-mean basis (this run)",
       if (!is.null(var_row)) "Within-family variance method (this run)",
       if (!is.null(idx_row)) "Supplied index traits (this run)",
@@ -583,6 +644,7 @@ ng_cpw_scoring_method <- function(trait_mean_source = NULL, effect_summary = NUL
       "Duplicate and parent-use QC"
     ),
     Details = c(
+      if (!is.null(gate_row)) gate_row,
       if (!is.null(basis_row)) basis_row,
       if (!is.null(var_row)) var_row,
       if (!is.null(idx_row)) idx_row,

@@ -189,10 +189,14 @@ conversion.
 
 Ridge \code{cv_predictive_r2} is out-of-fold phenotype predictive ability, not
 breeding-value reliability or accuracy squared. Native fits therefore report
-uncalibrated reliability as missing. \code{min_effect_reliability} is the
-threshold for the calibrated-reliability branch and is reserved: nothing in
-this package sets a calibrated reliability, so it governs no run today.
-\code{min_cv_predictive_r2} is the threshold that governs mean selection.
+uncalibrated reliability as missing. \code{min_effect_reliability} is RETIRED:
+it warns and is ignored. \code{min_cv_predictive_r2} is the single control
+deciding whether a trait's marker effects are good enough to use. A calibrated
+PEV-based reliability was never computed here, and it answers a question this
+package does not ask -- how far to trust a GEBV for an UNPHENOTYPED selection
+candidate. Every parent here is phenotyped; marker effects are estimated to give
+those parents GEBVs and to supply \eqn{\beta} to the within-family variance and
+the cross-trait covariance.
 
 Multi-trait scoring offers \code{auto}, \code{weighted}, \code{threshold},
 \code{economic_index} (Smith-Hazel), \code{desired_gain} (Pesek-Baker) and
@@ -234,6 +238,22 @@ falls back to the phenotypic mid-parent while the within-family variance
 remains marker-derived; \code{effect_summary} reports both bases so that
 asymmetry is visible rather than implied. At or above the threshold, cross
 means are GEBVs.
+
+\code{min_cv_predictive_r2} is an R-squared, not a correlation, and it is measured
+against PHENOTYPE rather than breeding value. The 0.35 default corresponds to
+about \eqn{r = 0.59} on the correlation scale conventionally quoted for genomic
+prediction accuracy, so it is a demanding bar rather than a modest one. Because
+heritability attenuates a phenotype-scale statistic, it also understates accuracy
+against breeding value: with \eqn{h^2 = 0.3}, an R-squared of 0.20 can indicate
+markers that predict breeding value well. It is therefore not comparable with a
+PEV-based reliability, which is \eqn{r^2} against true breeding value and which
+this package reports as missing for native fits.
+
+The threshold governs cross MEANS only. The within-family variance remains
+marker-derived in every tier, so a trait below the bar yields a phenotypic
+mid-parent beside a marker-based spread. A single threshold applies to every
+trait in a run, although acceptability genuinely differs by trait with
+heritability and phenotyping effort.
 
 The refusal applies to every metric whose delivered value contains a
 within-family variance -- \code{usefulness}, \code{var_complex}, \code{pmv},
