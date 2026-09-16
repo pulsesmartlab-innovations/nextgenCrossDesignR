@@ -142,6 +142,7 @@
 \alias{ng_write_head_to_head_visual_report}
 \alias{ng_run_stage}
 \alias{ng_poly_run_stage}
+\alias{ng_preview_marker_effects}
 \title{Public NextGen Cross Design Backend API}
 \description{
 Public backend functions for cross scoring, mate allocation, multi-trait
@@ -262,8 +263,8 @@ quadratic form in the estimated marker effects. \code{mean} and
 \code{parent_distance} are exempt: the first falls back to the phenotypic
 mid-parent and so carries no marker content, the second is a GRM distance that
 never touches marker effects. Both are honest non-genomic analyses, correctly
-labelled, not loopholes. \code{effect_gate = "off"} disables the gate for
-diagnostics.
+labelled, not loopholes. \code{effect_gate = "off"} proceeds without the gate, on markers the
+engine would otherwise have refused; the workbook records that it was off.
 
 The remedy the gate names is a larger marker-effect training set, supplied as
 \code{training_genotype} / \code{training_phenotype} (or the corresponding
