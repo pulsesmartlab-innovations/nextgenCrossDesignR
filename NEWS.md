@@ -1,3 +1,23 @@
+# nextgenCrossDesign 0.35.0
+
+## `ng_preview_marker_effects()` is exported
+
+It exists so a breeder can ask "should I launch this?" in seconds rather than hours:
+it runs QC and the marker fits, shares the fit path and seed with the run it previews,
+and stops before scoring a single cross. On a 17-trait panel it previews a run that
+takes hours.
+
+The frontend could not call it. It was never exported, so the workbench's only options
+were `nextgenCrossDesign:::`, which `R CMD check` flags and which couples a frontend to
+an internal carrying no stability promise, or reimplementing the check less accurately.
+The gap surfaced only when the frontend went to use it.
+
+`ng_run_cross_prediction()` and `ng_write_backend_capability_registry_json()` were
+already exported, so nothing announced the inconsistency.
+`tests/frontend_entry_points_are_exported.R` now makes the set explicit, each entry
+point carrying the reason it is public: adding a frontend-facing function without
+exporting it fails there rather than at integration time.
+
 # nextgenCrossDesign 0.34.0
 
 Preparing to hand breeders the acceptability decision, and finding that the engine
