@@ -32,3 +32,20 @@ attic/
 
 # Subagent-driven-development scratch: ledgers, briefs, review packages.
 .superpowers/
+
+# Legacy prototype scripts that live untracked in R/ alongside the package sources.
+# .Rbuildignore already excludes them from the tarball; this keeps a `git add -A R/`
+# from tracking them, which happened once and would have shipped 6,682 lines of dead
+# prototype into the repo -- and put back the stale-copy shadowing hazard that
+# tools/ng_find_package_root.R exists to prevent.
+R/01_relationships.R
+R/02_duplicate_detection_legacy.R
+R/02b_duplicate_detection.R
+R/03_ld.R
+R/04_variance_simple_uc.R
+R/05_pmv.R
+R/06_build_cross_data.R
+R/07_optimizers.R
+R/08_select_optimal_parents.R
+R/09_pmv_cpp.R
+R/10_marker_effects.R
