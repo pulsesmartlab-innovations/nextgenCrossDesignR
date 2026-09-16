@@ -235,6 +235,22 @@ remains marker-derived; \code{effect_summary} reports both bases so that
 asymmetry is visible rather than implied. At or above the threshold, cross
 means are GEBVs.
 
+\code{min_cv_predictive_r2} is an R-squared, not a correlation, and it is measured
+against PHENOTYPE rather than breeding value. The 0.35 default corresponds to
+about \eqn{r = 0.59} on the correlation scale conventionally quoted for genomic
+prediction accuracy, so it is a demanding bar rather than a modest one. Because
+heritability attenuates a phenotype-scale statistic, it also understates accuracy
+against breeding value: with \eqn{h^2 = 0.3}, an R-squared of 0.20 can indicate
+markers that predict breeding value well. It is therefore not comparable with a
+PEV-based reliability, which is \eqn{r^2} against true breeding value and which
+this package reports as missing for native fits.
+
+The threshold governs cross MEANS only. The within-family variance remains
+marker-derived in every tier, so a trait below the bar yields a phenotypic
+mid-parent beside a marker-based spread. A single threshold applies to every
+trait in a run, although acceptability genuinely differs by trait with
+heritability and phenotyping effort.
+
 The refusal applies to every metric whose delivered value contains a
 within-family variance -- \code{usefulness}, \code{var_complex}, \code{pmv},
 \code{vpm} -- because every within-family variance in this package is a

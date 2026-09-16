@@ -1,3 +1,58 @@
+# nextgenCrossDesign 0.34.0
+
+Preparing to hand breeders the acceptability decision, and finding that the engine
+could not be read correctly when it did.
+
+The workbench is about to expose `min_cv_predictive_r2` and `effect_gate` as plain
+controls, so a breeding programme sets its own bar and can decide from the outset
+what it is willing to accept. Reviewing that surfaced four problems the frontend
+could not fix without inventing breeder-facing wording the contract should own.
+
+## The threshold is an R-squared, and breeders reason in accuracy
+
+`cv_predictive_r2` is out-of-fold R-squared against **phenotype**. The 0.35 default
+is about **r = 0.59** — a demanding bar, not a modest one. Someone setting 0.5
+expecting "moderate accuracy" is asking for r = 0.71.
+
+It is also attenuated by heritability, because it is measured against phenotype and
+not breeding value, so it **understates** accuracy against breeding value: with
+h2 = 0.3, an R-squared of 0.20 can mean markers that predict breeding value well.
+
+The registry note and the API reference now carry the conversion, the phenotype-vs-
+breeding-value distinction, and the fact that the threshold governs cross MEANS only
+while the variance stays marker-derived in every tier. The control is relabelled
+"Minimum marker prediction quality (out-of-fold R2)" and no longer uses the word
+reliability, which in quantitative genetics means r-squared against true breeding
+value and is a different quantity entirely.
+
+## A run that bypassed the gate did not say so
+
+`effect_gate` reached `result.json` but never the workbook. A plan built on markers
+the engine would have REFUSED looked exactly like a plan built on markers it
+accepted.
+
+That is the unlabelled-number defect of 0.31.0 and 0.32.0 in its most consequential
+form: not a mislabelled basis, but a silently disabled refusal. Exposing the override
+to breeders makes recording it obligatory.
+
+The `Scoring_Method` sheet gains a **Marker-effect reliability gate (this run)** row
+stating whether the gate was on, the threshold that applied with its correlation
+equivalent, and which traits fell back to the phenotypic mid-parent — noting that
+their variance stayed marker-derived, since a mixed-basis plan cannot be read without
+that. When the gate was off it says so plainly and that the numbers should be read as
+provisional. `effect_summary` carries `effect_gate` and
+`min_cv_predictive_r2_applied` so the row is built from the same source as the
+mean-basis and variance-method rows beside it.
+
+## Also
+
+`effect_gate = "off"` was labelled "diagnostics only". A breeder using it on a real
+run is not doing diagnostics, so the label misdescribed the choice; it now says the
+run proceeds without the gate, on markers the engine would refuse.
+`min_effect_reliability` stays reserved and inert, and its note now states explicitly
+that it is not the same quantity as `min_cv_predictive_r2`, since the two sit
+adjacent and the names invite conflation.
+
 # nextgenCrossDesign 0.33.0
 
 Two things a breeder could not express, and one duplication that should never have

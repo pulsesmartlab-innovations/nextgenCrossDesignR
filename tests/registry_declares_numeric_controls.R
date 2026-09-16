@@ -115,5 +115,39 @@ stopifnot(identical(jm$type, "number"))
 stopifnot(is.numeric(jm$default), length(jm$default) == 1L)
 stopifnot(is.numeric(jm$min), is.numeric(jm$max))
 
+# ---- 7. the live threshold is described on the scale breeders read ------
+# cv_predictive_r2 is an out-of-fold R2 against PHENOTYPE. Breeders reason in accuracy,
+# and 0.35 R2 is r ~ 0.59 -- a demanding bar, not a modest one. A contract that states
+# the number without the scale hands the breeder the acceptability decision and invites
+# them to make it backwards. Being against phenotype rather than breeding value, it is
+# also attenuated by heritability, so it UNDERSTATES GEBV accuracy: a breeder with
+# h2 = 0.3 seeing R2 = 0.20 may reject markers that predict breeding value well.
+mnote <- paste(unlist(m$note), collapse = " ")
+stopifnot(nzchar(mnote))
+stopifnot(grepl("0.59", mnote, fixed = TRUE))          # the correlation equivalent
+stopifnot(grepl("phenotype", mnote, ignore.case = TRUE))
+stopifnot(grepl("breeding value", mnote, ignore.case = TRUE))
+# the threshold gates the MEAN; the variance stays marker-derived in every tier
+stopifnot(grepl("variance", mnote, ignore.case = TRUE))
+# one scalar covers every trait, and acceptability genuinely differs by trait
+stopifnot(grepl("every trait|all traits|one threshold", mnote, ignore.case = TRUE))
+
+# ---- 8. and it does NOT inherit the word "reliability" -------------------
+# In quantitative genetics reliability is r^2(GEBV, TBV). This is not that, and the
+# package reports the calibrated quantity as missing precisely because a phenotype CV
+# statistic is not it. Two adjacent controls, one called reliability, would be read as
+# two settings for one thing.
+stopifnot(!grepl("reliability", as.character(m$label), ignore.case = TRUE))
+
+# ---- 9. the guarded knob says what it is NOT -----------------------------
+stopifnot(grepl("min_cv_predictive_r2", paste(unlist(r$note), collapse = " "), fixed = TRUE))
+
+# ---- 10. the override reads as a decision, not as a diagnostics mode -----
+# A breeder switching the gate off for a real run is not doing diagnostics; a label
+# saying so misdescribes the choice they are making.
+off <- Filter(function(x) identical(x$value, "off"), g$choices)[[1L]]
+stopifnot(!grepl("diagnostics only", as.character(off$label), ignore.case = TRUE))
+stopifnot(grepl("proceed|without the gate|override", as.character(off$label), ignore.case = TRUE))
+
 cat("registry_declares_numeric_controls: PASS  (", length(ctls), "controls,",
     paste(types, collapse = "/"), ")\n")

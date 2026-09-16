@@ -1352,6 +1352,16 @@ ng_cp__stage_predict <- function(ctx) {
           trait_value_metric, uc_variance_source, scored_trait, method_varPMV),
         trait_value_metric_resolved = trait_value_metric,
         uc_variance_source_resolved = uc_variance_source,
+        # The gate's state and the threshold that APPLIED, carried per trait so the
+        # workbook's Scoring_Method sheet can state them from the same effect_summary
+        # the mean-basis and variance-method rows are built from. A breeder is about to
+        # be able to switch the gate off deliberately; that decision has to survive into
+        # the file someone else reads, and effect_gate reached result.json but never the
+        # workbook.
+        effect_gate = as.character(effect_gate)[[1L]],
+        min_cv_predictive_r2_applied = as.numeric(
+          if (is.null(effect_gate_min_cv_predictive_r2)) min_cv_predictive_r2
+          else effect_gate_min_cv_predictive_r2),
         # Whether this column was a MEASURED TRAIT or an INDEX the breeder computed
         # elsewhere, and -- for an index -- the affine map used to standardise its
         # arbitrary scale. A reader needs the centre and scale to read the reported
