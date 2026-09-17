@@ -1,7 +1,7 @@
 Package: nextgenCrossDesign
 Type: Package
 Title: Next Generation Cross Prediction and Mate Allocation
-Version: 0.35.0
+Version: 0.36.0
 Authors@R: c(
     person("NextGen", "Cross Design Team", email = "maintainer@example.com", role = c("aut", "cre"))
     )
@@ -25,6 +25,7 @@ Imports:
     grDevices,
     graphics,
     parallel,
+    mirai,
     jsonlite,
     lpSolve,
     Rcpp,

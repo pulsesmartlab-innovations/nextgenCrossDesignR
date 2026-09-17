@@ -28,14 +28,23 @@ ng_backend_controls <- function() {
   # ngcd_control_choices() currently filters CHOICES by status, not whole controls, so a
   # guarded numeric still needs a frontend change to disappear -- declaring it is what
   # makes that change possible, not what performs it.
+  # `auto = TRUE` declares a control the BACKEND decides when the user leaves it blank --
+  # batch_workers is sized from the memory actually available, and no fixed number would be
+  # right on both a laptop and a memory-capped container. Such a control has no default, and
+  # that is a property to state rather than a gap to paper over with an invented number.
+  #
+  # It is deliberately a declared state, not a relaxation: every control WITHOUT auto still
+  # owes a finite default inside its bounds, and an auto control owes a note saying what
+  # happens when it is left blank, so a frontend can render the blank input with an
+  # explanation instead of an empty box. tests/testthat/test-contract.R enforces both halves.
   num <- function(id, label, group, default, min = NA_real_, max = NA_real_,
                   step = NA_real_, capability = NA_character_,
                   depends_on = NA_character_, status = NA_character_,
-                  note = NA_character_) {
+                  note = NA_character_, auto = FALSE) {
     list(id = id, label = label, group = group, type = "number",
          default = as.numeric(default), min = as.numeric(min), max = as.numeric(max),
          step = as.numeric(step), capability = capability, depends_on = depends_on,
-         status = status, note = note)
+         status = status, note = note, auto = isTRUE(auto))
   }
   list(
     enum("map_position_unit", "Map position unit", "data", "bp",
@@ -63,6 +72,19 @@ ng_backend_controls <- function() {
         reliable_family_variance = "Prediction-aware family variance (PMV)"),
       depends_on = "trait_value_metric=usefulness"),
     # --- marker-effect reliability gate -------------------------------------------
+    num("batch_workers", "Traits analysed at the same time", "run", NA_real_,
+        min = 1, max = 64, step = 1,
+        note = paste0("How many single-trait analyses a batch runs concurrently. Left ",
+                      "unset, the backend picks the number from the memory actually ",
+                      "available -- each concurrent trait holds its own copy of the ",
+                      "genotypes and, at tractable marker counts, its own dense ",
+                      "marker-effect covariance, so the limit is memory rather than cpu ",
+                      "cores. In a container the core count is doubly misleading: it ",
+                      "reports the host's cpus, and the memory cap is invisible to it. ",
+                      "Raising this beyond what memory allows does not make a batch ",
+                      "faster; it risks losing a multi-hour run to an out-of-memory kill. ",
+                      "The number chosen, and why, is recorded in the batch manifest."),
+        auto = TRUE),
     num("min_cv_predictive_r2", "Minimum marker prediction quality (out-of-fold R2)",
         "scoring", 0.35, min = 0, max = 1, step = 0.05,
         capability = "dh_ril_pmv_scoring",

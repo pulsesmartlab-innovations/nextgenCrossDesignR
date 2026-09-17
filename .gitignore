@@ -49,3 +49,6 @@ R/07_optimizers.R
 R/08_select_optimal_parents.R
 R/09_pmv_cpp.R
 R/10_marker_effects.R
+
+# testthat writes failure reproduction scripts here on a red run
+tests/testthat/_problems/

@@ -232,3 +232,156 @@ ng_trait_rng_seed <- function(base_seed, trait, salt = 0L) {
   h <- ng_name_hash32(trait)
   as.integer((base %% modulus + salt %% modulus + h) %% modulus)
 }
+
+# ---------------------------------------------------------------------------------------
+# Sizing a batch by MEMORY rather than by cores.
+#
+# A batch of single-trait analyses is bounded by RAM, not CPU. Each concurrent job holds
+# its own genotype copy and, when the marker count is small enough for the dense beta
+# covariance, its own Sigma_beta -- ~288 MB at 6000 markers, per worker. Sizing a fan-out
+# from detectCores() ignores that, and in a container it is wrong twice over:
+# detectCores() reports the HOST's cpus, and the cgroup memory cap is invisible to base R.
+# The failure mode is an OOM kill deep into a multi-hour run, losing everything unwritten.
+# ---------------------------------------------------------------------------------------
+
+# Bytes of memory this process can actually expect to use, with an attribute naming how it
+# was determined so a surprising worker count can be explained afterwards. Ordered most- to
+# least-authoritative: a cgroup cap binds regardless of what the host reports.
+ng_available_memory_bytes <- function() {
+  out <- function(bytes, source) {
+    bytes <- suppressWarnings(as.numeric(bytes))
+    if (!length(bytes) || !is.finite(bytes) || bytes <= 0) return(NULL)
+    structure(bytes, source = source)
+  }
+  read1 <- function(path) {
+    if (!file.exists(path)) return(NULL)
+    tryCatch(trimws(readLines(path, n = 1L, warn = FALSE)), error = function(e) NULL)
+  }
+  shell1 <- function(cmd, args) {
+    tryCatch(suppressWarnings(system2(cmd, args, stdout = TRUE, stderr = FALSE)),
+             error = function(e) NULL)
+  }
+
+  # cgroup v2 -- the container case. "max" means uncapped, so fall through rather than
+  # treating the literal string as a number.
+  v2 <- read1("/sys/fs/cgroup/memory.max")
+  if (!is.null(v2) && !identical(v2, "max")) {
+    used <- suppressWarnings(as.numeric(read1("/sys/fs/cgroup/memory.current") %||% NA))
+    cap <- suppressWarnings(as.numeric(v2))
+    free <- if (is.finite(used)) cap - used else cap
+    r <- out(free, "cgroup v2 (memory.max)")
+    if (!is.null(r)) return(r)
+  }
+  # cgroup v1 -- "unlimited" is encoded as a near-INT64_MAX sentinel, not as a word.
+  v1 <- read1("/sys/fs/cgroup/memory/memory.limit_in_bytes")
+  if (!is.null(v1)) {
+    cap <- suppressWarnings(as.numeric(v1))
+    if (is.finite(cap) && cap < 2^62) {
+      used <- suppressWarnings(as.numeric(
+        read1("/sys/fs/cgroup/memory/memory.usage_in_bytes") %||% NA))
+      free <- if (is.finite(used)) cap - used else cap
+      r <- out(free, "cgroup v1 (memory.limit_in_bytes)")
+      if (!is.null(r)) return(r)
+    }
+  }
+  # Linux host: MemAvailable is the kernel's own estimate of what a new workload can get.
+  if (file.exists("/proc/meminfo")) {
+    mi <- tryCatch(readLines("/proc/meminfo", warn = FALSE), error = function(e) character(0))
+    line <- grep("^MemAvailable:", mi, value = TRUE)
+    if (length(line)) {
+      kb <- suppressWarnings(as.numeric(sub("^MemAvailable:\\s*([0-9]+).*$", "\\1", line[[1L]])))
+      r <- out(kb * 1024, "/proc/meminfo MemAvailable")
+      if (!is.null(r)) return(r)
+    }
+  }
+  # macOS: free + inactive + speculative pages. Inactive pages are reclaimable, so counting
+  # only "free" understates what is available by a large margin on a warm machine.
+  if (identical(Sys.info()[["sysname"]], "Darwin")) {
+    vm <- shell1("vm_stat", character(0))
+    if (length(vm)) {
+      psize <- suppressWarnings(as.numeric(sub(".*page size of ([0-9]+) bytes.*", "\\1", vm[[1L]])))
+      if (!is.finite(psize)) psize <- 4096
+      pages <- function(label) {
+        ln <- grep(label, vm, value = TRUE, fixed = TRUE)
+        if (!length(ln)) return(0)
+        suppressWarnings(as.numeric(gsub("[^0-9]", "", ln[[1L]])))
+      }
+      free <- sum(vapply(c("Pages free:", "Pages inactive:", "Pages speculative:"),
+                         function(l) { p <- pages(l); if (is.finite(p)) p else 0 }, numeric(1)))
+      r <- out(free * psize, "vm_stat (free + inactive + speculative)")
+      if (!is.null(r)) return(r)
+    }
+    r <- out(suppressWarnings(as.numeric(shell1("sysctl", c("-n", "hw.memsize"))[[1L]])) / 2,
+             "sysctl hw.memsize / 2")
+    if (!is.null(r)) return(r)
+  }
+  if (identical(.Platform$OS.type, "windows")) {
+    ps <- shell1("powershell", c("-NoProfile", "-Command",
+      "(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory"))
+    if (length(ps)) {
+      kb <- suppressWarnings(as.numeric(gsub("[^0-9]", "", ps[[length(ps)]])))
+      r <- out(kb * 1024, "Win32_OperatingSystem FreePhysicalMemory")
+      if (!is.null(r)) return(r)
+    }
+  }
+  # Nothing could be measured. Claim little rather than much: under-reporting costs speed,
+  # over-reporting costs the whole run.
+  structure(2 * 1024^3, source = "fallback (could not measure; assuming 2 GB)")
+}
+
+# Peak resident bytes one single-trait job should be expected to need. Deliberately a
+# coarse upper-ish estimate built from the terms that actually dominate -- an estimate that
+# is precise about small terms and wrong about Sigma_beta would be worse than useless.
+ng_batch_job_bytes <- function(n_parents, n_markers, dense_beta_cov = TRUE) {
+  n <- as.numeric(n_parents); m <- as.numeric(n_markers)
+  dbl <- 8
+  geno <- n * m * dbl
+  # The ridge fit rbinds the training augmentation onto the parents, so a second copy of the
+  # genotype matrix is live at the same time as the first.
+  fit_copy <- geno
+  # Sigma_beta is m x m and is the single largest allocation whenever it is built at all.
+  sigma <- if (isTRUE(dense_beta_cov)) m * m * dbl else 0
+  # The scored cross table: every unordered pair, with of the order of a dozen numeric
+  # columns per trait.
+  pairs <- (n * (n - 1) / 2) * 12 * dbl
+  # A daemon with R and this package loaded, before any data.
+  base_process <- 150 * 1024^2
+  geno + fit_copy + sigma + pairs + base_process
+}
+
+# How many jobs to run at once. Memory is a second ceiling on top of cores, never a
+# replacement for it, and the answer is never zero: running slowly beats refusing to start.
+ng_batch_worker_count <- function(n_jobs, per_job_bytes, memory_budget_bytes = NULL,
+                                  cores = NULL) {
+  n_jobs <- max(1L, as.integer(n_jobs))
+  if (is.null(cores)) {
+    cores <- suppressWarnings(parallel::detectCores(logical = FALSE))
+    if (!is.finite(cores) || cores < 1) cores <- 1L
+    cores <- max(1L, as.integer(cores) - 1L)
+  }
+  cores <- max(1L, as.integer(cores))
+  if (is.null(memory_budget_bytes)) memory_budget_bytes <- ng_available_memory_bytes()
+  by_mem <- suppressWarnings(
+    as.integer(floor(as.numeric(memory_budget_bytes) / max(1, as.numeric(per_job_bytes)))))
+  if (!length(by_mem) || is.na(by_mem)) by_mem <- cores
+  n <- max(1L, min(cores, by_mem, n_jobs))
+  basis <- if (n == 1L && by_mem < 1L) {
+    "memory: the budget does not fit even one job, so jobs run one at a time"
+  } else if (identical(n, by_mem) && by_mem <= min(cores, n_jobs)) {
+    sprintf("memory: %s budget / %s per job", ng_bytes_label(memory_budget_bytes),
+            ng_bytes_label(per_job_bytes))
+  } else if (identical(n, n_jobs)) {
+    "jobs: fewer jobs than the machine could run at once"
+  } else {
+    sprintf("cores: %d usable", cores)
+  }
+  structure(n, basis = basis)
+}
+
+ng_bytes_label <- function(x) {
+  x <- as.numeric(x)
+  if (!is.finite(x)) return("unknown")
+  u <- c("B", "KB", "MB", "GB", "TB"); i <- 1L
+  while (x >= 1024 && i < length(u)) { x <- x / 1024; i <- i + 1L }
+  sprintf("%.1f %s", x, u[[i]])
+}

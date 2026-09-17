@@ -1,3 +1,75 @@
+# nextgenCrossDesign 0.36.0
+
+## Many single-trait analyses, as one batch
+
+A breeder with 17 traits who wants 17 separate crossing plans -- not one multi-trait index
+-- had no way to ask for that. It was done by hand: set the trait, launch, wait, repeat 17
+times. Every one of those runs rebuilt the same quality control, the same cleaned
+genotypes, the same duplicate scan, the same LD pruning and the same genomic relationship
+matrix, none of which depend on which trait is being scored. The source already recorded
+the scale of it: two comments cite "40.6 hours on a real 17-trait run".
+
+`ng_run_cross_prediction_batch()` runs them together. The trait-independent work happens
+once; from the per-trait ridge fit onward each job is independent and they run
+concurrently. Each job writes the same `result.json` and workbook a single run writes, in
+its own directory, and the batch returns a manifest of what ran.
+
+A job's numbers are identical to running that trait alone. That is not a new guarantee --
+it follows from two properties built in earlier for other reasons: the candidate parent set
+is fixed at quality control, so a trait's missing phenotypes move only its training set;
+and the ridge-lambda fold partition is keyed on the run seed rather than on a trait's row
+position. `tests/batch_matches_individual_runs.R` asserts it against the delivered
+`result.json` rather than trusting it.
+
+Jobs may vary per-trait settings such as `n_crosses` or `min_cv_predictive_r2`. They may
+NOT vary what the batch has already spent -- inputs, genotype quality control, LD pruning,
+the training set, `grm_method` -- and such a job is refused by name before any work starts,
+because silently ignoring the override would return numbers that contradict the request and
+silently honouring it would mean nothing was shared. A job needing different quality
+control belongs in its own batch.
+
+One trait failing does not cost the other sixteen: its error is recorded and only that
+trait need be re-run.
+
+### Concurrency is sized by memory, not by cores
+
+Each concurrent job holds its own genotype copy and, at tractable marker counts, its own
+dense marker-effect covariance -- about 288 MB per worker at 6000 markers. Sizing a fan-out
+from `detectCores()` ignores that, and in a container it is wrong twice over: the core
+count reports the host's cpus and the memory cap is invisible to base R. The failure mode
+is an out-of-memory kill deep into a multi-hour run. The batch reads the real budget
+(cgroup cap, then the platform's available memory) and divides, recording the number it
+chose and why in the manifest.
+
+### A reproducibility defect found while building this
+
+mirai sets its daemons to L'Ecuyer-CMRG so concurrent workers draw independent streams.
+`set.seed(s)` does not mean the same thing under two generators, so the ridge-lambda
+cross-validation fold partition came out different inside a worker than in the parent: on
+the test fixture the batch selected lambda = 8.86 where the identical data run serially
+selected 1.62, and every marker-derived quantity moved with it. Nothing errored; the plan
+was simply a different plan.
+
+Daemons now pin the parent's RNG kind. This is safe precisely because the package never
+relies on ambient randomness -- every stochastic step is seeded explicitly from a derived
+seed -- so it needs no stream independence, only that `set.seed(s)` mean one thing.
+`tests/batch_is_order_and_worker_independent.R` is the regression guard.
+
+## The relationship matrix is built once per run, not once per trait
+
+`ng_parent_kinship()` is O(n^2 * m) and depends only on the genotypes and the GRM method,
+yet a run rebuilt it inside `ng_score_crosses()` for every trait and again when allocating
+-- 18 builds of one identical matrix on a 17-trait panel. `ng_score_crosses()` already
+carried `pairs` and `parent_kinship` formals for exactly this reuse; the runner never
+passed them. Ordinary multi-trait runs benefit from this too, and no number changes: the
+matrices were bit-identical by construction.
+
+## Dependency
+
+`mirai` is now an Import. It is uniform across Windows, macOS and Linux with no
+fork-vs-PSOCK split, returns per-job errors so only failures need re-running, and carries
+one dependency of its own.
+
 # nextgenCrossDesign 0.35.0
 
 ## `ng_preview_marker_effects()` is exported

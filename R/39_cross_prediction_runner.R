@@ -1103,7 +1103,20 @@ ng_cp__fit_trait_effects <- function(trait_spec, pheno, geno, ids, training_set,
   do.call(rbind, rows[!vapply(rows, is.null, logical(1))])
 }
 
-ng_cp__stage_predict <- function(ctx) {
+# Everything in the predict stage that does not depend on WHICH trait is being scored:
+# LD pruning, the training-set alignment, the pair table and the GRM. It is extracted so a
+# batch of single-trait analyses can compute it ONCE and hand the identical structures to
+# every job, rather than each job rebuilding what is the same across all of them.
+#
+# A cached copy in ctx$predict_prologue is returned verbatim. That is what makes a batch
+# defensible as well as fast: every job in it is guaranteed the same retained markers, the
+# same training set, the same pairs and the same kinship -- not merely structures that
+# ought to agree because they were built from the same inputs.
+#
+# Pure: it reads ctx and returns values, writing nothing back.
+ng_cp__predict_prologue <- function(ctx) {
+  cached <- ctx$predict_prologue
+  if (!is.null(cached)) return(cached)
   list2env(ctx, environment())
   # Optional LD pruning of the marker matrix (same capability as ng_design_crosses): drop
   # redundant/low-MAF markers before scoring. Per-trait effects are fit from `geno` inside
@@ -1143,6 +1156,39 @@ ng_cp__stage_predict <- function(ctx) {
   training_only_count <- if (is.null(training_set)) 0L else length(training_set$ids)
   training_ids <- if (is.null(training_set)) character(0L) else training_set$ids
 
+  # Build the trait-INDEPENDENT structures once, here, where `geno` has reached its final
+  # form -- LD pruning above is the last thing that changes it.
+  #
+  # ng_score_crosses() carries `pairs` and `parent_kinship` formals for exactly this reason
+  # (see the comment at R/03_metrics.R:209-210), and the runner passed neither, so every
+  # trait rebuilt both and the allocate stage built the GRM a third time. ng_parent_kinship()
+  # is O(n^2 * m) and depends only on `geno` and `grm_method`; nothing about a trait enters
+  # it, so the per-trait copies were bit-identical waste. On a 17-trait panel that was 18
+  # builds of one matrix.
+  #
+  # include_self = FALSE matches ng_score_crosses()'s own default, which the runner has never
+  # overridden -- the pairs handed in must be the pairs it would have built.
+  shared_parent_pairs <- ng_make_pairs(ids, include_self = FALSE)
+  shared_parent_kinship <- ng_parent_kinship(geno, method = grm_method)
+
+  list(
+    geno = geno,
+    marker_map_std = marker_map_std,
+    ids = ids,
+    ld_pruning_report = ld_pruning_report,
+    training_set = training_set,
+    training_only_count = training_only_count,
+    training_ids = training_ids,
+    shared_parent_pairs = shared_parent_pairs,
+    shared_parent_kinship = shared_parent_kinship
+  )
+}
+
+ng_cp__stage_predict <- function(ctx) {
+  list2env(ctx, environment())
+  # Trait-independent setup, computed here for an ordinary run and reused verbatim when a
+  # batch has already built it (ctx$predict_prologue).
+  list2env(ng_cp__predict_prologue(ctx), environment())
   effects_list <- list()
   trait_scores <- list()
   posterior_effects_list <- list()
@@ -1208,6 +1254,8 @@ ng_cp__stage_predict <- function(ctx) {
       effects = fit,
       marker_map = marker_map_std,
       ids = ids,
+      pairs = shared_parent_pairs,
+      parent_kinship = shared_parent_kinship,
       adjusted_pheno = y,
       target = target,
       selection_prop = selection_prop,
@@ -1685,6 +1733,7 @@ ng_cp__stage_predict <- function(ctx) {
     ctc = ctc,
     parallel_backend = parallel_backend,
     parallel_cores_used = parallel_cores_used,
+    shared_parent_kinship = shared_parent_kinship,
     effect_summary = effect_summary
   )
   ctx
@@ -1948,7 +1997,15 @@ ng_cp__stage_index <- function(ctx) {
 
 ng_cp__stage_allocate <- function(ctx) {
   list2env(ctx, environment())
-  parent_kinship <- if (isTRUE(use_ocs) || !identical(allocation_method, "ocs")) ng_parent_kinship(geno, method = grm_method) else NULL
+  # Reuse the GRM the predict stage already built: same `geno` (predict writes the pruned
+  # matrix back to ctx) and same `grm_method`, so the matrix is identical by construction.
+  # Rebuild only when allocate is driven without predict -- ng_run_stage() permits a caller
+  # to enter at a later stage, and a missing shared matrix must degrade to correct-but-slower
+  # rather than to an error.
+  shared_kinship <- get0("shared_parent_kinship", envir = environment(), inherits = FALSE)
+  parent_kinship <- if (isTRUE(use_ocs) || !identical(allocation_method, "ocs")) {
+    if (!is.null(shared_kinship)) shared_kinship else ng_parent_kinship(geno, method = grm_method)
+  } else NULL
   if (identical(allocation_method, "ocs")) {
     # The mate-selection module knobs (strategy / diversity_emphasis, progeny inbreeding,
     # breeder constraints, cost/logistics) are forwarded through ng_optimize_breeder_
@@ -2353,6 +2410,9 @@ utils::globalVariables(c(
   "alphamate_number_of_parents", "alphamate_runtime_path", "alphamate_target_degree", "alphamate_workdir",
   "assume_inbred", "parent_type", "phased_haplotypes", "bp_per_cm", "budget", "burn_in",
   "check_geno", "check_pheno", "check_progeny_size", "check_records",
+  # Supplied by ng_cp__predict_prologue() via list2env() rather than by ctx, but invisible
+  # to codetools for the same reason.
+  "ld_pruning_report", "training_set", "shared_parent_pairs", "shared_parent_kinship",
   "ci_level", "robustness_quantile",
   "committed_crosses", "constraint_diagnostics", "cost_col",
   "cross_cost", "cross_table", "ctc", "direction_column_col", "direction_columns",
