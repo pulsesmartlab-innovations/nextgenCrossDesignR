@@ -97,3 +97,71 @@ ng_job_heartbeat <- function(job_dir) {
   }
   invisible(path)
 }
+
+# Read a job's state, deriving what cannot be written.
+#
+# Two derivations live here and nowhere else:
+#
+#   crashed    -- the record says "running" but the heartbeat has gone quiet. Nothing writes
+#                 this, because the writer would have to be the process that died.
+#   incomplete -- a trait claiming "running" under a job that is not running. A worker that
+#                 dies cannot write its own epitaph, and if the parent died too, nobody
+#                 reconciles it.
+#
+# Keeping both in one function is the point. A frontend that recomputed them would eventually
+# disagree with the backend about whether a job is alive, and the disagreement would surface
+# as a breeder acting on a plan that was never finished.
+ng_job_status <- function(job_dir, stale_after_sec = 120) {
+  path <- file.path(job_dir, "job.json")
+  if (!file.exists(path)) {
+    ng_stop("no job record at ", job_dir,
+            " -- a directory without job.json is not a job; if a process was launched for ",
+            "it and never wrote one, it failed during startup and its log will say why.")
+  }
+  rec <- as.list(jsonlite::fromJSON(path, simplifyVector = TRUE))
+  state <- rec$state %||% "queued"
+
+  if (identical(state, "running")) {
+    hb <- file.path(job_dir, "heartbeat")
+    age <- if (file.exists(hb)) {
+      as.numeric(difftime(Sys.time(), file.mtime(hb), units = "secs"))
+    } else Inf
+    if (is.finite(stale_after_sec) && age > stale_after_sec) state <- "crashed"
+  }
+
+  dirs <- list.dirs(job_dir, recursive = FALSE, full.names = TRUE)
+  files <- file.path(dirs, "status.json")
+  files <- files[file.exists(files)]
+  live <- identical(state, "running")
+  traits <- if (!length(files)) {
+    data.frame(trait = character(0), state = character(0), cv_predictive_r2 = numeric(0),
+               mean_source = character(0), effect_gate = character(0),
+               n_selected = integer(0), error_message = character(0),
+               stringsAsFactors = FALSE)
+  } else {
+    do.call(rbind, lapply(files, function(f) {
+      st <- tryCatch(as.list(jsonlite::fromJSON(f, simplifyVector = TRUE)),
+                     error = function(e) list())
+      ts <- st$state %||% NA_character_
+      # The rule: a trait's state is only meaningful relative to its job's.
+      if (identical(ts, "running") && !live) ts <- "incomplete"
+      chr <- function(x) if (is.null(x) || !length(x)) NA_character_ else as.character(x)[[1L]]
+      num <- function(x) if (is.null(x) || !length(x)) NA_real_ else as.numeric(x)[[1L]]
+      data.frame(trait = chr(st$trait), state = ts, cv_predictive_r2 = num(st$cv_predictive_r2),
+                 mean_source = chr(st$mean_source), effect_gate = chr(st$effect_gate),
+                 n_selected = as.integer(num(st$n_selected)),
+                 error_message = chr(st$error_message), stringsAsFactors = FALSE)
+    }))
+  }
+  traits <- traits[order(traits$trait), , drop = FALSE]
+  rownames(traits) <- NULL
+
+  count <- function(w) sum(traits$state == w, na.rm = TRUE)
+  list(schema = "ng_job_status.v1", id = rec$id %||% basename(job_dir),
+       label = rec$label %||% basename(job_dir), created_at = rec$created_at,
+       state = state, pid = rec$pid,
+       n_traits = if (is.null(rec$n_traits)) nrow(traits) else as.integer(rec$n_traits),
+       n_done = count("done"), n_error = count("error"),
+       n_running = count("running"), n_incomplete = count("incomplete"),
+       traits = traits, path = job_dir)
+}
