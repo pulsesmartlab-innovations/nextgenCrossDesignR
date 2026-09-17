@@ -45,7 +45,48 @@ ng_job_trait_status_write <- function(job_dir, trait_id, state, fields = list())
 # A job may be written as any of these. `crashed` is absent on purpose -- see ng_job_status().
 ng_job_states <- c("queued", "running", "finished", "failed")
 
-ng_job__now <- function() format(as.POSIXct(Sys.time(), tz = "UTC"), "%Y-%m-%dT%H:%M:%SZ")
+# How long a job may go quiet before a reader calls it crashed. SIX HOURS, and the size is
+# the point.
+#
+# The heartbeat can only be beaten by a process that is not busy, and R is single-threaded,
+# so there are two windows in which a perfectly healthy job cannot beat it:
+#
+#   * the shared prologue. The parent beats once, then runs quality control, the duplicate
+#     scan, LD pruning and the GRM before it dispatches anything. On a real marker panel
+#     that is the most expensive phase of the whole batch.
+#   * one trait, on the serial dispatch path, which beats between traits and then blocks
+#     inside ng_cp__batch_run_one() for as long as that trait takes.
+#
+# At the old 120 seconds every real job reported "crashed" for its first hours and then
+# flipped back to "running" -- the headline derived state was wrong on the common path.
+#
+# Six hours is chosen against what this package actually costs: the per-cross recombination
+# kernel is O(m^2) per pair, traits take hours, and a batch a breeder submits before going
+# home is the case this whole design exists for. It is not a guess at when a process dies --
+# nothing portable can know that (see the pid-vs-heartbeat decision in the design) -- it is
+# the point past which silence is more likely to mean death than work. Being generous costs
+# only that a dead job looks alive for a while; ng_job_prune() protects "crashed" anyway, so
+# nothing is deleted either way. Being stingy costs a breeder a false alarm on every run.
+#
+# `phase` in job.json is the other half of the answer: it distinguishes "still doing shared
+# setup" from "dead" without any timing assumption at all.
+ng_job_stale_after_default <- 6 * 60 * 60
+
+# MILLISECOND resolution, not whole seconds.
+#
+# Whole seconds perturbed three separate pieces of this work during development: a mutation
+# check false-passed because a re-stamped created_at landed in the same second as the
+# original, a listing tied on created_at and fell back to an arbitrary order, and a mutant
+# failed via an assertion that was not the one aimed at it. Two jobs submitted by a frontend
+# in the same second are entirely ordinary, and "submitted at the same instant" is a claim
+# the format should not be making on their behalf.
+#
+# digits.secs is set locally rather than globally: format() reads it at call time, and
+# changing a user's option from inside a library function is not this function's business.
+ng_job__now <- function() {
+  op <- options(digits.secs = 3L); on.exit(options(op), add = TRUE)
+  format(as.POSIXct(Sys.time(), tz = "UTC"), "%Y-%m-%dT%H:%M:%OS3Z")
+}
 
 # Create the job record. Written BEFORE the work starts, so a job that dies during startup
 # is still a job someone can find and read an error out of, rather than an empty directory.
@@ -111,7 +152,7 @@ ng_job_heartbeat <- function(job_dir) {
 # Keeping both in one function is the point. A frontend that recomputed them would eventually
 # disagree with the backend about whether a job is alive, and the disagreement would surface
 # as a breeder acting on a plan that was never finished.
-ng_job_status <- function(job_dir, stale_after_sec = 120) {
+ng_job_status <- function(job_dir, stale_after_sec = ng_job_stale_after_default) {
   path <- file.path(job_dir, "job.json")
   if (!file.exists(path)) {
     ng_stop("no job record at ", job_dir,
@@ -160,6 +201,11 @@ ng_job_status <- function(job_dir, stale_after_sec = 120) {
   list(schema = "ng_job_status.v1", id = rec$id %||% basename(job_dir),
        label = rec$label %||% basename(job_dir), created_at = rec$created_at,
        state = state, pid = rec$pid,
+       # What the job says it is DOING, as opposed to what a reader infers about whether it
+       # is alive. A job in "shared_setup" has not dispatched a worker yet, so it has no
+       # trait status files and cannot beat its heart -- silence there means work, not death,
+       # and a reader that knows the phase never has to guess.
+       phase = rec$phase %||% NA_character_,
        n_traits = if (is.null(rec$n_traits)) nrow(traits) else as.integer(rec$n_traits),
        n_done = count("done"), n_error = count("error"),
        n_running = count("running"), n_incomplete = count("incomplete"),
@@ -178,7 +224,7 @@ ng_job_status <- function(job_dir, stale_after_sec = 120) {
 #     which reflects the last state transition, not creation), and slice to limit. This avoids
 #     expensive ng_job_status() calls on jobs that will be discarded.
 #   - Pass 2: call ng_job_status() only on survivors to build the full row.
-ng_job_list <- function(jobs_dir, stale_after_sec = 120, limit = 100L) {
+ng_job_list <- function(jobs_dir, stale_after_sec = ng_job_stale_after_default, limit = 100L) {
   empty <- data.frame(id = character(0), label = character(0), created_at = character(0),
                       state = character(0), n_traits = integer(0), n_done = integer(0),
                       n_error = integer(0), path = character(0), stringsAsFactors = FALSE)
@@ -319,7 +365,8 @@ ng_shared_artifact_reference <- function(shared_dir, key, job_id) {
 # This is also why jobs_dir and shared_dir are siblings of the frontend's runs_dir rather
 # than living inside it: ngcd_prune_runs() there enumerates list.dirs(runs_dir) and unlinks
 # everything past keep_runs, and would happily take the whole job store with it.
-ng_job_prune <- function(jobs_dir, shared_dir = NULL, keep = 20L, stale_after_sec = 120) {
+ng_job_prune <- function(jobs_dir, shared_dir = NULL, keep = 20L,
+                         stale_after_sec = ng_job_stale_after_default) {
   removed <- character(0)
   keep <- suppressWarnings(as.integer(keep))
   if (is.na(keep) || keep < 0L || !dir.exists(jobs_dir)) return(invisible(removed))

@@ -271,7 +271,11 @@ ng_run_cross_prediction_batch <- function(config,
   # a direct caller pays nothing for machinery it is not using.
   if (!is.null(job_dir)) {
     if (!file.exists(file.path(job_dir, "job.json"))) ng_job_create(job_dir, config = NULL)
-    ng_job_mark(job_dir, "running", list(pid = Sys.getpid()))
+    # `phase` is what a reader needs to tell "still doing shared setup" from "dead". R is
+    # single-threaded, so nothing can beat the heartbeat while quality control, the duplicate
+    # scan, LD pruning and the GRM run -- the most expensive phase on a real panel -- and a
+    # reader with only a heartbeat mtime has to guess. See ng_job_stale_after_default.
+    ng_job_mark(job_dir, "running", list(pid = Sys.getpid(), phase = "shared_setup"))
     ng_job_heartbeat(job_dir)
   }
 
@@ -351,15 +355,34 @@ ng_run_cross_prediction_batch <- function(config,
   # the content is a function of the key -- and a schema-rejected artefact is rebuilt here,
   # which is the one case where the existing file must be replaced.
   if (is.null(artifact)) ng_shared_artifact_write(ctx, shared_path)
-  # Record the reference unconditionally: retention has to know who is using an artefact
-  # whether this batch was invoked directly or wrapped as a durable job -- gating it on
-  # job_dir would leave a directly-invoked batch's artefact looking unreferenced and
-  # therefore safe to delete. When this batch IS a job, also drop the pointer beside it so a
-  # killed-and-resumed job can find the artefact it already claimed without recomputing the
-  # key.
+  # Record the reference unconditionally, and be exact about what that buys.
+  #
+  # ng_job_prune() reads meta.json$referenced_by and honours any entry naming a job directory
+  # that still exists, so for a batch running AS A JOB this is a genuine second source of
+  # protection, independent of the job's own shared_ref file (which prune deliberately treats
+  # as referencing nothing when it cannot be read). For a batch invoked DIRECTLY there is no
+  # job directory, so what gets recorded here is basename(output_root) and prune cannot
+  # honour it -- that caller is outside the job store, gets its own private shared_dir by
+  # default, and is not something retention over jobs_dir can reason about. The entry is
+  # still written because it is the only provenance record of who built the artefact.
+  #
+  # When this batch IS a job, also drop the pointer beside it so a killed-and-resumed job can
+  # find the artefact it already claimed without recomputing the key.
   ref_id <- if (!is.null(job_dir)) basename(job_dir) else basename(output_root)
   if (!is.null(job_dir)) writeLines(key, file.path(job_dir, "shared_ref"))
   ng_shared_artifact_reference(shared_dir, key, ref_id)
+
+  # The job now knows how many traits it is for. Without this, ng_job_status() falls back to
+  # counting the status files that exist, so the DENOMINATOR grows as workers start and
+  # "k of n done" is underivable -- the one number the overview exists to show. The parent is
+  # the only place that knows length(jobs) before any worker has written anything.
+  #
+  # Marked together with the phase change, so the transition out of shared setup and the
+  # trait count reach job.json in one atomic write.
+  if (!is.null(job_dir)) {
+    ng_job_mark(job_dir, "running",
+                list(n_traits = length(jobs), phase = "scoring"))
+  }
 
   pro <- ctx$predict_prologue
   per_job <- ng_batch_job_bytes(
@@ -452,9 +475,12 @@ ng_run_cross_prediction_batch <- function(config,
     # "finished" means the BATCH completed, not that every trait succeeded -- a failed trait
     # is recorded per trait, and marking the whole job failed would hide sixteen good plans
     # behind one bad one.
+    # phase is left meaningful at rest too: "complete" rather than a stale "scoring", so a
+    # reader never has to cross-check it against state to know it is out of date. A FAILED
+    # job keeps whichever phase it died in -- that is the diagnostic.
     ng_job_mark(job_dir, "finished", list(n_ok = sum(!vapply(
       results, function(r) identical(r$status, "error"), logical(1))),
-      any_failed = any_failed))
+      any_failed = any_failed, phase = "complete"))
   }
 
   # `results` is unnamed by construction (see ng_cp__batch_dispatch() and the carried-forward

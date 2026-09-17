@@ -315,8 +315,15 @@ running, without opening the results themselves. \code{ng_job_status()} derives
 the two states nothing can write: \code{crashed}, when the record says running
 but the heartbeat has gone quiet, and \code{incomplete}, for a trait still
 claiming to run under a job that is not -- a worker that dies cannot write its
-own epitaph. \code{ng_job_prune()} never removes a running job, nor a shared
-artefact any surviving job still references.
+own epitaph. Staleness is judged against a six-hour default, because R is
+single-threaded and a healthy job cannot beat its heartbeat while the shared
+quality control, LD pruning and GRM run, nor while a serial worker is inside one
+trait; \code{job.json} also records a \code{phase} so a reader can tell
+"still doing shared setup" from "dead" without any timing assumption.
+\code{ng_job_prune()} never removes a running job, nor a shared artefact any
+surviving job still references -- where "references" means either a surviving
+job's \code{shared_ref} file or a \code{meta.json} entry naming a job
+directory that still exists.
 
 A caller-supplied P or G carrying dimnames is REORDERED BY NAME to the trait
 order and must name the trait set exactly; a missing, extra, misspelled or

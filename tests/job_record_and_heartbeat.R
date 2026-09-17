@@ -28,9 +28,10 @@ created_before <- rec$created_at
 stopifnot(file.exists(file.path(job_dir, "config.json")))
 
 # --- state transitions --------------------------------------------------------------------
-# created_at has whole-second resolution (ng_job__now()), so without this sleep a
-# mutant that re-stamps created_at on every mark() could coincidentally match
-# created_before and the identical() check below would pass for the wrong reason.
+# ng_job__now() stamps milliseconds, so a re-stamping mutant would almost always differ
+# even without a pause. The sleep stays anyway: "almost always" is not an assertion, and a
+# coarse filesystem clock or a virtualised timer can still collapse two calls made
+# microseconds apart. Cheap insurance for a check whose whole value is being exact.
 Sys.sleep(1.1)
 ng_job_mark(job_dir, "running", list(pid = Sys.getpid()))
 rec <- jsonlite::fromJSON(p, simplifyVector = TRUE)

@@ -40,7 +40,7 @@ mk <- function(id, state, key, write_ref = TRUE) {
 # that is still computing. Made the OLDEST job here so it is also the first candidate a
 # naive age-based prune would reach.
 stale <- mk("stale", "running", "KEYCRASHED")
-Sys.setFileTime(file.path(stale, "heartbeat"), Sys.time() - 200)   # > default stale_after_sec
+Sys.setFileTime(file.path(stale, "heartbeat"), Sys.time() - 200)
 
 old1 <- mk("old1", "finished", "KEYOLD")
 old2 <- mk("old2", "finished", "KEYSHARED")
@@ -53,7 +53,12 @@ new1 <- mk("new1", "finished", "KEYSHARED")   # shares KEYSHARED with old2
 # that second source, unlink(recursive = TRUE) would take a live job's shared work.
 noref <- mk("noref", "running", "KEYNOREF", write_ref = FALSE)
 
-removed <- ng_job_prune(jobs_dir, shared_dir = shared_dir, keep = 1L)
+# stale_after_sec is passed EXPLICITLY, and small. The package default is six hours (a real
+# job cannot beat its heartbeat during the shared prologue, nor during one trait on the
+# serial path -- see ng_job_stale_after_default), so relying on the default here would test
+# the "running" protection twice and the "crashed" protection not at all.
+removed <- ng_job_prune(jobs_dir, shared_dir = shared_dir, keep = 1L, stale_after_sec = 120)
+stopifnot(identical(ng_job_status(stale, stale_after_sec = 120)$state, "crashed"))
 
 # --- a crashed job -- heartbeat stale, record still "running" -- is never removed -------------
 # It is the oldest job of all, and the one a naive prune would reach first.
@@ -88,14 +93,15 @@ stopifnot(is.list(meta1$referenced_by), is.null(names(meta1$referenced_by)),
           length(meta1$referenced_by) == 1L)
 
 # --- nothing to do is not an error ----------------------------------------------------------------
-stopifnot(identical(length(ng_job_prune(jobs_dir, shared_dir = shared_dir, keep = 100L)), 0L))
+stopifnot(identical(length(ng_job_prune(jobs_dir, shared_dir = shared_dir, keep = 100L,
+                                        stale_after_sec = 120)), 0L))
 
 # --- and an artefact whose referents are ALL gone is still collectable -----------------------
 # meta.json only ever grows, so treating its list as proof of life would make every artefact
 # immortal. Directory existence is the liveness signal: remove the job, prune again, and the
 # artefact goes.
 unlink(noref, recursive = TRUE, force = TRUE)
-invisible(ng_job_prune(jobs_dir, shared_dir = shared_dir, keep = 0L))
+invisible(ng_job_prune(jobs_dir, shared_dir = shared_dir, keep = 0L, stale_after_sec = 120))
 stopifnot(!dir.exists(file.path(shared_dir, "KEYNOREF")))
 
 cat("PASS: job_prune_protects_running_and_referenced\n")
