@@ -22,9 +22,18 @@ for (ctl in registry$controls) {
     for (cho in ctl$choices) stopifnot(all(c("value", "label") %in% names(cho)))
   } else if (identical(ctl$type, "number")) {
     stopifnot(all(c("min", "max", "step") %in% names(ctl)))
-    stopifnot(is.numeric(ctl$default), length(ctl$default) == 1L, is.finite(ctl$default))
     stopifnot(is.finite(ctl$min), is.finite(ctl$max), ctl$min < ctl$max)
-    stopifnot(ctl$default >= ctl$min, ctl$default <= ctl$max)
+    if (isTRUE(ctl$auto)) {
+      # `auto` declares a control the BACKEND sizes when it is left blank -- batch_workers
+      # is derived from the memory actually available, and no fixed number is right on both
+      # a laptop and a memory-capped container. Such a control legitimately has no default,
+      # but it owes an explanation, or a frontend renders an empty box with nothing to say
+      # about it. Mirrored in tests/testthat/test-contract.R, which asserts the same pair.
+      stopifnot(is.character(ctl$note), nzchar(ctl$note))
+    } else {
+      stopifnot(is.numeric(ctl$default), length(ctl$default) == 1L, is.finite(ctl$default))
+      stopifnot(ctl$default >= ctl$min, ctl$default <= ctl$max)
+    }
   } else {
     stop("unknown control type in the registry: ", ctl$type, call. = FALSE)
   }

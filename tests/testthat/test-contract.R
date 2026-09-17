@@ -30,10 +30,18 @@ test_that("the controls section enumerates dropdowns with valid defaults", {
       expect_true(length(vals) >= 2L && ctl$default %in% vals)
     } else if (identical(ctl$type, "number")) {
       expect_true(all(c("min", "max", "step") %in% names(ctl)))
-      expect_true(is.numeric(ctl$default) && length(ctl$default) == 1L &&
-                    is.finite(ctl$default))
       expect_true(is.finite(ctl$min) && is.finite(ctl$max) && ctl$min < ctl$max)
-      expect_true(ctl$default >= ctl$min && ctl$default <= ctl$max)
+      if (isTRUE(ctl$auto)) {
+        # A control the backend sizes itself (batch_workers, from available memory) has no
+        # fixed default, because none would be right on both a laptop and a memory-capped
+        # container. It owes an explanation instead: a frontend rendering a blank box with
+        # nothing to say about it is worse than one that never offered the control.
+        expect_true(is.character(ctl$note) && nzchar(ctl$note))
+      } else {
+        expect_true(is.numeric(ctl$default) && length(ctl$default) == 1L &&
+                      is.finite(ctl$default))
+        expect_true(ctl$default >= ctl$min && ctl$default <= ctl$max)
+      }
     } else {
       fail(paste("unknown control type in the registry:", ctl$type))
     }

@@ -51,9 +51,17 @@ if (!is.list(cfg)) stop("Config must be a JSON object of ng_run_cross_prediction
 # Staged pipeline: the frontend can drive ONE stage at a time by adding
 # workflow="stage" + stage=<qc|predict|index|allocate|rank>. Split those two
 # control keys off before validating the rest against ng_run_cross_prediction().
+# workflow="batch" runs many INDEPENDENT single-trait analyses at once, each writing its
+# own result.json + workbook under `output_root`, and returns a manifest instead of a single
+# result. Its control keys are split off here for the same reason workflow/stage are: the
+# validation below rejects anything that is not a runner argument.
 workflow <- if (!is.null(cfg$workflow)) as.character(cfg$workflow) else "full"
 stage    <- if (!is.null(cfg$stage)) as.character(cfg$stage) else NULL
+batch_jobs <- cfg$batch_jobs
+batch_output_root <- if (!is.null(cfg$batch_output_root)) as.character(cfg$batch_output_root) else NULL
+batch_workers <- if (!is.null(cfg$batch_workers)) as.integer(cfg$batch_workers) else NULL
 cfg$workflow <- NULL; cfg$stage <- NULL
+cfg$batch_jobs <- NULL; cfg$batch_output_root <- NULL; cfg$batch_workers <- NULL
 valid_args <- names(formals(ng_run_cross_prediction))
 unknown <- setdiff(names(cfg), valid_args)
 if (length(unknown)) {
@@ -80,22 +88,10 @@ version <- tryCatch(read.dcf(file.path(root, "DESCRIPTION"), fields = "Version")
                     error = function(e) NA_character_)
 generated_at <- format(as.POSIXct(Sys.time(), tz = "UTC"), "%Y-%m-%dT%H:%M:%SZ")
 
-# Non-finite (Inf/NaN) -> null so the JSON is valid and consumable everywhere.
-sanitize <- function(x) {
-  if (is.data.frame(x)) {
-    for (j in seq_along(x)) if (is.numeric(x[[j]])) x[[j]][!is.finite(x[[j]])] <- NA
-    return(x)
-  }
-  if (is.list(x)) return(lapply(x, sanitize))
-  if (is.numeric(x)) x[!is.finite(x)] <- NA
-  x
-}
-write_result <- function(env) {
-  env <- sanitize(env)
-  dir.create(dirname(result_path), recursive = TRUE, showWarnings = FALSE)
-  jsonlite::write_json(env, result_path, auto_unbox = TRUE, na = "null", null = "null",
-                       dataframe = "rows", pretty = TRUE, digits = 8)
-}
+# The envelope, the non-finite sanitation and the writer options all live in the package
+# now (R/54_batch_runner.R). A batch writes one result.json per job, and a second copy of
+# these rules here would drift from the contract the frontend parses.
+write_result <- function(env) ng_write_result_json(env, result_path)
 
 # Run the pipeline while (1) capturing every warning it emits (e.g. the
 # residual-heterozygous-RIL advisory, the assume_inbred deprecation) so the
@@ -105,9 +101,18 @@ write_result <- function(env) {
 # frontend can DISPLAY the message rather than only see a failed process.
 run_warnings <- list()
 staged <- identical(workflow, "stage")
+batched <- identical(workflow, "batch")
 res <- tryCatch(
   withCallingHandlers(
-    if (staged) {
+    if (batched) {
+      # Default the output root beside result.json, matching how run_dir is derived for the
+      # staged workflow -- a caller that says nothing still gets its files somewhere sensible.
+      root_dir <- if (!is.null(batch_output_root)) batch_output_root else
+        file.path(dirname(result_path), "batch")
+      ng_run_cross_prediction_batch(cfg, jobs = batch_jobs, output_root = root_dir,
+                                    batch_workers = batch_workers,
+                                    generated_at = generated_at, package_version = version)
+    } else if (staged) {
       if (is.null(stage)) ng_stop("workflow = 'stage' requires a 'stage' key")
       ng_run_stage(stage, dirname(result_path), cfg)   # one gated stage; persists to run_dir/artifacts
     } else {
@@ -138,36 +143,35 @@ if (inherits(res, "ng_run_json_error")) {
   quit(status = 1L, save = "no")   # nonzero exit, but result.json carries the message
 }
 
-# --- assemble the schema-versioned result envelope (JSON-friendly subset) ----------------------
-# The full monolith/rank result contract. `warnings` (residual-het RIL advisory,
-# deprecations, ...) is carried for the frontend to display alongside the results.
+# --- assemble the schema-versioned result envelope --------------------------------------------
+# ng_run_result_envelope() is the single definition, shared with the batch runner.
 full_envelope <- function(r) {
-  audit <- r$input_match_audit
-  audit$marker_order <- NULL   # drop the (potentially huge) marker-name vector; marker_count kept
-  list(
-    schema          = "ng_run_result.v1",
-    status          = "ok",
-    ok              = TRUE,               # frontend keys success on `ok`
-    generated_at    = generated_at,
-    package_version = version,
-    prediction_mode = r$prediction_mode,
-    settings          = r$settings,
-    input_match_audit = audit,
-    qc = list(status = r$qc$status, counts = r$qc$counts,
-              tables = r$qc$tables, issues = r$qc$issues),
-    effect_summary  = r$effect_summary,
-    trait_direction = r$trait_direction,
-    objective       = if (!is.null(r$objective)) r$objective$diagnostics else NULL,
-    plan_summary    = r$plan_summary,
-    constraint_diagnostics = r$constraint_diagnostics,
-    priority_risk_diagnostics = r$priority_risk_diagnostics,
-    trait_check_reference = r$trait_check_reference,
-    candidate_crosses = r$candidate_crosses,
-    selected_crosses  = r$selected_crosses,
-    ld_pruning_report = r$ld_pruning_report,
-    warnings          = run_warnings,
-    output_files      = r$output_files
-  )
+  ng_run_result_envelope(r, warnings = run_warnings, generated_at = generated_at,
+                         package_version = version)
+}
+if (batched) {
+  # A batch has no single result -- each job wrote its own result.json where the caller can
+  # read it. What goes here is the manifest: which traits ran, how they fared, and where
+  # their files are. `ok` reflects the BATCH completing, not every job succeeding; a job that
+  # failed is recorded with its message rather than taking the others down, so a reader must
+  # look at the per-job statuses. That distinction is stated here because a caller keying
+  # only on `ok` would otherwise believe seventeen plans exist when sixteen do.
+  mf <- res$manifest
+  write_result(list(
+    schema = "ng_batch_result.v1",
+    status = "ok", ok = TRUE,
+    generated_at = generated_at, package_version = version,
+    output_root = mf$output_root,
+    n_jobs = mf$n_jobs,
+    n_ok = sum(vapply(mf$jobs, function(j) identical(j$status, "ok"), logical(1))),
+    workers = mf$workers, worker_basis = mf$worker_basis,
+    manifest_path = res$manifest_path,
+    jobs = mf$jobs,
+    warnings = run_warnings))
+  cat("Wrote batch manifest: ",
+      normalizePath(result_path, winslash = "/", mustWork = FALSE), "\n", sep = "")
+  for (j in mf$jobs) cat("  ", j$id, ": ", j$status, "\n", sep = "")
+  quit(status = 0L, save = "no")
 }
 
 if (staged) {

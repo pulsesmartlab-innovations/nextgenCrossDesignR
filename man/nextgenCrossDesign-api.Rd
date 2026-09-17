@@ -143,6 +143,7 @@
 \alias{ng_run_stage}
 \alias{ng_poly_run_stage}
 \alias{ng_preview_marker_effects}
+\alias{ng_run_cross_prediction_batch}
 \title{Public NextGen Cross Design Backend API}
 \description{
 Public backend functions for cross scoring, mate allocation, multi-trait
@@ -274,7 +275,25 @@ fit only; they are never crossing candidates and never appear in the plan.
 fits and stops before scoring, returning each trait's \code{cv_predictive_r2}
 and the verdict the gate will reach, so a run can be judged before it is
 launched. It shares the fitting path and the seed with the run it previews, so
-the two cannot disagree. Formal \code{economic_index} scoring
+the two cannot disagree.
+
+\code{ng_run_cross_prediction_batch()} runs many INDEPENDENT single-trait
+analyses at once -- one crossing plan per trait, not one multi-trait index --
+writing each job's \code{result.json} and workbook under its own directory, and
+returning a manifest of what ran. Quality control, LD pruning, the training-set
+alignment, the pair table and the genomic relationship matrix are computed once
+for the whole batch; from the per-trait ridge fit onward each job is independent.
+A job's results are identical to running that trait on its own, because the
+candidate parents are fixed at quality control and the ridge fold partition is
+keyed on the run seed rather than on a trait's position. Jobs may override
+per-trait settings such as \code{n_crosses} or \code{min_cv_predictive_r2}, but
+NOT settings the batch has already spent -- inputs, genotype quality control, LD
+pruning, the training set or \code{grm_method} -- which are refused by name; a
+job needing different quality control belongs in its own batch. One job failing
+does not stop the others: its error is recorded in the manifest and only that
+trait need be re-run. Concurrency defaults to what memory allows rather than to
+the core count, because each concurrent job holds its own genotype copy and, at
+tractable marker counts, its own dense marker-effect covariance. Formal \code{economic_index} scoring
 (Smith-Hazel, \eqn{b = P^{-1} G a}) requires both a phenotypic covariance
 matrix P and an additive-genetic covariance matrix G. Formal
 \code{desired_gain} scoring (Pesek-Baker, \eqn{b = G^{-1} d}) requires only G;
