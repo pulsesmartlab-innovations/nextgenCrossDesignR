@@ -233,7 +233,8 @@ ng_run_cross_prediction_batch <- function(config,
                                           job_dir = NULL,
                                           shared_dir = NULL,
                                           generated_at = NULL,
-                                          package_version = NULL) {
+                                          package_version = NULL,
+                                          resume = FALSE) {
   if (!is.list(config)) ng_stop("config must be a list of ng_run_cross_prediction() arguments")
   if (!length(output_root) || !nzchar(output_root)) ng_stop("output_root is required")
   dir.create(output_root, recursive = TRUE, showWarnings = FALSE)
@@ -336,9 +337,47 @@ ng_run_cross_prediction_batch <- function(config,
   workers <- min(as.integer(batch_workers), length(jobs))
   basis <- attr(batch_workers, "basis")
 
-  results <- ng_cp__batch_dispatch(jobs, workers, shared_path, output_root,
-                                   generated_at, package_version, use_cpp = ctx$use_cpp,
-                                   job_dir = job_dir)
+  # Resuming finishes a job rather than restarting it. A batch may have run for hours, so
+  # re-running the traits that already succeeded is its own kind of loss. A trait counts as
+  # finished only when its own status.json says "done" -- an "error" (or "running", from a
+  # dead worker) must be re-run, because skipping it is exactly the loss resume exists to
+  # avoid.
+  carried <- list()
+  run_jobs <- jobs
+  if (isTRUE(resume)) {
+    done_of <- function(id) {
+      f <- file.path(output_root, id, "status.json")
+      if (!file.exists(f)) return(FALSE)
+      st <- tryCatch(jsonlite::fromJSON(f, simplifyVector = TRUE), error = function(e) NULL)
+      identical(st$state, "done")
+    }
+    keep <- !vapply(names(jobs), done_of, logical(1))
+    carried <- lapply(names(jobs)[!keep], function(id) {
+      st <- jsonlite::fromJSON(file.path(output_root, id, "status.json"), simplifyVector = TRUE)
+      list(id = id, traits = jobs[[id]]$traits, status = "ok",
+           cv_predictive_r2 = as.numeric(st$cv_predictive_r2 %||% NA_real_),
+           mean_source = as.character(st$mean_source %||% NA_character_),
+           n_selected = as.integer(st$n_selected %||% NA_integer_),
+           result_json = file.path(output_root, id, "result.json"),
+           warnings = character(0), elapsed_sec = NA_real_, resumed = TRUE)
+    })
+    names(carried) <- names(jobs)[!keep]
+    run_jobs <- jobs[keep]
+  }
+
+  results <- if (!length(run_jobs)) list() else
+    ng_cp__batch_dispatch(run_jobs, min(workers, length(run_jobs)), shared_path, output_root,
+                          generated_at, package_version, use_cpp = ctx$use_cpp,
+                          job_dir = job_dir)
+  # The manifest describes the whole job. A resumed batch that listed only the traits it
+  # re-ran would misrepresent what the breeder actually has on disk.
+  results <- c(results, carried)
+  # Order by each result's own $id, not by the list's R names(): ng_cp__batch_dispatch returns
+  # a named list on its workers<=1 path but an unnamed one on its mirai path (seq_along()
+  # there does not carry names through), so names() is not a reliable key across both -- but
+  # every result, carried or freshly dispatched, always carries its own trait id.
+  results <- results[order(match(
+    vapply(results, function(r) as.character(r$id), character(1)), names(jobs)))]
 
   # Re-emit what the workers could only return. Attributed to the trait, because an
   # unattributed advisory in a 17-job batch tells the breeder nothing actionable.
@@ -374,7 +413,12 @@ ng_run_cross_prediction_batch <- function(config,
       any_failed = any_failed))
   }
 
-  structure(list(manifest = manifest, manifest_path = manifest_path, jobs = results),
+  # unname(): `results` may or may not carry R list-names at this point, depending on which
+  # ng_cp__batch_dispatch() path ran (see the ordering comment above) -- and that is an
+  # internal bookkeeping detail, not part of the contract. Callers index this list by each
+  # element's own $id field (see by_id() in the batch test suite), never by R list-name, so
+  # any such names are dropped here rather than leaking inconsistently into the return value.
+  structure(list(manifest = manifest, manifest_path = manifest_path, jobs = unname(results)),
             class = c("ng_cross_prediction_batch", "list"))
 }
 
