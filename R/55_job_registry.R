@@ -282,3 +282,49 @@ ng_shared_artifact_reference <- function(shared_dir, key, job_id) {
   ng_write_json_atomic(meta, path)
   invisible(path)
 }
+
+# Remove old jobs, and any shared artefact nothing references any more.
+#
+# This function deletes with unlink(recursive = TRUE, force = TRUE), so its refusals matter
+# more than its removals:
+#
+#   * a RUNNING job is never removed, however old. Deleting one would take hours of finished
+#     traits with it, and the process writing into it would carry on writing into nothing.
+#   * a shared artefact referenced by ANY surviving job is never removed. The artefact
+#     outlives the batch that built it -- that is the point of sharing it -- so deletion is
+#     driven by references, not by age.
+#
+# This is also why jobs_dir and shared_dir are siblings of the frontend's runs_dir rather
+# than living inside it: ngcd_prune_runs() there enumerates list.dirs(runs_dir) and unlinks
+# everything past keep_runs, and would happily take the whole job store with it.
+ng_job_prune <- function(jobs_dir, shared_dir = NULL, keep = 20L, stale_after_sec = 120) {
+  removed <- character(0)
+  keep <- suppressWarnings(as.integer(keep))
+  if (is.na(keep) || keep < 0L || !dir.exists(jobs_dir)) return(invisible(removed))
+
+  lst <- ng_job_list(jobs_dir, stale_after_sec = stale_after_sec, limit = Inf)
+  if (nrow(lst)) {
+    protected <- lst$state %in% c("running", "queued")
+    candidates <- lst[!protected, , drop = FALSE]
+    if (nrow(candidates) > keep) {
+      doomed <- candidates$path[seq.int(keep + 1L, nrow(candidates))]
+      unlink(doomed, recursive = TRUE, force = TRUE)
+      removed <- c(removed, doomed)
+    }
+  }
+
+  if (!is.null(shared_dir) && dir.exists(shared_dir)) {
+    survivors <- ng_job_list(jobs_dir, stale_after_sec = stale_after_sec, limit = Inf)
+    refs <- unique(unlist(lapply(survivors$path, function(d) {
+      f <- file.path(d, "shared_ref")
+      if (file.exists(f)) trimws(readLines(f, warn = FALSE)) else character(0)
+    })))
+    for (d in list.dirs(shared_dir, recursive = FALSE, full.names = TRUE)) {
+      if (!(basename(d) %in% refs)) {
+        unlink(d, recursive = TRUE, force = TRUE)
+        removed <- c(removed, d)
+      }
+    }
+  }
+  invisible(removed)
+}
