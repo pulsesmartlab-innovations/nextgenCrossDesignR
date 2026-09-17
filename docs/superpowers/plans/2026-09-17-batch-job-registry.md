@@ -310,8 +310,10 @@ ng_job_mark(job_dir, "running", list(pid = Sys.getpid()))
 rec <- jsonlite::fromJSON(p, simplifyVector = TRUE)
 stopifnot(identical(rec$state, "running"))
 stopifnot(identical(as.integer(rec$pid), Sys.getpid()))
-# created_at must survive -- it is how a listing orders jobs.
-stopifnot(is.character(rec$created_at), nzchar(rec$created_at))
+# created_at must survive -- it is how a listing orders jobs. Compared by VALUE: asserting it
+# is merely a non-empty string would pass against an implementation that stamped a fresh
+# timestamp on every transition, which is exactly the bug this guards.
+stopifnot(identical(rec$created_at, created_before))
 
 ng_job_mark(job_dir, "finished")
 rec <- jsonlite::fromJSON(p, simplifyVector = TRUE)
@@ -428,6 +430,23 @@ In `R/54_batch_runner.R`, in `ng_cp__batch_dispatch()`, replace the single colle
 
 Add `job_dir = NULL` to the `ng_cp__batch_dispatch()` formals, and pass it from
 `ng_run_cross_prediction_batch()` at the existing call site (`:276`) as `job_dir = job_dir`.
+
+- [ ] **Step 5b: Beat the heart on the SERIAL path too**
+
+`ng_cp__batch_dispatch()` returns early when `workers <= 1L` or mirai is unavailable, so the
+polling loop above is never reached on that path. A serial batch run as a job would go
+silent and `ng_job_status()` would call it crashed while it was still working — a false
+crash, which is worse than no status at all. Replace the early `return(lapply(...))` with:
+
+```r
+    return(lapply(jobs, function(j) {
+      # Serial jobs beat the heart between traits. The loop over unresolved() below never
+      # runs on this path, and a job that goes quiet is indistinguishable from a dead one.
+      if (!is.null(job_dir)) ng_job_heartbeat(job_dir)
+      ng_cp__batch_run_one(j, shared_path = shared_path, output_root = output_root,
+                           generated_at = generated_at, package_version = package_version)
+    }))
+```
 
 - [ ] **Step 6: Give the batch a job directory to record into**
 
@@ -1013,8 +1032,8 @@ with:
   # On disk, so a killed batch resumes without redoing QC -- and CONTENT-ADDRESSED when a
   # store is given, so a second batch on the same data reuses it rather than recomputing
   # quality control, LD pruning and the GRM it has already paid for.
-  if (is.null(shared_dir)) shared_dir <- file.path(output_root, "_shared")
-  key <- ng_shared_artifact_key(config)
+  # `key` was computed above for the reuse check -- do not recompute it. For an in-memory
+  # genotype matrix that means one serialisation per batch rather than two.
   art_dir <- ng_shared_artifact_dir(shared_dir, key)
   shared_path <- file.path(art_dir, "shared.rds")
   saveRDS(ctx, shared_path)
@@ -1036,10 +1055,10 @@ with:
 ```r
   # Reuse before recomputing. The key covers every setting the batch spends plus the content
   # of each input file, so a hit means the artefact was built from exactly this data.
-  reuse_dir <- if (is.null(shared_dir)) NULL else
-    file.path(shared_dir, ng_shared_artifact_key(config))
-  reuse_path <- if (is.null(reuse_dir)) NULL else file.path(reuse_dir, "shared.rds")
-  if (!is.null(reuse_path) && file.exists(reuse_path)) {
+  if (is.null(shared_dir)) shared_dir <- file.path(output_root, "_shared")
+  key <- ng_shared_artifact_key(config)
+  reuse_path <- file.path(shared_dir, key, "shared.rds")
+  if (file.exists(reuse_path)) {
     ctx <- readRDS(reuse_path)
   } else {
     ctx <- ng_cp__build_ctx(config)
@@ -1597,8 +1616,7 @@ In `R/25_backend_capability_registry.R`, add before the `batch_workers` control:
                       "removed. A running job is never removed however old it is, and a ",
                       "shared data artefact is never removed while any surviving job still ",
                       "references it -- so lowering this frees finished results, never work ",
-                      "in progress."),
-        ),
+                      "in progress.")),
 ```
 
 - [ ] **Step 8: Bump the version and write NEWS**
