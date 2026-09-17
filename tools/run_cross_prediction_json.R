@@ -60,8 +60,21 @@ stage    <- if (!is.null(cfg$stage)) as.character(cfg$stage) else NULL
 batch_jobs <- cfg$batch_jobs
 batch_output_root <- if (!is.null(cfg$batch_output_root)) as.character(cfg$batch_output_root) else NULL
 batch_workers <- if (!is.null(cfg$batch_workers)) as.integer(cfg$batch_workers) else NULL
+batch_job_dir <- if (!is.null(cfg$job_dir)) as.character(cfg$job_dir) else NULL
+batch_shared_dir <- if (!is.null(cfg$shared_dir)) as.character(cfg$shared_dir) else NULL
+batch_resume <- isTRUE(cfg$resume)
 cfg$workflow <- NULL; cfg$stage <- NULL
 cfg$batch_jobs <- NULL; cfg$batch_output_root <- NULL; cfg$batch_workers <- NULL
+cfg$job_dir <- NULL; cfg$shared_dir <- NULL; cfg$resume <- NULL
+
+# Write the job record FIRST. The frontend spawns this process detached and then looks for
+# job.json; if the backend cannot load or the config is bad, a job that never wrote a record
+# is indistinguishable from one that was never launched, and "nothing happened" is the worst
+# possible feedback for a run expected to take hours.
+if (!is.null(batch_job_dir)) {
+  ng_job_create(batch_job_dir, config = cfg, label = basename(batch_job_dir))
+}
+
 valid_args <- names(formals(ng_run_cross_prediction))
 unknown <- setdiff(names(cfg), valid_args)
 if (length(unknown)) {
@@ -111,6 +124,9 @@ res <- tryCatch(
         file.path(dirname(result_path), "batch")
       ng_run_cross_prediction_batch(cfg, jobs = batch_jobs, output_root = root_dir,
                                     batch_workers = batch_workers,
+                                    job_dir = batch_job_dir,
+                                    shared_dir = batch_shared_dir,
+                                    resume = batch_resume,
                                     generated_at = generated_at, package_version = version)
     } else if (staged) {
       if (is.null(stage)) ng_stop("workflow = 'stage' requires a 'stage' key")
@@ -127,6 +143,9 @@ res <- tryCatch(
 )
 
 if (inherits(res, "ng_run_json_error")) {
+  if (!is.null(batch_job_dir) && file.exists(file.path(batch_job_dir, "job.json"))) {
+    ng_job_mark(batch_job_dir, "failed", list(error_message = res$message))
+  }
   write_result(list(
     schema          = "ng_run_result.v1",
     status          = "error",

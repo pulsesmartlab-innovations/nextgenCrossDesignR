@@ -144,6 +144,10 @@
 \alias{ng_poly_run_stage}
 \alias{ng_preview_marker_effects}
 \alias{ng_run_cross_prediction_batch}
+\alias{ng_job_create}
+\alias{ng_job_list}
+\alias{ng_job_prune}
+\alias{ng_job_status}
 \title{Public NextGen Cross Design Backend API}
 \description{
 Public backend functions for cross scoring, mate allocation, multi-trait
@@ -301,6 +305,18 @@ P never enters that solve and is used solely to standardise the reported
 predicted response by the index standard deviation, which is returned as
 \code{NA} when P is absent. Candidate-cross score covariance is not used as a
 substitute for either matrix under any method.
+
+\code{ng_job_create()}, \code{ng_job_status()}, \code{ng_job_list()} and
+\code{ng_job_prune()} make a batch durable: a job is a directory that outlives
+the process which ran it, holding the configuration, a record of the job, and one
+small status file per trait written as that trait starts and finishes. A reader
+can therefore see which traits finished, which failed, and which are still
+running, without opening the results themselves. \code{ng_job_status()} derives
+the two states nothing can write: \code{crashed}, when the record says running
+but the heartbeat has gone quiet, and \code{incomplete}, for a trait still
+claiming to run under a job that is not -- a worker that dies cannot write its
+own epitaph. \code{ng_job_prune()} never removes a running job, nor a shared
+artefact any surviving job still references.
 
 A caller-supplied P or G carrying dimnames is REORDERED BY NAME to the trait
 order and must name the trait set exactly; a missing, extra, misspelled or

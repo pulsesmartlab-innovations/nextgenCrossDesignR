@@ -29,7 +29,9 @@ cfg <- list(
                           Position_cM = rep(seq(0, 60, length.out = m / 4), times = 4)),
   map_marker_col = "SNP_code", map_chr_col = "Chromosome", map_pos_cm_col = "Position_cM",
   map_position_unit = "cM", progeny = "RIL", parent_type = "ril", n_crosses = 3L,
-  write_outputs = FALSE, write_figures = FALSE, run_posterior_prediction = FALSE,
+  # write_outputs = TRUE (not FALSE): FIX B needs an actual workbook path on disk for a
+  # carried-forward entry to reproduce -- see the output_files assertions below.
+  write_outputs = TRUE, write_figures = FALSE, run_posterior_prediction = FALSE,
   min_cv_predictive_r2 = -1, seed = 1L)
 
 out <- file.path(root, "out")
@@ -38,6 +40,13 @@ st <- vapply(b1$jobs, function(j) j$status, character(1))
 names(st) <- vapply(b1$jobs, function(j) j$id, character(1))
 stopifnot(identical(unname(st[c("A", "B")]), c("ok", "ok")))
 stopifnot(identical(unname(st["EMPTY"]), "error"))
+
+# FIX B: a freshly-run trait's manifest entry carries output_files -- the workbook path a
+# reader needs to find the deliverable. Record it so we can prove resume does not drop it.
+a_entry_fresh <- Filter(function(j) identical(j$id, "A"), b1$jobs)[[1L]]
+stopifnot(is.list(a_entry_fresh$output_files))
+stopifnot(is.character(a_entry_fresh$output_files$workbook))
+stopifnot(file.exists(a_entry_fresh$output_files$workbook))
 
 # Record when A's result was written, so we can prove it is not rewritten.
 a_mtime <- file.mtime(file.path(out, "A", "result.json"))
@@ -61,5 +70,12 @@ ids2 <- sort(vapply(b2$jobs, function(j) j$id, character(1)))
 stopifnot(identical(ids2, c("A", "B", "EMPTY")))
 carried <- Filter(function(j) identical(j$id, "A"), b2$jobs)[[1L]]
 stopifnot(identical(carried$status, "ok"))
+
+# FIX B: a carried-forward entry (built from status.json on resume, not from a fresh run)
+# must still name the workbook. Before the fix, output_files was never recorded in
+# status.json, so a resumed job silently dropped the deliverable path for every trait that
+# did not re-run -- even though the file is right there on disk.
+stopifnot(is.list(carried$output_files))
+stopifnot(identical(carried$output_files$workbook, a_entry_fresh$output_files$workbook))
 
 cat("PASS: batch_resume_runs_only_what_is_unfinished\n")

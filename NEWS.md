@@ -1,3 +1,75 @@
+# nextgenCrossDesign 0.37.0
+
+## A batch can be submitted and left running
+
+0.36.0 made a 17-trait batch computable. This makes one durable. A job is a directory that
+outlives the process which ran it: the configuration it was given, a record of the job, and
+one small status file per trait, written as that trait starts and again as it finishes. A
+reader can see which traits are done, which failed, and which are still running -- without
+opening the results themselves, which for seventeen traits would mean parsing seventeen
+files of ~125,000 candidate crosses each.
+
+`ng_job_status()` derives the two states nothing can write. A worker writes "running" on
+entry; if it dies, it cannot write its own epitaph, and if the batch parent died too, nobody
+reconciles it. So `crashed` is derived from a stale heartbeat, and a trait still claiming to
+run under a job that is not is reported as `incomplete`. Both rules live in one function, so
+a frontend cannot reimplement them and drift -- the drift would surface as a breeder acting
+on a plan that was never finished.
+
+Liveness is heartbeat staleness rather than a pid check, because pid liveness means `ps` on
+Unix and `tasklist` on Windows and this package must behave identically on both. The pid is
+recorded for a human debugging afterwards, never for the decision.
+
+The headless entry point (`tools/run_cross_prediction_json.R`) now accepts `job_dir`,
+`shared_dir` and `resume` alongside `workflow = "batch"`, and writes the job record BEFORE
+doing anything expensive. A frontend spawns this process detached and then looks for
+`job.json`; if the backend cannot load or the config is bad, a job that never wrote a record
+is indistinguishable from one that was never launched, and "nothing happened" is the worst
+possible feedback for a run expected to take hours. A job that cannot run is marked `failed`
+rather than vanishing. `ng_job_create()`, `ng_job_status()`, `ng_job_list()` and
+`ng_job_prune()` are now part of the package's public API.
+
+## The same data is processed once, across jobs
+
+Quality control, cleaning, duplicate detection, LD pruning, the training-set alignment, the
+pair table and the GRM depend only on the genotypes, the map and the settings that govern
+them. 0.36.0 computed them once per batch; a breeder submitting a second batch on the same
+data paid for all of it again.
+
+The artefact is now content-addressed, keyed off the list of settings a batch spends -- the
+same list that refuses per-job overrides, because changing one invalidates the shared work.
+Input files are hashed by content: keying on a path, or a path and a timestamp, would let
+edited data silently reuse an artefact built from the old data.
+
+## Resume
+
+`resume = TRUE` re-runs only the traits that did not finish, without recomputing quality
+control. Failure isolation said one bad trait does not cost the other sixteen; this is the
+other half of that answer.
+
+## One shape for the manifest, regardless of how the batch ran
+
+`manifest.json`'s `jobs` field was a JSON ARRAY at `batch_workers = 2` and a JSON OBJECT
+keyed by trait at `batch_workers = 1`, because the serial dispatch path preserved the R
+list-names `lapply()` carries over from a named `jobs` list while the mirai path did not. A
+consumer of this file -- and the next round of work is a frontend reading exactly this file
+-- would have had to handle both shapes and would break on whichever it had not tested.
+`ng_cp__batch_dispatch()` now returns an unnamed list on every path, nothing downstream ever
+re-introduces a name, and the shape is decided in exactly one place: nowhere, by
+construction, rather than normalised after the fact in two places that did not agree.
+
+A resumed trait's `output_files` -- the workbook path a reader needs to find the deliverable
+-- used to vanish from the manifest, because a carried-forward entry is rebuilt from
+`status.json` and that file never recorded `output_files` in the first place. Resuming a
+job silently dropped the workbook path for every already-finished trait even though the file
+was on disk. `output_files` is now written to `status.json` on a trait's "done" record, so a
+carried-forward entry can reproduce it exactly.
+
+## Retention that refuses to destroy work
+
+`ng_job_prune()` never removes a running job, however old, and never removes a shared
+artefact any surviving job still references.
+
 # nextgenCrossDesign 0.36.0
 
 ## Many single-trait analyses, as one batch

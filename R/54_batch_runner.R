@@ -154,7 +154,14 @@ ng_cp__batch_run_one <- function(job, shared_path, output_root,
         # engine would otherwise have refused.
         effect_gate = if (!is.null(es) && "effect_gate" %in% names(es))
           as.character(es$effect_gate)[[1L]] else NA_character_,
-        n_selected = if (is.data.frame(r$selected_crosses)) nrow(r$selected_crosses) else NA_integer_)
+        n_selected = if (is.data.frame(r$selected_crosses)) nrow(r$selected_crosses) else NA_integer_,
+        # Recorded here so a RESUMED job can reproduce it (see the carried-forward branch of
+        # ng_run_cross_prediction_batch()). Without this, output_files exists only on a job's
+        # in-memory return value -- fine for a run that finishes in one process, but a
+        # carried-forward entry is rebuilt from THIS FILE, and a manifest is how a consumer
+        # finds the deliverable. Losing it here means resuming a job silently drops the
+        # workbook path for every already-finished trait, even though the file is on disk.
+        output_files = r$output_files)
       ng_job_trait_status_write(output_root, job$id, "done", summary_fields)
       list(
         status = "ok",
@@ -359,9 +366,17 @@ ng_run_cross_prediction_batch <- function(config,
            mean_source = as.character(st$mean_source %||% NA_character_),
            n_selected = as.integer(st$n_selected %||% NA_integer_),
            result_json = file.path(output_root, id, "result.json"),
+           # FIX B: output_files is what a reader needs to FIND the deliverable, and a
+           # carried entry (built here, not by a fresh run) can only reproduce it because
+           # ng_cp__batch_run_one() now records it in status.json on the "done" write.
+           output_files = st$output_files,
            warnings = character(0), elapsed_sec = NA_real_, resumed = TRUE)
     })
-    names(carried) <- names(jobs)[!keep]
+    # No names(carried) <- ...: an R list-name here was never load-bearing (every element
+    # already carries its own $id, which is what the ordering below and every caller key on)
+    # and naming it would re-introduce exactly the shape inconsistency ng_cp__batch_dispatch()
+    # was just fixed to stop producing. One place decides whether `results` is named --
+    # nowhere -- rather than a dispatch-shape fix here being undone a few lines later.
     run_jobs <- jobs[keep]
   }
 
@@ -372,10 +387,10 @@ ng_run_cross_prediction_batch <- function(config,
   # The manifest describes the whole job. A resumed batch that listed only the traits it
   # re-ran would misrepresent what the breeder actually has on disk.
   results <- c(results, carried)
-  # Order by each result's own $id, not by the list's R names(): ng_cp__batch_dispatch returns
-  # a named list on its workers<=1 path but an unnamed one on its mirai path (seq_along()
-  # there does not carry names through), so names() is not a reliable key across both -- but
-  # every result, carried or freshly dispatched, always carries its own trait id.
+  # Order by each result's own $id, never by the list's R names(): ng_cp__batch_dispatch()
+  # now always returns an unnamed list and `carried` is never named either (see above), but
+  # ordering by $id keeps this correct even if that ever changes -- every result, carried or
+  # freshly dispatched, always carries its own trait id.
   results <- results[order(match(
     vapply(results, function(r) as.character(r$id), character(1)), names(jobs)))]
 
@@ -413,12 +428,10 @@ ng_run_cross_prediction_batch <- function(config,
       any_failed = any_failed))
   }
 
-  # unname(): `results` may or may not carry R list-names at this point, depending on which
-  # ng_cp__batch_dispatch() path ran (see the ordering comment above) -- and that is an
-  # internal bookkeeping detail, not part of the contract. Callers index this list by each
-  # element's own $id field (see by_id() in the batch test suite), never by R list-name, so
-  # any such names are dropped here rather than leaking inconsistently into the return value.
-  structure(list(manifest = manifest, manifest_path = manifest_path, jobs = unname(results)),
+  # `results` is unnamed by construction (see ng_cp__batch_dispatch() and the carried-forward
+  # comment above), so there is nothing to normalise here. Callers index this list by each
+  # element's own $id field (see by_id() in the batch test suite), never by R list-name.
+  structure(list(manifest = manifest, manifest_path = manifest_path, jobs = results),
             class = c("ng_cross_prediction_batch", "list"))
 }
 
@@ -433,17 +446,24 @@ ng_run_cross_prediction_batch <- function(config,
 ng_cp__batch_dispatch <- function(jobs, workers, shared_path, output_root,
                                   generated_at, package_version, use_cpp = FALSE,
                                   job_dir = NULL) {
+  # unname() every return path here, not just some of them: `jobs` carries R list-names (the
+  # trait ids) on every path, but only lapply() over a NAMED list propagates them into the
+  # result. Leaving even one path named made the manifest's `jobs` field serialise as a JSON
+  # OBJECT on that path and a JSON ARRAY on the others -- a shape a consumer would have to
+  # handle twice and would break on whichever it had not tested. Every result already carries
+  # its own `id` field, so the R list-name was never load-bearing; only jsonlite's rendering
+  # of it was.
   if (workers <= 1L || !requireNamespace("mirai", quietly = TRUE)) {
     if (workers > 1L) {
       warning("mirai is not available; running the batch one job at a time.", call. = FALSE)
     }
-    return(lapply(jobs, function(j) {
+    return(unname(lapply(jobs, function(j) {
       # Serial jobs beat the heart between traits. The loop over unresolved() below never
       # runs on this path, and a job that goes quiet is indistinguishable from a dead one.
       if (!is.null(job_dir)) ng_job_heartbeat(job_dir)
       ng_cp__batch_run_one(j, shared_path = shared_path, output_root = output_root,
                            generated_at = generated_at, package_version = package_version)
-    }))
+    })))
   }
   # In a dev tree the package is sourced, not installed, so a daemon must load it the same
   # way. Detecting the namespace is what tells the two apart.
@@ -465,9 +485,9 @@ ng_cp__batch_dispatch <- function(jobs, workers, shared_path, output_root,
     if (!nzchar(dev_root)) {
       warning("the package is neither installed nor locatable as a source tree, so batch ",
               "daemons could not load it; running the batch one job at a time.", call. = FALSE)
-      return(lapply(jobs, ng_cp__batch_run_one, shared_path = shared_path,
+      return(unname(lapply(jobs, ng_cp__batch_run_one, shared_path = shared_path,
                     output_root = output_root, generated_at = generated_at,
-                    package_version = package_version))
+                    package_version = package_version)))
     }
   }
 
@@ -525,7 +545,11 @@ ng_cp__batch_dispatch <- function(jobs, workers, shared_path, output_root,
   # A daemon that died leaves a miraiError in place of the job's result. Convert it to the
   # same failure shape a caught error produces, so one dead worker cannot make the manifest
   # a different shape from a failed run.
-  lapply(seq_along(out), function(i) {
+  #
+  # unname(): explicit here even though lapply(seq_along(out), ...) already drops names, so
+  # this path's shape does not depend on that incidental fact holding across a future edit --
+  # see the comment on the serial return above.
+  unname(lapply(seq_along(out), function(i) {
     r <- out[[i]]
     if (inherits(r, "miraiError") || inherits(r, "errorValue")) {
       return(list(id = jobs[[i]]$id, traits = jobs[[i]]$traits, status = "error",
@@ -533,5 +557,5 @@ ng_cp__batch_dispatch <- function(jobs, workers, shared_path, output_root,
                   warnings = character(0), elapsed_sec = NA_real_))
     }
     r
-  })
+  }))
 }
