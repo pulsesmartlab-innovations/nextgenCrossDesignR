@@ -23,6 +23,12 @@ stopifnot(identical(st$schema, "ng_job_trait_status.v1"))
 stopifnot(identical(st$trait, "YIELD"))
 stopifnot(identical(st$state, "running"))
 stopifnot(is.character(st$started_at), nzchar(st$started_at))
+first_started <- st$started_at
+
+# The timestamp has one-second resolution, so two writes issued back-to-back could land in
+# the same second and match even under an implementation that never preserves started_at --
+# that would make the equality check below pass for the wrong reason. Force them apart.
+Sys.sleep(1.1)
 
 # --- exit: the summary a reader needs, without opening result.json -----------------------
 ng_job_trait_status_write(job_dir, "YIELD", "done", list(
@@ -34,8 +40,12 @@ stopifnot(identical(st$mean_source, "gebv"), identical(st$effect_gate, "on"))
 stopifnot(identical(as.integer(st$n_selected), 20L))
 stopifnot(is.character(st$finished_at), nzchar(st$finished_at))
 # started_at must SURVIVE the second write -- elapsed time is otherwise unknowable, and a
-# reader cannot tell a trait that took ten seconds from one that took ten hours.
+# reader cannot tell a trait that took ten seconds from one that took ten hours. Asserting
+# equality against the value captured from the FIRST write (not just non-emptiness) is what
+# makes this a real assertion: an implementation that overwrote started_at with "now" on
+# every call would still produce a non-empty string and pass a weaker check.
 stopifnot(is.character(st$started_at), nzchar(st$started_at))
+stopifnot(identical(st$started_at, first_started))
 
 # --- failure carries its reason ----------------------------------------------------------
 ng_job_trait_status_write(job_dir, "EMPTY", "running")
