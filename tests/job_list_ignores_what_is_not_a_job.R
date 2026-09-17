@@ -34,6 +34,28 @@ stopifnot(identical(lst$id, c("job_c", "job_b", "job_a")))
 stopifnot(all(lst$state == "finished"))
 stopifnot(all(as.integer(lst$n_done) == 1L))
 
+# Truncation test: verify limit works on created_at, not mtime.
+# Create a 4th job (newest), then exercise limit=2 twice.
+d_d <- file.path(root, "job_d")
+ng_job_create(d_d, config = NULL, label = "run job_d", n_traits = 2L)
+ng_job_mark(d_d, "finished")
+ng_job_trait_status_write(d_d, "A", "done", list(n_selected = 3L))
+
+# With 4 jobs, limit=2 should return only the 2 newest (job_d, job_c).
+lst_limited <- ng_job_list(root, limit = 2L)
+stopifnot(identical(nrow(lst_limited), 2L))
+stopifnot(identical(lst_limited$id, c("job_d", "job_c")))
+
+# Now mark the OLDEST job (job_a) to bump its directory mtime.
+# This tests that we sort by creation time, not mtime.
+ng_job_mark(file.path(root, "job_a"), "finished")
+
+# limit=2 should STILL return job_d and job_c, not the recently-touched job_a.
+lst_after_mark <- ng_job_list(root, limit = 2L)
+stopifnot(identical(nrow(lst_after_mark), 2L))
+stopifnot(identical(lst_after_mark$id, c("job_d", "job_c")))
+stopifnot(!("job_a" %in% lst_after_mark$id))
+
 # An empty or absent directory is a normal state on a fresh install, not an error.
 stopifnot(identical(nrow(ng_job_list(file.path(root, "nope"))), 0L))
 empty <- file.path(root, "empty"); dir.create(empty)

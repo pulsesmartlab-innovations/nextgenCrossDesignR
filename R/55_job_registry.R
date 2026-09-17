@@ -172,6 +172,12 @@ ng_job_status <- function(job_dir, stale_after_sec = 120) {
 # half-made directory from an interrupted submit must not take the listing down. The listing
 # is the only route a breeder has to their results, so it degrades by omitting what it cannot
 # read rather than by failing.
+#
+# Two-pass filtering for correctness and efficiency:
+#   - Pass 1: read ONLY job.json (tiny) from each candidate, sort by created_at (not mtime,
+#     which reflects the last state transition, not creation), and slice to limit. This avoids
+#     expensive ng_job_status() calls on jobs that will be discarded.
+#   - Pass 2: call ng_job_status() only on survivors to build the full row.
 ng_job_list <- function(jobs_dir, stale_after_sec = 120, limit = 100L) {
   empty <- data.frame(id = character(0), label = character(0), created_at = character(0),
                       state = character(0), n_traits = integer(0), n_done = integer(0),
@@ -180,9 +186,28 @@ ng_job_list <- function(jobs_dir, stale_after_sec = 120, limit = 100L) {
   dirs <- list.dirs(jobs_dir, recursive = FALSE, full.names = TRUE)
   dirs <- dirs[file.exists(file.path(dirs, "job.json"))]
   if (!length(dirs)) return(empty)
-  dirs <- dirs[order(file.mtime(dirs), decreasing = TRUE)]
-  if (is.finite(limit) && length(dirs) > limit) dirs <- dirs[seq_len(limit)]
-  rows <- lapply(dirs, function(d) {
+
+  # First pass: cheap. Read only job.json to get created_at.
+  metadata <- lapply(dirs, function(d) {
+    job_rec <- tryCatch(as.list(jsonlite::fromJSON(file.path(d, "job.json"),
+                                                    simplifyVector = TRUE)),
+                        error = function(e) NULL)
+    if (is.null(job_rec)) return(NULL)
+    data.frame(id = job_rec$id %||% basename(d),
+               created_at = job_rec$created_at %||% NA_character_,
+               path = d, stringsAsFactors = FALSE)
+  })
+  metadata <- do.call(rbind, metadata[!vapply(metadata, is.null, logical(1))])
+  if (!nrow(metadata)) return(empty)
+
+  # Sort by created_at (when the job was submitted), not mtime (when it last changed state).
+  metadata <- metadata[order(metadata$created_at, decreasing = TRUE), , drop = FALSE]
+  if (is.finite(limit) && nrow(metadata) > limit) {
+    metadata <- metadata[seq_len(limit), , drop = FALSE]
+  }
+
+  # Second pass: expensive. Call ng_job_status() only on survivors.
+  rows <- lapply(metadata$path, function(d) {
     s <- tryCatch(ng_job_status(d, stale_after_sec = stale_after_sec), error = function(e) NULL)
     if (is.null(s)) return(NULL)
     data.frame(id = s$id, label = s$label,
