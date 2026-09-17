@@ -136,12 +136,15 @@ numbers, no error, exactly the class of defect the RNG-kind bug in 0.36.0 turned
 So the key covers every value in that list, plus a content digest of each input FILE via
 `tools::md5sum` (no new dependency, portable).
 
-Inputs supplied as in-memory data frames rather than file paths are **not cached** — they
-fall back to computing fresh. Digesting a large in-memory genotype matrix would need either
-a new dependency or a serialise-to-disk round trip, and the path that matters already
-materialises CSVs to disk before submitting. Caching only what can be hashed cheaply and
-honestly is better than hashing everything expensively or, worse, keying on something
-weaker like a filename and a timestamp.
+Inputs supplied as in-memory objects rather than file paths are hashed by **serialising
+them**, not by summarising them. Summarising with `str()` or `dim()` would be cheaper and
+would be a latent disaster: two different genotype matrices of the same shape would hash
+identically and silently reuse each other's artefact. A key must be a function of the
+content or it is not a key.
+
+The serialise-to-disk round trip costs a temp file, paid once per batch against recomputing
+quality control — and the path that matters materialises CSVs before submitting anyway, so
+it takes the cheap `md5sum`-of-file branch.
 
 ### The inputs themselves are stored once too
 
