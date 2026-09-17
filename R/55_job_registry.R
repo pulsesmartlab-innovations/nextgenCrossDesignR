@@ -352,3 +352,70 @@ ng_job_prune <- function(jobs_dir, shared_dir = NULL, keep = 20L, stale_after_se
   }
   invisible(removed)
 }
+
+# ---------------------------------------------------------------------------
+# What the shared artefact OWNS -- and, just as importantly, what it does not.
+# ---------------------------------------------------------------------------
+#
+# The artefact used to be the whole `ctx`, saved with saveRDS(ctx) and restored with
+# readRDS(). But ctx IS the config: ng_cp__build_ctx() starts `ctx <- config` and adds
+# derived fields to it. The cache key deliberately covers only ng_cp__batch_shared_keys --
+# the settings quality control and the predict prologue actually spend -- so restoring the
+# whole ctx restored every NON-shared setting too. A second batch asking for nine crosses on
+# the mid-parent mean silently got the first batch's three crosses on usefulness: the spec's
+# own headline scenario producing wrong numbers with nothing to signal it, which is the same
+# defect class as the 0.36.0 RNG-kind bug.
+#
+# So the artefact carries ONLY what it computed, and the caller's settings always come from
+# the batch that is running now. The list below is exactly the set of fields the two
+# artefact-producing functions write:
+#
+#   ng_cp__stage_qc()        -- its terminal ng_ctx_put() (R/39): phenotype_id_col_used,
+#                               genotype_id_col_used, trait_spec, direction_columns,
+#                               direction_canonical, marker_map_std, qc, geno, pheno, ids
+#   ng_cp__predict_prologue() -- stored whole under ctx$predict_prologue
+#
+# Nothing else. If a future stage adds a derived field that belongs to the shared work, it
+# must be added here deliberately; a field absent from this list is simply recomputed, which
+# is the safe direction to fail.
+ng_shared_artifact_schema <- "ng_shared_artifact_ctx.v1"
+
+ng_shared_artifact_fields <- c(
+  "qc", "geno", "pheno", "ids", "trait_spec", "marker_map_std",
+  "direction_columns", "direction_canonical",
+  "phenotype_id_col_used", "genotype_id_col_used",
+  "predict_prologue")
+
+ng_shared_artifact_write <- function(ctx, path) {
+  fields <- ctx[intersect(ng_shared_artifact_fields, names(ctx))]
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  # .part-then-rename for the same reason every JSON payload here uses it: a concurrent
+  # batch may be reading this exact path while another writes it, and a truncated RDS is a
+  # much worse failure than a recomputed one.
+  tmp <- paste0(path, ".part")
+  saveRDS(list(schema = ng_shared_artifact_schema, fields = fields), tmp)
+  file.rename(tmp, path)
+  path
+}
+
+# Returns the artefact-owned fields, or NULL when there is nothing trustworthy to return.
+#
+# An unrecognised schema is treated as a MISS rather than as an error or as data: a future
+# release that changes what the artefact owns must not silently read an old one as though it
+# still meant the same thing, and recomputing is always available as an answer.
+ng_shared_artifact_read <- function(path) {
+  if (!length(path) || !file.exists(path)) return(NULL)
+  art <- tryCatch(readRDS(path), error = function(e) NULL)
+  if (!is.list(art) || !identical(art$schema, ng_shared_artifact_schema)) return(NULL)
+  if (!is.list(art$fields) || !length(art$fields)) return(NULL)
+  art$fields
+}
+
+# The one place a batch context is assembled, used by the parent and by every worker, so the
+# two cannot drift: THIS batch's config decides everything, and the artefact supplies only
+# the shared work laid over it.
+ng_cp__batch_ctx <- function(config, fields) {
+  ctx <- ng_cp__build_ctx(config)
+  if (length(fields)) ctx <- do.call(ng_ctx_put, c(list(ctx), fields))
+  ctx
+}

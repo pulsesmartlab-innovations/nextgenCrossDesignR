@@ -48,6 +48,13 @@ stopifnot(is.character(k1), length(k1) == 1L, nzchar(k1))
 stopifnot(identical(ng_shared_artifact_key(cfg), k1))
 # Settings that are NOT shared must not move it -- otherwise nothing would ever be reused,
 # since per-trait settings are exactly what varies between jobs.
+#
+# This is a statement about the KEY ONLY. It says n_crosses does not invalidate the cache;
+# it says nothing about the batch HONOURING n_crosses, and for a while the two came apart:
+# the artefact was the whole ctx, so a cache hit restored the first batch's n_crosses along
+# with its shared work. That half is asserted in tests/shared_artifact_does_not_leak_config.R,
+# which runs a second batch with different non-shared settings and checks the plan it
+# actually produced. Read the two together -- neither alone is the property that matters.
 c2 <- cfg; c2$n_crosses <- 9L; c2$min_cv_predictive_r2 <- 0.5
 stopifnot(identical(ng_shared_artifact_key(c2), k1))
 
