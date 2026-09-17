@@ -65,10 +65,72 @@ job silently dropped the workbook path for every already-finished trait even tho
 was on disk. `output_files` is now written to `status.json` on a trait's "done" record, so a
 carried-forward entry can reproduce it exactly.
 
+## The artefact carries what it computed, never what the caller asked for
+
+The shared artefact was the whole run context, and that context IS the configuration --
+`ng_cp__build_ctx()` starts from the config and adds derived fields to it. Since the cache
+key deliberately covers only the settings quality control and the marker-effect prologue
+actually spend, restoring the context restored every OTHER setting too. A second batch on
+the same data asking for nine crosses ranked on the mid-parent mean got the first batch's
+three crosses ranked on usefulness. Nothing errored. That is the exact scenario this feature
+was built for, answered with numbers the breeder did not ask for.
+
+The artefact now persists only the fields quality control and the prologue produce, behind a
+schema version; an artefact written under a schema this release does not recognise is
+recomputed rather than trusted. Parent and worker assemble their context through one
+function, from the running batch's own configuration.
+
+## A job says what it is doing, and how many traits it is for
+
+`n_traits` was never recorded on the real path, so `ng_job_status()` fell back to counting
+the status files that existed and the denominator GREW as workers started -- "k of n done"
+was underivable from the one view it exists for. The batch parent, which is the only process
+that knows the count before any worker writes anything, now records it.
+
+`job.json` also carries a `phase`. The parent beats the heartbeat once and then runs quality
+control, the duplicate scan, LD pruning and the GRM before dispatching anything, and R is
+single-threaded, so nothing can touch the heartbeat during the most expensive phase of a
+real batch. Every genuine job therefore reported `crashed` for its first hours and then
+flipped back to `running`. The default stale window is now six hours rather than two
+minutes -- chosen against what a trait in this package actually costs, not as a guess at
+when a process dies -- and the phase answers the question without any timing assumption at
+all.
+
 ## Retention that refuses to destroy work
 
 `ng_job_prune()` never removes a running job, however old, and never removes a shared
-artefact any surviving job still references.
+artefact any surviving job still references. `meta.json`'s `referenced_by` list is now READ
+as well as written: an artefact survives if a surviving job's `shared_ref` names it OR if
+`meta.json` names a job directory that still exists. The two sources are independent, which
+matters because the `shared_ref` reader deliberately fails closed -- without the second
+source, one corrupted reference file would hand a live job's shared work to a recursive
+delete.
+
+## A job that cannot run ends, and a job that runs can be read
+
+A configuration error in the headless entry left the job at `queued` forever: the validation
+ran after the job record was created but outside the handler that marks a job `failed`, and
+`queued` is a state nothing reinterprets, nothing prunes, and no exported function can
+clear. Such a job is now marked `failed`, with the message.
+
+`job_dir` and `batch_output_root` were silently decoupled -- workers write each trait's
+status file under the output root while `ng_job_status()` reads them from the job directory
+-- so a caller who passed only `job_dir` got a job whose traits were permanently invisible.
+The output root now follows `job_dir`, and a mismatch is refused with an explanation rather
+than producing that job.
+
+## Plural JSON fields keep one shape
+
+`auto_unbox = TRUE` renders a length-1 vector as a bare scalar, so `manifest.json`'s
+`jobs[].traits` was a string for a one-trait job (the default) and an array for a two-trait
+one; a result envelope's `warnings` did the same at one warning versus two, and so did
+`meta.json`'s `referenced_by`. Same class as the `jobs` field fixed above, and the same
+answer: the conceptually-plural fields are pinned as arrays and asserted against what lands
+on disk.
+
+Job timestamps now carry milliseconds. Two jobs submitted in the same second are entirely
+ordinary, and whole-second stamps made a listing tie on `created_at` and fall back to an
+arbitrary order.
 
 # nextgenCrossDesign 0.36.0
 
