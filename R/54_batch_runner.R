@@ -54,7 +54,10 @@ ng_run_result_envelope <- function(r, warnings = character(0), generated_at = NU
     candidate_crosses = r$candidate_crosses,
     selected_crosses  = r$selected_crosses,
     ld_pruning_report = r$ld_pruning_report,
-    warnings          = warnings,
+    # Same pinning as the manifest's plural fields: one warning is an array of one, not a
+    # bare string. The frontend renders this list, and a list that is sometimes a string is a
+    # bug waiting for the first single-warning run.
+    warnings          = I(as.character(warnings)),
     output_files      = r$output_files
   )
 }
@@ -465,6 +468,16 @@ ng_run_cross_prediction_batch <- function(config,
     per_job_bytes_estimate = per_job,
     jobs = lapply(results, function(r) {
       r$warnings <- NULL
+      # I(): `traits` is conceptually plural and jsonlite's auto_unbox = TRUE renders a
+      # length-1 character vector as a bare JSON string. A one-trait job's manifest entry
+      # therefore read {"traits": "YIELD"} and a two-trait job's {"traits": ["A","B"]} -- the
+      # same defect this file's `jobs` field was already fixed for, one level down. A
+      # consumer would have to handle both shapes and would break on whichever it had not
+      # tested, and the default batch is ONE trait per job, so the string form is the common
+      # case and the array form the surprise. Applied here, at the serialisation boundary,
+      # rather than on `results`: the R return value is indexed by callers and must keep its
+      # ordinary character vectors.
+      r$traits <- I(as.character(r$traits))
       r
     })
   )
