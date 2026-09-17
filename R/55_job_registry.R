@@ -288,8 +288,25 @@ ng_shared_artifact_reference <- function(shared_dir, key, job_id) {
 # This function deletes with unlink(recursive = TRUE, force = TRUE), so its refusals matter
 # more than its removals:
 #
-#   * a RUNNING job is never removed, however old. Deleting one would take hours of finished
-#     traits with it, and the process writing into it would carry on writing into nothing.
+#   * a RUNNING, QUEUED or CRASHED job is never removed, however old. Deleting a running one
+#     would take hours of finished traits with it, and the process writing into it would carry
+#     on writing into nothing.
+#
+#     "crashed" is protected too, and deliberately so. ng_job_status() derives "crashed" from
+#     a stale heartbeat, but a stale heartbeat is exactly what a perfectly healthy SERIAL job
+#     looks like for the entire duration of one trait: the serial dispatch path beats the
+#     heart once per job launch and then blocks inside ng_cp__batch_run_one() for as long as
+#     that trait takes -- hours, in this package -- because R is single-threaded and nothing
+#     else can touch the heartbeat file while it blocks. A single-trait job therefore has no
+#     "between traits" to beat in, goes stale after stale_after_sec, and would otherwise look
+#     identical to a job whose process actually died. Raising stale_after_sec cannot fix this:
+#     any fixed timeout is a guess that some real single-trait run will still exceed. So
+#     "crashed" gets the same protection as "running", and this function accepts the two
+#     states can be indistinguishable from disk alone. The asymmetry is intentional: treating
+#     a genuinely dead job as alive costs disk space; treating a genuinely alive job as dead
+#     destroys a breeder's work. Erring toward keeping a dead job is the only safe direction --
+#     and a crashed job is also precisely the one holding partial results a breeder would want
+#     to resume, so deleting it would be the worst available choice even when it really is dead.
 #   * a shared artefact referenced by ANY surviving job is never removed. The artefact
 #     outlives the batch that built it -- that is the point of sharing it -- so deletion is
 #     driven by references, not by age.
@@ -304,7 +321,7 @@ ng_job_prune <- function(jobs_dir, shared_dir = NULL, keep = 20L, stale_after_se
 
   lst <- ng_job_list(jobs_dir, stale_after_sec = stale_after_sec, limit = Inf)
   if (nrow(lst)) {
-    protected <- lst$state %in% c("running", "queued")
+    protected <- lst$state %in% c("running", "queued", "crashed")
     candidates <- lst[!protected, , drop = FALSE]
     if (nrow(candidates) > keep) {
       doomed <- candidates$path[seq.int(keep + 1L, nrow(candidates))]
@@ -317,7 +334,14 @@ ng_job_prune <- function(jobs_dir, shared_dir = NULL, keep = 20L, stale_after_se
     survivors <- ng_job_list(jobs_dir, stale_after_sec = stale_after_sec, limit = Inf)
     refs <- unique(unlist(lapply(survivors$path, function(d) {
       f <- file.path(d, "shared_ref")
-      if (file.exists(f)) trimws(readLines(f, warn = FALSE)) else character(0)
+      if (!file.exists(f)) return(character(0))
+      # A shared_ref that cannot be read is treated as referencing nothing, not as referencing
+      # everything. That is the cautious reading in ONE sense (it never keeps this function
+      # from making progress on a batch it can otherwise clean up) but the risky one in
+      # another: the alternative -- treating unreadable as "keep" -- would leak an artefact
+      # forever the moment its reference file got corrupted, with no way to ever reclaim it.
+      # Failing closed on the read, not on the retention decision, keeps that risk bounded.
+      tryCatch(trimws(readLines(f, warn = FALSE)), error = function(e) character(0))
     })))
     for (d in list.dirs(shared_dir, recursive = FALSE, full.names = TRUE)) {
       if (!(basename(d) %in% refs)) {

@@ -26,9 +26,22 @@ mk <- function(id, state, key) {
   writeLines(key, file.path(d, "shared_ref"))
   ng_shared_artifact_reference(shared_dir, key, id)
   saveRDS(list(1), file.path(shared_dir, key, "shared.rds"))
-  Sys.sleep(0.3)
+  Sys.sleep(1.1)   # distinct created_at, so ordering is by design rather than by tie-break
   d
 }
+
+# The serial dispatch path beats the heart once per job launch, then blocks inside
+# ng_cp__batch_run_one() for the entire trait -- hours, in this package -- because R is
+# single-threaded and nothing else can touch the heartbeat file while it blocks. A
+# single-trait job therefore has no "between traits" to beat in: its heartbeat goes stale
+# long before the job is actually dead, ng_job_status() reports it "crashed", and
+# ng_job_prune() must protect "crashed" exactly as it protects "running" -- deleting a job
+# because its heartbeat looks old is indistinguishable, from disk alone, from deleting one
+# that is still computing. Made the OLDEST job here so it is also the first candidate a
+# naive age-based prune would reach.
+stale <- mk("stale", "running", "KEYCRASHED")
+Sys.setFileTime(file.path(stale, "heartbeat"), Sys.time() - 200)   # > default stale_after_sec
+
 old1 <- mk("old1", "finished", "KEYOLD")
 old2 <- mk("old2", "finished", "KEYSHARED")
 live <- mk("live", "running",  "KEYLIVE")     # oldest-but-one, and must survive anyway
@@ -36,6 +49,10 @@ new1 <- mk("new1", "finished", "KEYSHARED")   # shares KEYSHARED with old2
 
 removed <- ng_job_prune(jobs_dir, shared_dir = shared_dir, keep = 1L)
 
+# --- a crashed job -- heartbeat stale, record still "running" -- is never removed -------------
+# It is the oldest job of all, and the one a naive prune would reach first.
+stopifnot(dir.exists(stale))
+stopifnot(!(stale %in% removed))
 # --- a running job is never removed, however old ---------------------------------------------
 stopifnot(dir.exists(live))
 stopifnot(!(live %in% removed))
@@ -49,6 +66,7 @@ stopifnot(!dir.exists(old1))
 # make a surviving job unresumable, and its results unexplainable.
 stopifnot(dir.exists(file.path(shared_dir, "KEYSHARED")))
 stopifnot(dir.exists(file.path(shared_dir, "KEYLIVE")))
+stopifnot(dir.exists(file.path(shared_dir, "KEYCRASHED")))
 # KEYOLD's only referent is gone.
 stopifnot(!dir.exists(file.path(shared_dir, "KEYOLD")))
 
