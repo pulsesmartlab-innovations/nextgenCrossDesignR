@@ -230,12 +230,22 @@ ng_run_cross_prediction_batch <- function(config,
                                           output_root,
                                           batch_workers = NULL,
                                           memory_budget_bytes = NULL,
+                                          job_dir = NULL,
                                           generated_at = NULL,
                                           package_version = NULL) {
   if (!is.list(config)) ng_stop("config must be a list of ng_run_cross_prediction() arguments")
   if (!length(output_root) || !nzchar(output_root)) ng_stop("output_root is required")
   dir.create(output_root, recursive = TRUE, showWarnings = FALSE)
   if (is.null(generated_at)) generated_at <- format(Sys.time(), "%Y-%m-%dT%H:%M:%S%z")
+
+  # When a job directory is given, this batch IS a job: it says so before the expensive work
+  # starts, and says how it ended. Without one the function behaves exactly as in 0.36.0, so
+  # a direct caller pays nothing for machinery it is not using.
+  if (!is.null(job_dir)) {
+    if (!file.exists(file.path(job_dir, "job.json"))) ng_job_create(job_dir, config = NULL)
+    ng_job_mark(job_dir, "running", list(pid = Sys.getpid()))
+    ng_job_heartbeat(job_dir)
+  }
 
   # Back-fill every missing formal from the runner's own defaults. ng_cp__build_ctx()
   # match.arg()s every enum, and an ABSENT enum arrives as its whole choices vector rather
@@ -291,7 +301,8 @@ ng_run_cross_prediction_batch <- function(config,
   basis <- attr(batch_workers, "basis")
 
   results <- ng_cp__batch_dispatch(jobs, workers, shared_path, output_root,
-                                   generated_at, package_version, use_cpp = ctx$use_cpp)
+                                   generated_at, package_version, use_cpp = ctx$use_cpp,
+                                   job_dir = job_dir)
 
   # Re-emit what the workers could only return. Attributed to the trait, because an
   # unattributed advisory in a 17-job batch tells the breeder nothing actionable.
@@ -316,6 +327,17 @@ ng_run_cross_prediction_batch <- function(config,
     })
   )
   manifest_path <- ng_write_json_atomic(manifest, file.path(output_root, "manifest.json"))
+
+  if (!is.null(job_dir)) {
+    any_failed <- any(vapply(results, function(r) identical(r$status, "error"), logical(1)))
+    # "finished" means the BATCH completed, not that every trait succeeded -- a failed trait
+    # is recorded per trait, and marking the whole job failed would hide sixteen good plans
+    # behind one bad one.
+    ng_job_mark(job_dir, "finished", list(n_ok = sum(!vapply(
+      results, function(r) identical(r$status, "error"), logical(1))),
+      any_failed = any_failed))
+  }
+
   structure(list(manifest = manifest, manifest_path = manifest_path, jobs = results),
             class = c("ng_cross_prediction_batch", "list"))
 }
@@ -329,14 +351,19 @@ ng_run_cross_prediction_batch <- function(config,
 # only the failures need re-running. At hours per job its dispatch cost is irrelevant --
 # what it buys here is isolation and uniformity, not speed.
 ng_cp__batch_dispatch <- function(jobs, workers, shared_path, output_root,
-                                  generated_at, package_version, use_cpp = FALSE) {
+                                  generated_at, package_version, use_cpp = FALSE,
+                                  job_dir = NULL) {
   if (workers <= 1L || !requireNamespace("mirai", quietly = TRUE)) {
     if (workers > 1L) {
       warning("mirai is not available; running the batch one job at a time.", call. = FALSE)
     }
-    return(lapply(jobs, ng_cp__batch_run_one, shared_path = shared_path,
-                  output_root = output_root, generated_at = generated_at,
-                  package_version = package_version))
+    return(lapply(jobs, function(j) {
+      # Serial jobs beat the heart between traits. The loop over unresolved() below never
+      # runs on this path, and a job that goes quiet is indistinguishable from a dead one.
+      if (!is.null(job_dir)) ng_job_heartbeat(job_dir)
+      ng_cp__batch_run_one(j, shared_path = shared_path, output_root = output_root,
+                           generated_at = generated_at, package_version = package_version)
+    }))
   }
   # In a dev tree the package is sourced, not installed, so a daemon must load it the same
   # way. Detecting the namespace is what tells the two apart.
@@ -404,6 +431,16 @@ ng_cp__batch_dispatch <- function(jobs, workers, shared_path, output_root,
     jobs, ng_cp__batch_run_one,
     .args = list(shared_path = shared_path, output_root = output_root,
                  generated_at = generated_at, package_version = package_version))
+  # Collect by polling rather than with a bare m[], for one reason: m[] blocks until every
+  # job resolves, and a job that is working hard for two hours would be indistinguishable
+  # from a job whose process died an hour ago. Touching an mtime is all this costs -- no file
+  # content is rewritten, and progress itself still comes from the workers' own status files.
+  if (!is.null(job_dir)) {
+    while (any(mirai::unresolved(m))) {
+      ng_job_heartbeat(job_dir)
+      Sys.sleep(2)
+    }
+  }
   out <- m[]
   # A daemon that died leaves a miraiError in place of the job's result. Convert it to the
   # same failure shape a caught error produces, so one dead worker cannot make the manifest

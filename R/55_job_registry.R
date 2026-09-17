@@ -41,3 +41,59 @@ ng_job_trait_status_write <- function(job_dir, trait_id, state, fields = list())
   ), fields)
   ng_write_json_atomic(rec, path)
 }
+
+# A job may be written as any of these. `crashed` is absent on purpose -- see ng_job_status().
+ng_job_states <- c("queued", "running", "finished", "failed")
+
+ng_job__now <- function() format(as.POSIXct(Sys.time(), tz = "UTC"), "%Y-%m-%dT%H:%M:%SZ")
+
+# Create the job record. Written BEFORE the work starts, so a job that dies during startup
+# is still a job someone can find and read an error out of, rather than an empty directory.
+ng_job_create <- function(job_dir, config = NULL, label = NULL, n_traits = NA_integer_) {
+  dir.create(job_dir, recursive = TRUE, showWarnings = FALSE)
+  if (!is.null(config)) ng_write_json_atomic(config, file.path(job_dir, "config.json"))
+  rec <- list(
+    schema = "ng_job.v1",
+    id = basename(job_dir),
+    label = if (is.null(label)) basename(job_dir) else label,
+    created_at = ng_job__now(),
+    state = "queued",
+    n_traits = if (is.na(n_traits)) NA_integer_ else as.integer(n_traits),
+    pid = NA_integer_
+  )
+  ng_write_json_atomic(rec, file.path(job_dir, "job.json"))
+}
+
+# Move the job to a new state, preserving what was already recorded.
+ng_job_mark <- function(job_dir, state, fields = list()) {
+  if (!state %in% ng_job_states) {
+    ng_stop("job state must be one of ", paste(ng_job_states, collapse = ", "),
+            "; got '", state, "'. 'crashed' is derived by ng_job_status() from a stale ",
+            "heartbeat and is never written -- the process that would write it is the one ",
+            "that died.")
+  }
+  path <- file.path(job_dir, "job.json")
+  rec <- if (file.exists(path)) {
+    tryCatch(as.list(jsonlite::fromJSON(path, simplifyVector = TRUE)),
+             error = function(e) list())
+  } else list()
+  rec$schema <- "ng_job.v1"
+  if (is.null(rec$id)) rec$id <- basename(job_dir)
+  if (is.null(rec$created_at)) rec$created_at <- ng_job__now()
+  rec$state <- state
+  if (state %in% c("finished", "failed")) rec$finished_at <- ng_job__now()
+  for (nm in names(fields)) rec[[nm]] <- fields[[nm]]
+  ng_write_json_atomic(rec, path)
+}
+
+# Prove the process is still alive. Only the mtime matters; the file's content never does.
+ng_job_heartbeat <- function(job_dir) {
+  path <- file.path(job_dir, "heartbeat")
+  if (!file.exists(path)) {
+    dir.create(job_dir, recursive = TRUE, showWarnings = FALSE)
+    file.create(path)
+  } else {
+    Sys.setFileTime(path, Sys.time())
+  }
+  invisible(path)
+}
