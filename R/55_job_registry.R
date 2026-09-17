@@ -165,3 +165,36 @@ ng_job_status <- function(job_dir, stale_after_sec = 120) {
        n_running = count("running"), n_incomplete = count("incomplete"),
        traits = traits, path = job_dir)
 }
+
+# List the jobs in a directory, newest first.
+#
+# Tolerant by construction: the jobs directory is shared, and a stray folder, a dotfile or a
+# half-made directory from an interrupted submit must not take the listing down. The listing
+# is the only route a breeder has to their results, so it degrades by omitting what it cannot
+# read rather than by failing.
+ng_job_list <- function(jobs_dir, stale_after_sec = 120, limit = 100L) {
+  empty <- data.frame(id = character(0), label = character(0), created_at = character(0),
+                      state = character(0), n_traits = integer(0), n_done = integer(0),
+                      n_error = integer(0), path = character(0), stringsAsFactors = FALSE)
+  if (!length(jobs_dir) || is.na(jobs_dir) || !dir.exists(jobs_dir)) return(empty)
+  dirs <- list.dirs(jobs_dir, recursive = FALSE, full.names = TRUE)
+  dirs <- dirs[file.exists(file.path(dirs, "job.json"))]
+  if (!length(dirs)) return(empty)
+  dirs <- dirs[order(file.mtime(dirs), decreasing = TRUE)]
+  if (is.finite(limit) && length(dirs) > limit) dirs <- dirs[seq_len(limit)]
+  rows <- lapply(dirs, function(d) {
+    s <- tryCatch(ng_job_status(d, stale_after_sec = stale_after_sec), error = function(e) NULL)
+    if (is.null(s)) return(NULL)
+    data.frame(id = s$id, label = s$label,
+               created_at = if (is.null(s$created_at)) NA_character_ else s$created_at,
+               state = s$state, n_traits = as.integer(s$n_traits),
+               n_done = as.integer(s$n_done), n_error = as.integer(s$n_error),
+               path = d, stringsAsFactors = FALSE)
+  })
+  rows <- rows[!vapply(rows, is.null, logical(1))]
+  if (!length(rows)) return(empty)
+  out <- do.call(rbind, rows)
+  out <- out[order(out$created_at, decreasing = TRUE), , drop = FALSE]
+  rownames(out) <- NULL
+  out
+}
