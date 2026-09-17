@@ -231,6 +231,7 @@ ng_run_cross_prediction_batch <- function(config,
                                           batch_workers = NULL,
                                           memory_budget_bytes = NULL,
                                           job_dir = NULL,
+                                          shared_dir = NULL,
                                           generated_at = NULL,
                                           package_version = NULL) {
   if (!is.list(config)) ng_stop("config must be a list of ng_run_cross_prediction() arguments")
@@ -247,6 +248,18 @@ ng_run_cross_prediction_batch <- function(config,
     ng_job_heartbeat(job_dir)
   }
 
+  # The key is computed on the config EXACTLY AS THE CALLER PASSED IT, before anything
+  # back-fills it with defaults. A caller who calls ng_shared_artifact_key(cfg) themselves --
+  # to check whether a batch would reuse work, as the test below does -- must see the same
+  # key the runner uses internally, or "reuse" would never actually trigger for anyone
+  # checking in advance. Computing it after back-fill would also make the key depend on an
+  # implementation detail (which formals happen to carry non-NULL defaults) rather than on
+  # what was actually asked for -- two callers who mean the same defaults, one by omission
+  # and one by spelling the default out, get different keys either way, but a caller who
+  # queries the key and then calls the batch must agree with itself.
+  if (is.null(shared_dir)) shared_dir <- file.path(output_root, "_shared")
+  key <- ng_shared_artifact_key(config)
+
   # Back-fill every missing formal from the runner's own defaults. ng_cp__build_ctx()
   # match.arg()s every enum, and an ABSENT enum arrives as its whole choices vector rather
   # than as its default -- the same trap tools/run_cross_prediction_json.R documents.
@@ -255,14 +268,22 @@ ng_run_cross_prediction_batch <- function(config,
     config[nm] <- list(tryCatch(eval(fm[[nm]], envir = environment()), error = function(e) NULL))
   }
 
-  # Shared work, once: build, QC, then the trait-independent predict prologue.
-  ctx <- ng_cp__build_ctx(config)
-  ctx <- ng_cp__stage_qc(ctx)
+  # Reuse before recomputing. The key covers every setting the batch spends plus the content
+  # of each input file, so a hit means the artefact was built from exactly this data.
+  reuse_path <- file.path(shared_dir, key, "shared.rds")
+  if (file.exists(reuse_path)) {
+    ctx <- readRDS(reuse_path)
+  } else {
+    ctx <- ng_cp__build_ctx(config)
+    ctx <- ng_cp__stage_qc(ctx)
+  }
   if (identical(ctx$qc$status, "blocker")) {
     ng_stop("QC blocker -- resolve before running a batch: ",
             paste(utils::head(ctx$qc$issues$message, 3L), collapse = "; "))
   }
-  ctx <- ng_ctx_put(ctx, predict_prologue = ng_cp__predict_prologue(ctx))
+  if (is.null(ctx$predict_prologue)) {
+    ctx <- ng_ctx_put(ctx, predict_prologue = ng_cp__predict_prologue(ctx))
+  }
 
   # Default to one job per trait in the direction table -- the case this exists for.
   if (is.null(jobs)) {
@@ -283,10 +304,23 @@ ng_run_cross_prediction_batch <- function(config,
   # Fail before spending hours, not after: validate every job's overrides up front.
   for (j in jobs) invisible(ng_cp__batch_apply_job(ctx, j, output_root))
 
-  shared_dir <- file.path(output_root, "_shared")
-  dir.create(shared_dir, recursive = TRUE, showWarnings = FALSE)
-  shared_path <- file.path(shared_dir, "shared.rds")
-  saveRDS(ctx, shared_path)   # on disk, so a killed batch resumes without redoing QC
+  # On disk, so a killed batch resumes without redoing QC -- and CONTENT-ADDRESSED when a
+  # store is given, so a second batch on the same data reuses it rather than recomputing
+  # quality control, LD pruning and the GRM it has already paid for.
+  # `key` was computed above for the reuse check -- do not recompute it. For an in-memory
+  # genotype matrix that means one serialisation per batch rather than two.
+  art_dir <- ng_shared_artifact_dir(shared_dir, key)
+  shared_path <- file.path(art_dir, "shared.rds")
+  saveRDS(ctx, shared_path)
+  # Record the reference unconditionally: retention has to know who is using an artefact
+  # whether this batch was invoked directly or wrapped as a durable job -- gating it on
+  # job_dir would leave a directly-invoked batch's artefact looking unreferenced and
+  # therefore safe to delete. When this batch IS a job, also drop the pointer beside it so a
+  # killed-and-resumed job can find the artefact it already claimed without recomputing the
+  # key.
+  ref_id <- if (!is.null(job_dir)) basename(job_dir) else basename(output_root)
+  if (!is.null(job_dir)) writeLines(key, file.path(job_dir, "shared_ref"))
+  ng_shared_artifact_reference(shared_dir, key, ref_id)
 
   pro <- ctx$predict_prologue
   per_job <- ng_batch_job_bytes(

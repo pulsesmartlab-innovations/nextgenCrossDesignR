@@ -223,3 +223,62 @@ ng_job_list <- function(jobs_dir, stale_after_sec = 120, limit = 100L) {
   rownames(out) <- NULL
   out
 }
+
+# The content key of the shared artefact for a configuration.
+#
+# Derived from ng_cp__batch_shared_keys -- the list 0.36.0 already refuses to let a job
+# override, precisely because changing one of those settings would invalidate the shared
+# work. That list therefore IS the definition of what the artefact depends on, and the
+# existing test asserting it names only real runner arguments protects this cache too.
+#
+# File inputs are hashed by CONTENT, via tools::md5sum (base R, portable, no dependency).
+# Keying on a path, or a path and a timestamp, would let edited data silently reuse an
+# artefact built from the old data -- wrong numbers with nothing to signal them.
+#
+# In-memory inputs are hashed by SERIALISING them, never by summarising them. str() or
+# dim() would be cheaper and would be a latent disaster: two different genotype matrices of
+# the same shape would hash identically and silently reuse each other's artefact. A cache
+# key must be a function of the content or it is not a cache key.
+#
+# Serialising a large matrix costs a temp file, paid once per batch against recomputing
+# quality control. Callers submitting through the frontend materialise CSVs first anyway, so
+# the path that matters takes the cheap md5sum-of-file branch.
+ng_shared_artifact__digest <- function(x) {
+  f <- tempfile(fileext = ".rds"); on.exit(unlink(f), add = TRUE)
+  saveRDS(x, f, compress = FALSE)   # uncompressed: deterministic bytes, and faster
+  unname(tools::md5sum(f))
+}
+
+ng_shared_artifact_key <- function(config) {
+  parts <- lapply(ng_cp__batch_shared_keys, function(k) {
+    v <- config[[k]]
+    if (is.null(v)) return(paste0(k, "=<null>"))
+    if (is.character(v) && length(v) == 1L && !is.na(v) && file.exists(v)) {
+      return(paste0(k, "=file:", unname(tools::md5sum(v))))
+    }
+    paste0(k, "=obj:", ng_shared_artifact__digest(v))
+  })
+  ng_shared_artifact__digest(paste(unlist(parts), collapse = "\n"))
+}
+
+ng_shared_artifact_dir <- function(shared_dir, key) {
+  d <- file.path(shared_dir, key)
+  dir.create(d, recursive = TRUE, showWarnings = FALSE)
+  d
+}
+
+# Record that a job depends on this artefact, so retention can refuse to delete it.
+ng_shared_artifact_reference <- function(shared_dir, key, job_id) {
+  d <- ng_shared_artifact_dir(shared_dir, key)
+  path <- file.path(d, "meta.json")
+  meta <- if (file.exists(path)) {
+    tryCatch(as.list(jsonlite::fromJSON(path, simplifyVector = TRUE)), error = function(e) list())
+  } else list()
+  meta$schema <- "ng_shared_artifact.v1"
+  meta$key <- key
+  if (is.null(meta$created_at)) meta$created_at <- ng_job__now()
+  meta$referenced_by <- unique(c(as.character(meta$referenced_by %||% character(0)),
+                                 as.character(job_id)))
+  ng_write_json_atomic(meta, path)
+  invisible(path)
+}
