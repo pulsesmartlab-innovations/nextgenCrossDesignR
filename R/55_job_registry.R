@@ -277,8 +277,13 @@ ng_shared_artifact_reference <- function(shared_dir, key, job_id) {
   meta$schema <- "ng_shared_artifact.v1"
   meta$key <- key
   if (is.null(meta$created_at)) meta$created_at <- ng_job__now()
-  meta$referenced_by <- unique(c(as.character(meta$referenced_by %||% character(0)),
-                                 as.character(job_id)))
+  # I(): referenced_by is conceptually plural, and jsonlite's auto_unbox = TRUE renders a
+  # length-1 character vector as a bare JSON string and anything longer as an array. A
+  # consumer -- ng_job_prune() below included -- would then have to handle both shapes and
+  # would break on whichever it had not tested. Pin the array so one artefact and five
+  # artefacts read the same way.
+  meta$referenced_by <- I(unique(c(as.character(meta$referenced_by %||% character(0)),
+                                   as.character(job_id))))
   ng_write_json_atomic(meta, path)
   invisible(path)
 }
@@ -344,7 +349,41 @@ ng_job_prune <- function(jobs_dir, shared_dir = NULL, keep = 20L, stale_after_se
       tryCatch(trimws(readLines(f, warn = FALSE)), error = function(e) character(0))
     })))
     for (d in list.dirs(shared_dir, recursive = FALSE, full.names = TRUE)) {
-      if (!(basename(d) %in% refs)) {
+      # Two independent sources of "somebody is using this", and the artefact survives if
+      # EITHER says so.
+      #
+      # WHICH OPTION AND WHY. The review offered a choice: make meta.json$referenced_by
+      # count, or delete the unconditional ng_shared_artifact_reference() call whose comment
+      # claimed a protection nothing delivered. This takes the first, because the field is
+      # the only record that survives the loss of a job's own shared_ref -- and losing that
+      # file is not hypothetical: the reader directly above deliberately treats an unreadable
+      # shared_ref as referencing nothing, so without this second source a corrupted
+      # reference file would hand a LIVE job's artefact to unlink(recursive = TRUE). Reading
+      # referenced_by makes the two sources independent, which is the entire value of having
+      # written it.
+      #
+      # The entry must name a job DIRECTORY THAT STILL EXISTS. Trusting the list as written
+      # would make every artefact immortal -- ng_shared_artifact_reference() only ever adds
+      # to it, so a key referenced once could never be collected again. Directory existence
+      # is the liveness signal, and it is the same one the job listing rests on.
+      #
+      # WHAT THIS STILL DOES NOT COVER, stated rather than implied: a batch invoked directly
+      # with no job_dir records basename(output_root), which is not a job directory, so its
+      # reference cannot be honoured here. Such a caller is outside the job store -- it gets
+      # its own private shared_dir by default, which this function never sees -- and a direct
+      # caller who deliberately points a batch at the shared store AND prunes it concurrently
+      # is asking two tools to manage the same directory. The comment at the call site in
+      # R/54 now says this instead of claiming a protection it does not have.
+      meta_refs <- tryCatch({
+        f <- file.path(d, "meta.json")
+        if (!file.exists(f)) character(0) else {
+          m <- as.list(jsonlite::fromJSON(f, simplifyVector = TRUE))
+          as.character(m$referenced_by %||% character(0))
+        }
+      }, error = function(e) character(0))
+      held <- basename(d) %in% refs ||
+        any(nzchar(meta_refs) & dir.exists(file.path(jobs_dir, meta_refs)))
+      if (!held) {
         unlink(d, recursive = TRUE, force = TRUE)
         removed <- c(removed, d)
       }
