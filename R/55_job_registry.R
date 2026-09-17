@@ -225,9 +225,13 @@ ng_job_status <- function(job_dir, stale_after_sec = ng_job_stale_after_default)
 #     expensive ng_job_status() calls on jobs that will be discarded.
 #   - Pass 2: call ng_job_status() only on survivors to build the full row.
 ng_job_list <- function(jobs_dir, stale_after_sec = ng_job_stale_after_default, limit = 100L) {
+  # `phase` travels with `state` rather than only through ng_job_status(): the listing IS the
+  # overview a reader polls, and "crashed" there is exactly where a job still inside its
+  # shared setup would be misread. One column answers it without a second call per row.
   empty <- data.frame(id = character(0), label = character(0), created_at = character(0),
-                      state = character(0), n_traits = integer(0), n_done = integer(0),
-                      n_error = integer(0), path = character(0), stringsAsFactors = FALSE)
+                      state = character(0), phase = character(0), n_traits = integer(0),
+                      n_done = integer(0), n_error = integer(0), path = character(0),
+                      stringsAsFactors = FALSE)
   if (!length(jobs_dir) || is.na(jobs_dir) || !dir.exists(jobs_dir)) return(empty)
   dirs <- list.dirs(jobs_dir, recursive = FALSE, full.names = TRUE)
   dirs <- dirs[file.exists(file.path(dirs, "job.json"))]
@@ -258,7 +262,8 @@ ng_job_list <- function(jobs_dir, stale_after_sec = ng_job_stale_after_default, 
     if (is.null(s)) return(NULL)
     data.frame(id = s$id, label = s$label,
                created_at = if (is.null(s$created_at)) NA_character_ else s$created_at,
-               state = s$state, n_traits = as.integer(s$n_traits),
+               state = s$state, phase = as.character(s$phase),
+               n_traits = as.integer(s$n_traits),
                n_done = as.integer(s$n_done), n_error = as.integer(s$n_error),
                path = d, stringsAsFactors = FALSE)
   })

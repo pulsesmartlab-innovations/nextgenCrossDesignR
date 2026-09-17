@@ -94,7 +94,8 @@ real batch. Every genuine job therefore reported `crashed` for its first hours a
 flipped back to `running`. The default stale window is now six hours rather than two
 minutes -- chosen against what a trait in this package actually costs, not as a guess at
 when a process dies -- and the phase answers the question without any timing assumption at
-all.
+all. `ng_job_list()` carries the phase alongside the state, since the listing is the view a
+reader polls and the one where a job still in its shared setup would be misread as dead.
 
 ## Retention that refuses to destroy work
 

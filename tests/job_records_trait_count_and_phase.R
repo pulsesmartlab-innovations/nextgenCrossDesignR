@@ -94,6 +94,13 @@ stopifnot(identical(as.character(s2$phase), "shared_setup"))
 stopifnot(identical(s2$state, "running"))
 stopifnot(ng_job_stale_after_default >= 3600)
 
+# The listing carries it too -- that is the view a reader polls, and the one where a job
+# still inside its shared setup would otherwise be misread as dead.
+lst <- ng_job_list(dirname(job_dir))
+stopifnot("phase" %in% names(lst))
+stopifnot(identical(as.character(lst$phase[lst$id == "job_1"]), "complete"))
+stopifnot(identical(as.character(lst$phase[lst$id == "job_2"]), "shared_setup"))
+
 # A job record written before any phase was recorded still reads, as NA rather than an error:
 # the registry must tolerate a directory written by an older release.
 d3 <- file.path(root, "jobs", "job_3")
