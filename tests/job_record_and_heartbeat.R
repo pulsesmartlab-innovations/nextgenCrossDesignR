@@ -21,18 +21,26 @@ stopifnot(identical(rec$label, "17-trait run"))
 stopifnot(identical(as.integer(rec$n_traits), 17L))
 stopifnot(is.character(rec$id), nzchar(rec$id))
 stopifnot(is.character(rec$created_at), nzchar(rec$created_at))
+created_before <- rec$created_at
 
 # The config travels with the job, so a run is replayable from its own directory rather than
 # from whatever the submitting session happened to still hold.
 stopifnot(file.exists(file.path(job_dir, "config.json")))
 
 # --- state transitions --------------------------------------------------------------------
+# created_at has whole-second resolution (ng_job__now()), so without this sleep a
+# mutant that re-stamps created_at on every mark() could coincidentally match
+# created_before and the identical() check below would pass for the wrong reason.
+Sys.sleep(1.1)
 ng_job_mark(job_dir, "running", list(pid = Sys.getpid()))
 rec <- jsonlite::fromJSON(p, simplifyVector = TRUE)
 stopifnot(identical(rec$state, "running"))
 stopifnot(identical(as.integer(rec$pid), Sys.getpid()))
-# created_at must survive -- it is how a listing orders jobs.
-stopifnot(is.character(rec$created_at), nzchar(rec$created_at))
+# created_at must survive -- it is how a listing orders jobs. Equality against the value
+# captured right after ng_job_create() is what makes this a real assertion: checking only
+# is.character()/nzchar() would pass identically for an implementation that stamped a FRESH
+# timestamp on every mark() call, since a fresh timestamp is also a non-empty string.
+stopifnot(identical(rec$created_at, created_before))
 
 ng_job_mark(job_dir, "finished")
 rec <- jsonlite::fromJSON(p, simplifyVector = TRUE)
