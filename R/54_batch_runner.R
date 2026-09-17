@@ -131,6 +131,7 @@ ng_cp__batch_run_one <- function(job, shared_path, output_root,
   seen <- character(0)
   value <- withCallingHandlers(
     tryCatch({
+      ng_job_trait_status_write(output_root, job$id, "running")
       shared <- get0(".ngcd_batch_shared", envir = globalenv(), inherits = FALSE)
       if (is.null(shared)) shared <- readRDS(shared_path)
       ctx <- ng_cp__batch_apply_job(shared, job, output_root)
@@ -142,6 +143,19 @@ ng_cp__batch_run_one <- function(job, shared_path, output_root,
       result_path <- file.path(job_dir, "result.json")
       ng_write_result_json(env, result_path)
       es <- r$effect_summary
+      summary_fields <- list(
+        cv_predictive_r2 = if (!is.null(es) && "cv_predictive_r2" %in% names(es))
+          as.numeric(es$cv_predictive_r2)[[1L]] else NA_real_,
+        mean_source = if (!is.null(es) && "mean_source" %in% names(es))
+          as.character(es$mean_source)[[1L]] else NA_character_,
+        # The gate verdict needs no new computation -- effect_gate already sits on the
+        # effect_summary row this function reads for cv_predictive_r2 (R/39:1432) -- but it
+        # is a new FIELD, and it is what tells a reader whether a plan rests on markers the
+        # engine would otherwise have refused.
+        effect_gate = if (!is.null(es) && "effect_gate" %in% names(es))
+          as.character(es$effect_gate)[[1L]] else NA_character_,
+        n_selected = if (is.data.frame(r$selected_crosses)) nrow(r$selected_crosses) else NA_integer_)
+      ng_job_trait_status_write(output_root, job$id, "done", summary_fields)
       list(
         status = "ok",
         traits = job$traits,
@@ -153,8 +167,11 @@ ng_cp__batch_run_one <- function(job, shared_path, output_root,
         result_json = result_path,
         output_files = r$output_files
       )
-    }, error = function(e) list(status = "error", traits = job$traits,
-                                error_message = conditionMessage(e))),
+    }, error = function(e) {
+      ng_job_trait_status_write(output_root, job$id, "error",
+                                list(error_message = conditionMessage(e)))
+      list(status = "error", traits = job$traits, error_message = conditionMessage(e))
+    }),
     warning = function(w) { seen <<- c(seen, conditionMessage(w)); invokeRestart("muffleWarning") }
   )
   value$id <- job$id
