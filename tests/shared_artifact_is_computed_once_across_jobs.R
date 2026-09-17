@@ -95,7 +95,14 @@ for (j in b2$jobs) stopifnot(identical(j$status, "ok"))
 stopifnot(file.exists(file.path(root, "out2", "A", "result.json")))
 
 # --- the artefact records who is using it, so retention can be safe ------------------------
-meta <- jsonlite::fromJSON(file.path(shared_dir, k1, "meta.json"), simplifyVector = TRUE)
+# Locate the artefact by listing shared_dir rather than assuming its key is k1: the runner
+# keys on the RESOLVED config (after back-fill), while k1 above was computed directly on the
+# raw cfg as a pure-function stability/safety check, so the two need not be the same string.
+# Asserting there is exactly ONE artefact directory is itself a stronger check than looking
+# up k1 would have been -- it proves the second batch did not create a second artefact.
+artifact_dirs <- list.dirs(shared_dir, recursive = FALSE, full.names = TRUE)
+stopifnot(length(artifact_dirs) == 1L)
+meta <- jsonlite::fromJSON(file.path(artifact_dirs[[1L]], "meta.json"), simplifyVector = TRUE)
 stopifnot(identical(meta$schema, "ng_shared_artifact.v1"))
 stopifnot(length(meta$referenced_by) >= 1L)
 

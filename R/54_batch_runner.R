@@ -248,18 +248,6 @@ ng_run_cross_prediction_batch <- function(config,
     ng_job_heartbeat(job_dir)
   }
 
-  # The key is computed on the config EXACTLY AS THE CALLER PASSED IT, before anything
-  # back-fills it with defaults. A caller who calls ng_shared_artifact_key(cfg) themselves --
-  # to check whether a batch would reuse work, as the test below does -- must see the same
-  # key the runner uses internally, or "reuse" would never actually trigger for anyone
-  # checking in advance. Computing it after back-fill would also make the key depend on an
-  # implementation detail (which formals happen to carry non-NULL defaults) rather than on
-  # what was actually asked for -- two callers who mean the same defaults, one by omission
-  # and one by spelling the default out, get different keys either way, but a caller who
-  # queries the key and then calls the batch must agree with itself.
-  if (is.null(shared_dir)) shared_dir <- file.path(output_root, "_shared")
-  key <- ng_shared_artifact_key(config)
-
   # Back-fill every missing formal from the runner's own defaults. ng_cp__build_ctx()
   # match.arg()s every enum, and an ABSENT enum arrives as its whole choices vector rather
   # than as its default -- the same trap tools/run_cross_prediction_json.R documents.
@@ -267,6 +255,20 @@ ng_run_cross_prediction_batch <- function(config,
   for (nm in setdiff(names(fm), names(config))) {
     config[nm] <- list(tryCatch(eval(fm[[nm]], envir = environment()), error = function(e) NULL))
   }
+
+  # The key is computed on the RESOLVED config, after back-fill -- not on what the caller
+  # happened to type. 14 names in ng_cp__batch_shared_keys carry non-NULL package defaults
+  # (duplicate_threshold, duplicate_maf_min, ld_pruning, ld_window among them), and every one
+  # of those materially changes the artefact. Keying on the pre-back-fill config would mean a
+  # config that OMITS duplicate_threshold gets the same key forever -- so if a future release
+  # changes that default, the stale key would still resolve to an artefact built under the
+  # OLD default, and the batch would silently reuse it instead of rebuilding. Wrong numbers,
+  # no error: the same shape of defect as the mean-source GEBV bug and the 0.36.0 RNG-kind
+  # bug, both of which produced different results from what the caller asked for with
+  # nothing to signal it. The key must describe the settings the artefact was ACTUALLY built
+  # with, and those are the resolved ones.
+  if (is.null(shared_dir)) shared_dir <- file.path(output_root, "_shared")
+  key <- ng_shared_artifact_key(config)
 
   # Reuse before recomputing. The key covers every setting the batch spends plus the content
   # of each input file, so a hit means the artefact was built from exactly this data.
