@@ -12,8 +12,9 @@ batch: seventeen traits, seventeen crossing plans, the trait-independent work do
 It did not make that reachable from the workbench, and the way the workbench runs the
 backend today makes it unreachable in principle.
 
-`ngcd_run_backend()` (`R/run_backend.R:120`) is a blocking `system2()`. R is
-single-threaded, so it freezes the **whole app process** — not the calling session. Every
+`ngcd_run_backend()` (`R/run_backend.R:122`) is a blocking `system2()`, and so is the
+per-stage `ngcd_run_stage()` (`R/run_backend.R:207`) — both call sites, not one. R is
+single-threaded, so either freezes the **whole app process**, not the calling session. Every
 other connected breeder's browser goes quiet for the duration. A batch that runs for hours
 would turn seventeen short freezes into one very long one, which is worse than the manual
 process it replaces.
@@ -51,7 +52,7 @@ overview is a genuine summary rather than a slice.
 ## 1. Job store layout and status contract
 
 ```
-<runs_dir>/jobs/<job_id>/
+<data_dir>/jobs/<job_id>/
 ├── job.json            ng_job.v1 — id, label, created_at, state, pid, n_traits
 ├── heartbeat           mtime, touched by the batch parent
 ├── job.log             stdout + stderr of the detached process
@@ -66,7 +67,7 @@ overview is a genuine summary rather than a slice.
 ```
 
 ```
-<runs_dir>/shared/<content_key>/
+<data_dir>/shared/<content_key>/
 ├── inputs/             the materialised CSVs, stored ONCE and referenced by every job
 ├── shared.rds          QC + predict prologue — cleaned genotypes, LD-pruned markers,
 │                       training-set alignment, pair table, GRM
@@ -96,6 +97,20 @@ written through the atomic `.part`-then-rename path already in the package
 (`ng_write_json_atomic`), because a frontend polling a live directory will otherwise
 eventually parse a half-written file.
 
+### Siblings of `runs_dir`, never inside it
+
+`jobs/` and `shared/` sit beside `runs_dir` under `data_dir` — as `presets_dir` and
+`report_dir` already do (`R/config.R:163`) — and **not** underneath it. This is not
+tidiness. `ngcd_prune_runs()` (`R/run_backend.R:11`) enumerates `list.dirs(cfg$runs_dir)`
+and calls `unlink(..., recursive = TRUE, force = TRUE)` on everything past the newest
+`keep_runs` (default 20). A `jobs/` directory living there would be just another directory
+to it: once a user accumulated twenty runs, prune would **delete the entire job tree and
+the shared artefact store, including a running job**. `ngcd_run_index()`
+(`R/runs.R:69`) would likewise list them as though they were runs.
+
+So `cfg$jobs_dir` and `cfg$shared_dir` are new config entries alongside the existing three,
+and job retention is a separate policy over `jobs_dir` with its own constraints.
+
 ## 1b. The shared artefact is shared ACROSS jobs, not just within one
 
 Quality control, genotype cleaning, duplicate detection, **LD pruning**, the training-set
@@ -106,7 +121,7 @@ different acceptability bar, a re-run after fixing one trait — pays for all of
 and LD pruning over a real marker panel is not cheap.
 
 So the artefact moves out of the job directory and becomes **content-addressed**:
-`<runs_dir>/shared/<content_key>/shared.rds`. A job records which key it used. If a job's
+`<data_dir>/shared/<content_key>/shared.rds`. A job records which key it used. If a job's
 key already exists, it is reused and quality control never runs.
 
 **The key is derived from `ng_cp__batch_shared_keys`.** That list already exists — it is
@@ -166,8 +181,12 @@ the concurrency.
 **Workers persist the summary they already produce.** `ng_cp__batch_run_one()` already
 computes and returns trait, state, `cv_predictive_r2`, mean basis, plan size and error
 message; today they travel back through the daemon socket and nowhere else. It also writes
-them to `<trait>/status.json` — `running` on entry, `done`/`error` on exit. No new data is
-invented; existing data stops being ephemeral.
+them to `<trait>/status.json` — `running` on entry, `done`/`error` on exit.
+
+One field is genuinely added: the **gate verdict** is not in the worker's current return
+value. It is not new *computation* — `effect_gate` already sits on the `effect_summary` row
+the worker reads for `cv_predictive_r2` (`R/39:1432`) — but it is a new field, and saying
+"nothing new is invented" would have been an overstatement.
 
 **A heartbeat, and the caveat it carries.** Workers report their own progress, so the parent
 does not poll for that. But liveness needs someone alive to prove it, and
@@ -204,16 +223,18 @@ job record at all, and "nothing happened" is the worst possible feedback.
 
 **The Jobs tab is a poll over mtimes.** `reactivePoll` with a cheap `checkFunc` reading
 directory mtimes and a `valueFunc` calling `ng_job_list()` — the same mtime-keyed-cache idea
-`R/runs.R:82` already uses for the run browser. Newest first: label, created, state,
+`R/runs.R:81-85` already uses for the run browser. Newest first: label, created, state,
 *k of n done*, elapsed.
 
 **The overview is built from `status.json` only.** Seventeen small files; no `result.json`
 parsed. That is what makes the list cheap enough to poll.
 
-**`res()` is the leverage.** Every downstream Results output reads through one reactive
-(`app.R:2657`) fed by `rv$result` (`app.R:806`). Clicking a trait loads that trait's
-`result.json` into `rv$result`, and every existing Results tab keeps working untouched. The
-lazy-loading change is one chokepoint, not a scattered refactor.
+**`res()` is the leverage.** `res <- shiny::reactive(rv$result)` at `app.R:2652` is read by
+**39 call sites**, and `rv$result` (`app.R:806`) is written at only three
+(`app.R:2206`, `app.R:2613`, plus clears). Clicking a trait loads that trait's `result.json`
+into `rv$result`, and every existing Results tab keeps working untouched. The lazy-loading
+change really is one chokepoint rather than a scattered refactor — 39 readers, one writer to
+change.
 
 **Deliberately no multi-result cache.** Re-reading on switch costs a second or two and
 bounds memory at one result. Caching seventeen puts us back where we started.
@@ -271,6 +292,9 @@ Backend, in the plain-`stopifnot` harness style:
   produces a different key** — the safety half of the cache, and the half whose absence
   would silently return numbers computed from other data
 - a shared artefact is not deleted while a job still references it
+- **`ngcd_prune_runs()` never touches `jobs_dir` or `shared_dir`** — asserted by creating
+  more than `keep_runs` runs alongside a job and confirming the job survives. This guards a
+  destructive failure: the prune path calls `unlink(recursive = TRUE, force = TRUE)`.
 - **the input CSVs exist once on disk no matter how many jobs use them**, asserted by
   counting files under the store rather than by inspecting any single job
 
