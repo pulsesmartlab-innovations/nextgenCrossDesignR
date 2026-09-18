@@ -124,11 +124,26 @@ So the artefact moves out of the job directory and becomes **content-addressed**
 `<data_dir>/shared/<content_key>/shared.rds`. A job records which key it used. If a job's
 key already exists, it is reused and quality control never runs.
 
-**The key is derived from `ng_cp__batch_shared_keys`.** That list already exists — it is
-the set of settings a batch spends, which 0.36.0 refuses to let a job override, precisely
-because changing one would invalidate the shared work. The same list therefore *is* the
-definition of what the artefact depends on, and the existing test asserting the list names
-only real runner arguments now protects the cache as well.
+**The key is derived from `ng_cp__batch_artifact_keys`, a second list beside
+`ng_cp__batch_shared_keys` — not from `ng_cp__batch_shared_keys` itself.** The two sets look
+like the same question and are not. `ng_cp__batch_shared_keys` answers "what may a job not
+override" — the set 0.36.0 refuses to let a job override, because changing one would
+invalidate the shared work. It deliberately *excludes* `traits_to_use`: choosing which
+traits a job scores is the entire reason a job exists.
+
+`ng_cp__batch_artifact_keys` answers a different question — "what does the persisted
+artefact depend on" — and is that set *plus* `traits_to_use`, `trait_weights`,
+`prediction_mode`, `index_col` and `index_direction`. Those five are free for a job to
+override, yet `ng_cp__stage_qc()` bakes them into `trait_spec` (via `ng_run_cp_trait_spec()`
+/ `ng_run_cp_index_spec()`, R/39), and `trait_spec` is one of the fields the artefact
+persists. Keying on `ng_cp__batch_shared_keys` alone would let two batches differing only in
+`traits_to_use` collide on the same key: the second batch would silently reuse the first
+batch's artefact and inherit the *first* batch's traits — run traits A,B then A,C and the
+second batch scores B instead of C, with no error and no warning. That is why the artefact
+set is a deliberate superset rather than a broadened shared-keys list — broadening
+`ng_cp__batch_shared_keys` itself would also make `traits_to_use` unoverridable, which
+breaks the one thing a job is for. The existing test asserting the shared-keys list names
+only real runner arguments now also covers the artefact list.
 
 **Getting this key wrong is the dangerous failure.** A key that omits an input a job
 actually depends on would silently reuse an artefact built from different data — wrong
@@ -291,9 +306,12 @@ Backend, in the plain-`stopifnot` harness style:
 - **a second batch on identical inputs reuses the shared artefact and does not re-run
   quality control or LD pruning** — asserted by counting the calls, the way
   `grm_is_computed_once_per_run.R` counts `ng_parent_kinship`
-- **changing any one setting in `ng_cp__batch_shared_keys`, or one byte of an input file,
+- **changing any one setting in `ng_cp__batch_artifact_keys`, or one byte of an input file,
   produces a different key** — the safety half of the cache, and the half whose absence
-  would silently return numbers computed from other data
+  would silently return numbers computed from other data. This includes `traits_to_use`
+  specifically: two batches differing only in which traits they select must get different
+  keys, or the second silently inherits the first's traits
+  (`shared_artifact_key_covers_the_trait_set.R`)
 - a shared artefact is not deleted while a job still references it
 - **`ngcd_prune_runs()` never touches `jobs_dir` or `shared_dir`** — asserted by creating
   more than `keep_runs` runs alongside a job and confirming the job survives. This guards a
