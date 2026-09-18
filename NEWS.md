@@ -133,6 +133,24 @@ Job timestamps now carry milliseconds. Two jobs submitted in the same second are
 ordinary, and whole-second stamps made a listing tie on `created_at` and fall back to an
 arbitrary order.
 
+## The shared artefact's key now covers the trait set
+
+The content-addressed key was derived from the same list that refuses a per-job override
+(`ng_cp__batch_shared_keys`). That list deliberately excludes `traits_to_use` -- selecting a
+trait is the entire point of a job -- but `traits_to_use`, `trait_weights`,
+`prediction_mode`, `index_col` and `index_direction` all feed `trait_spec` at quality-control
+time, and `trait_spec` is one of the fields the artefact persists. So two batches on the same
+genotypes differing only in `traits_to_use` computed the SAME key, and the second silently
+reused the first's artefact -- inheriting the first batch's trait set. Run traits A,B and
+then A,C, and the second batch scored B instead of C, with no error and no warning.
+
+A second list, `ng_cp__batch_artifact_keys`, now covers what the artefact depends on: the
+override-guard list plus those five settings. The override guard itself is unchanged -- a
+job is still free to override `traits_to_use`.
+
+This means every shared artefact written before this release keys differently now and will
+be recomputed once on first use. That is intended and, for a cache this new, costless.
+
 # nextgenCrossDesign 0.36.0
 
 ## Many single-trait analyses, as one batch

@@ -1,7 +1,10 @@
 # A cache hit must reuse the shared WORK, never the previous batch's SETTINGS.
 #
-# The shared artefact is keyed on ng_cp__batch_shared_keys -- deliberately only the settings
-# quality control and the predict prologue actually spend. Everything else (n_crosses, the
+# The shared artefact is keyed on ng_cp__batch_artifact_keys -- what quality control and the
+# predict prologue actually consume, INCLUDING the settings (traits_to_use, trait_weights,
+# prediction_mode, index_col, index_direction) that feed trait_spec but remain overridable
+# per job; see the comment on ng_shared_artifact_key() in R/55 for why that set is a
+# superset of the override guard, ng_cp__batch_shared_keys. Everything else (n_crosses, the
 # scoring metric, the acceptability bar, the seed, where outputs go) is per-batch and must
 # come from the batch that is running NOW.
 #

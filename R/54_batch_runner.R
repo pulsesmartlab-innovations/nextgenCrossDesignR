@@ -89,6 +89,38 @@ ng_cp__batch_shared_keys <- c(
   "grm_method"
 )
 
+# The content-addressed artefact key must cover MORE than a job may not override.
+#
+# Those look like the same question -- "what has the batch already spent?" -- but they are
+# not. ng_cp__batch_shared_keys answers "what may a job not override", and it deliberately
+# EXCLUDES traits_to_use: choosing which traits a job scores is the entire reason a job
+# exists, and ng_cp__batch_apply_job() subsets ctx$trait_spec per job precisely so a job can
+# override it.
+#
+# ng_shared_artifact_key() (R/55) answers a different question: "what does the persisted
+# artefact depend on". ng_cp__stage_qc() builds trait_spec from direction, traits_to_use and
+# trait_weights (ng_run_cp_trait_spec(), R/39) -- or, under prediction_mode =
+# "index_as_trait", from index_col and index_direction (ng_run_cp_index_spec(), R/39) -- and
+# trait_spec is one of the fields ng_shared_artifact_fields (R/55) persists into the
+# artefact. So the artefact's content depends on all five even though a job may freely
+# override them.
+#
+# Keying the artefact on ng_cp__batch_shared_keys alone -- the bug this set exists to
+# prevent -- would let two batches that differ ONLY in traits_to_use collide on the same
+# key: the second batch would silently reuse the first batch's artefact, inheriting the
+# FIRST batch's trait_spec (and hence its traits) instead of computing its own. No error, no
+# warning -- a crossing plan scored against the wrong traits. Because that failure is
+# artefact-key-shaped, not override-guard-shaped, it needs its own set rather than a
+# broadened ng_cp__batch_shared_keys: broadening the shared-keys set would also make
+# traits_to_use unoverridable, which breaks the one thing a job is for.
+#
+# So there are two sets, deliberately different, and the artefact set is a superset of the
+# override-guard set.
+ng_cp__batch_artifact_keys <- c(
+  ng_cp__batch_shared_keys,
+  "traits_to_use", "trait_weights", "prediction_mode", "index_col", "index_direction"
+)
+
 # Restrict a shared context to one job's traits and apply its overrides.
 ng_cp__batch_apply_job <- function(ctx, job, output_root) {
   overrides <- job$overrides %||% list()

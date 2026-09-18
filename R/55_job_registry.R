@@ -277,10 +277,20 @@ ng_job_list <- function(jobs_dir, stale_after_sec = ng_job_stale_after_default, 
 
 # The content key of the shared artefact for a configuration.
 #
-# Derived from ng_cp__batch_shared_keys -- the list 0.36.0 already refuses to let a job
-# override, precisely because changing one of those settings would invalidate the shared
-# work. That list therefore IS the definition of what the artefact depends on, and the
-# existing test asserting it names only real runner arguments protects this cache too.
+# Derived from ng_cp__batch_artifact_keys (R/54), NOT from ng_cp__batch_shared_keys. The two
+# sets look interchangeable -- both start from "what has the batch already spent" -- but they
+# answer different questions. ng_cp__batch_shared_keys is the override guard: what a job may
+# not change. ng_cp__batch_artifact_keys is a superset that also covers what the PERSISTED
+# ARTEFACT depends on, which includes traits_to_use, trait_weights, prediction_mode,
+# index_col and index_direction -- settings a job is free to override, but which
+# ng_cp__stage_qc() bakes into trait_spec (via ng_run_cp_trait_spec()/ng_run_cp_index_spec(),
+# R/39), and trait_spec is itself one of the fields ng_shared_artifact_fields persists below.
+#
+# Keying on ng_cp__batch_shared_keys alone would let two batches differing only in
+# traits_to_use collide on one key, so the second would silently reuse the first's artefact
+# and inherit the FIRST batch's traits. See the comment on ng_cp__batch_artifact_keys in
+# R/54 for the full argument; the existing test asserting the shared-keys list names only
+# real runner arguments now also covers this artefact set.
 #
 # File inputs are hashed by CONTENT, via tools::md5sum (base R, portable, no dependency).
 # Keying on a path, or a path and a timestamp, would let edited data silently reuse an
@@ -301,7 +311,7 @@ ng_shared_artifact__digest <- function(x) {
 }
 
 ng_shared_artifact_key <- function(config) {
-  parts <- lapply(ng_cp__batch_shared_keys, function(k) {
+  parts <- lapply(ng_cp__batch_artifact_keys, function(k) {
     v <- config[[k]]
     if (is.null(v)) return(paste0(k, "=<null>"))
     if (is.character(v) && length(v) == 1L && !is.na(v) && file.exists(v)) {
