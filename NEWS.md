@@ -1,3 +1,28 @@
+# nextgenCrossDesign 0.37.1
+
+## A parallel batch failed on every installed copy of the package
+
+`ng_run_cross_prediction_batch()` with `batch_workers >= 2` returned "no batch configuration
+reached the worker" for every job, on every production install -- the only place batch
+parallelism is ever used. `ng_cp__batch_dispatch()` sets up each `mirai` daemon with an
+`everywhere()` block, which evaluates in the daemon's own global environment. On the
+installed path that block calls `library(nextgenCrossDesign)`, which attaches only exported
+functions, and then calls `ng_shared_artifact_read()`, which is internal. The setup call
+errored, so `.ngcd_batch_artifact` and `.ngcd_batch_config` were never assigned in any
+daemon, and every job then failed the same way. On the dev path this was invisible:
+`ng_load()` sources every internal into the global environment it runs in, so the same call
+resolved there without incident.
+
+That asymmetry is also why the regression shipped: all eight batch tests lived under
+`tests/*.R`, which loads the source tree via `ng_load()` and so cannot see a defect that
+exists only when the package is installed. `tests/testthat/`, which runs against the
+installed package under `R CMD check`, had no batch-parallel coverage at all. The fix
+resolves `ng_shared_artifact_read` from the package namespace directly when running
+installed, and from the daemon's global environment (populated by `ng_load()`) on the dev
+path. `tests/testthat/test-batch-parallel-installed.R` now runs a small two-worker batch
+against the installed package and is the one place this class of defect would be caught
+before release.
+
 # nextgenCrossDesign 0.37.0
 
 ## A batch can be submitted and left running
