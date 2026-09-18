@@ -1,3 +1,156 @@
+# nextgenCrossDesign 0.37.0
+
+## A batch can be submitted and left running
+
+0.36.0 made a 17-trait batch computable. This makes one durable. A job is a directory that
+outlives the process which ran it: the configuration it was given, a record of the job, and
+one small status file per trait, written as that trait starts and again as it finishes. A
+reader can see which traits are done, which failed, and which are still running -- without
+opening the results themselves, which for seventeen traits would mean parsing seventeen
+files of ~125,000 candidate crosses each.
+
+`ng_job_status()` derives the two states nothing can write. A worker writes "running" on
+entry; if it dies, it cannot write its own epitaph, and if the batch parent died too, nobody
+reconciles it. So `crashed` is derived from a stale heartbeat, and a trait still claiming to
+run under a job that is not is reported as `incomplete`. Both rules live in one function, so
+a frontend cannot reimplement them and drift -- the drift would surface as a breeder acting
+on a plan that was never finished.
+
+Liveness is heartbeat staleness rather than a pid check, because pid liveness means `ps` on
+Unix and `tasklist` on Windows and this package must behave identically on both. The pid is
+recorded for a human debugging afterwards, never for the decision.
+
+The headless entry point (`tools/run_cross_prediction_json.R`) now accepts `job_dir`,
+`shared_dir` and `resume` alongside `workflow = "batch"`, and writes the job record BEFORE
+doing anything expensive. A frontend spawns this process detached and then looks for
+`job.json`; if the backend cannot load or the config is bad, a job that never wrote a record
+is indistinguishable from one that was never launched, and "nothing happened" is the worst
+possible feedback for a run expected to take hours. A job that cannot run is marked `failed`
+rather than vanishing. `ng_job_create()`, `ng_job_status()`, `ng_job_list()` and
+`ng_job_prune()` are now part of the package's public API.
+
+## The same data is processed once, across jobs
+
+Quality control, cleaning, duplicate detection, LD pruning, the training-set alignment, the
+pair table and the GRM depend only on the genotypes, the map and the settings that govern
+them. 0.36.0 computed them once per batch; a breeder submitting a second batch on the same
+data paid for all of it again.
+
+The artefact is now content-addressed, keyed off the list of settings a batch spends -- the
+same list that refuses per-job overrides, because changing one invalidates the shared work.
+Input files are hashed by content: keying on a path, or a path and a timestamp, would let
+edited data silently reuse an artefact built from the old data.
+
+## Resume
+
+`resume = TRUE` re-runs only the traits that did not finish, without recomputing quality
+control. Failure isolation said one bad trait does not cost the other sixteen; this is the
+other half of that answer.
+
+## One shape for the manifest, regardless of how the batch ran
+
+`manifest.json`'s `jobs` field was a JSON ARRAY at `batch_workers = 2` and a JSON OBJECT
+keyed by trait at `batch_workers = 1`, because the serial dispatch path preserved the R
+list-names `lapply()` carries over from a named `jobs` list while the mirai path did not. A
+consumer of this file -- and the next round of work is a frontend reading exactly this file
+-- would have had to handle both shapes and would break on whichever it had not tested.
+`ng_cp__batch_dispatch()` now returns an unnamed list on every path, nothing downstream ever
+re-introduces a name, and the shape is decided in exactly one place: nowhere, by
+construction, rather than normalised after the fact in two places that did not agree.
+
+A resumed trait's `output_files` -- the workbook path a reader needs to find the deliverable
+-- used to vanish from the manifest, because a carried-forward entry is rebuilt from
+`status.json` and that file never recorded `output_files` in the first place. Resuming a
+job silently dropped the workbook path for every already-finished trait even though the file
+was on disk. `output_files` is now written to `status.json` on a trait's "done" record, so a
+carried-forward entry can reproduce it exactly.
+
+## The artefact carries what it computed, never what the caller asked for
+
+The shared artefact was the whole run context, and that context IS the configuration --
+`ng_cp__build_ctx()` starts from the config and adds derived fields to it. Since the cache
+key deliberately covers only the settings quality control and the marker-effect prologue
+actually spend, restoring the context restored every OTHER setting too. A second batch on
+the same data asking for nine crosses ranked on the mid-parent mean got the first batch's
+three crosses ranked on usefulness. Nothing errored. That is the exact scenario this feature
+was built for, answered with numbers the breeder did not ask for.
+
+The artefact now persists only the fields quality control and the prologue produce, behind a
+schema version; an artefact written under a schema this release does not recognise is
+recomputed rather than trusted. Parent and worker assemble their context through one
+function, from the running batch's own configuration.
+
+## A job says what it is doing, and how many traits it is for
+
+`n_traits` was never recorded on the real path, so `ng_job_status()` fell back to counting
+the status files that existed and the denominator GREW as workers started -- "k of n done"
+was underivable from the one view it exists for. The batch parent, which is the only process
+that knows the count before any worker writes anything, now records it.
+
+`job.json` also carries a `phase`. The parent beats the heartbeat once and then runs quality
+control, the duplicate scan, LD pruning and the GRM before dispatching anything, and R is
+single-threaded, so nothing can touch the heartbeat during the most expensive phase of a
+real batch. Every genuine job therefore reported `crashed` for its first hours and then
+flipped back to `running`. The default stale window is now six hours rather than two
+minutes -- chosen against what a trait in this package actually costs, not as a guess at
+when a process dies -- and the phase answers the question without any timing assumption at
+all. `ng_job_list()` carries the phase alongside the state, since the listing is the view a
+reader polls and the one where a job still in its shared setup would be misread as dead.
+
+## Retention that refuses to destroy work
+
+`ng_job_prune()` never removes a running job, however old, and never removes a shared
+artefact any surviving job still references. `meta.json`'s `referenced_by` list is now READ
+as well as written: an artefact survives if a surviving job's `shared_ref` names it OR if
+`meta.json` names a job directory that still exists. The two sources are independent, which
+matters because the `shared_ref` reader deliberately fails closed -- without the second
+source, one corrupted reference file would hand a live job's shared work to a recursive
+delete.
+
+## A job that cannot run ends, and a job that runs can be read
+
+A configuration error in the headless entry left the job at `queued` forever: the validation
+ran after the job record was created but outside the handler that marks a job `failed`, and
+`queued` is a state nothing reinterprets, nothing prunes, and no exported function can
+clear. Such a job is now marked `failed`, with the message.
+
+`job_dir` and `batch_output_root` were silently decoupled -- workers write each trait's
+status file under the output root while `ng_job_status()` reads them from the job directory
+-- so a caller who passed only `job_dir` got a job whose traits were permanently invisible.
+The output root now follows `job_dir`, and a mismatch is refused with an explanation rather
+than producing that job.
+
+## Plural JSON fields keep one shape
+
+`auto_unbox = TRUE` renders a length-1 vector as a bare scalar, so `manifest.json`'s
+`jobs[].traits` was a string for a one-trait job (the default) and an array for a two-trait
+one; a result envelope's `warnings` did the same at one warning versus two, and so did
+`meta.json`'s `referenced_by`. Same class as the `jobs` field fixed above, and the same
+answer: the conceptually-plural fields are pinned as arrays and asserted against what lands
+on disk.
+
+Job timestamps now carry milliseconds. Two jobs submitted in the same second are entirely
+ordinary, and whole-second stamps made a listing tie on `created_at` and fall back to an
+arbitrary order.
+
+## The shared artefact's key now covers the trait set
+
+The content-addressed key was derived from the same list that refuses a per-job override
+(`ng_cp__batch_shared_keys`). That list deliberately excludes `traits_to_use` -- selecting a
+trait is the entire point of a job -- but `traits_to_use`, `trait_weights`,
+`prediction_mode`, `index_col` and `index_direction` all feed `trait_spec` at quality-control
+time, and `trait_spec` is one of the fields the artefact persists. So two batches on the same
+genotypes differing only in `traits_to_use` computed the SAME key, and the second silently
+reused the first's artefact -- inheriting the first batch's trait set. Run traits A,B and
+then A,C, and the second batch scored B instead of C, with no error and no warning.
+
+A second list, `ng_cp__batch_artifact_keys`, now covers what the artefact depends on: the
+override-guard list plus those five settings. The override guard itself is unchanged -- a
+job is still free to override `traits_to_use`.
+
+This means every shared artefact written before this release keys differently now and will
+be recomputed once on first use. That is intended and, for a cache this new, costless.
+
 # nextgenCrossDesign 0.36.0
 
 ## Many single-trait analyses, as one batch

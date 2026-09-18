@@ -54,7 +54,10 @@ ng_run_result_envelope <- function(r, warnings = character(0), generated_at = NU
     candidate_crosses = r$candidate_crosses,
     selected_crosses  = r$selected_crosses,
     ld_pruning_report = r$ld_pruning_report,
-    warnings          = warnings,
+    # Same pinning as the manifest's plural fields: one warning is an array of one, not a
+    # bare string. The frontend renders this list, and a list that is sometimes a string is a
+    # bug waiting for the first single-warning run.
+    warnings          = I(as.character(warnings)),
     output_files      = r$output_files
   )
 }
@@ -84,6 +87,38 @@ ng_cp__batch_shared_keys <- c(
   "ld_backend", "training_genotype", "training_phenotype", "training_genotype_file",
   "training_phenotype_file", "training_genotype_id_col", "training_phenotype_id_col",
   "grm_method"
+)
+
+# The content-addressed artefact key must cover MORE than a job may not override.
+#
+# Those look like the same question -- "what has the batch already spent?" -- but they are
+# not. ng_cp__batch_shared_keys answers "what may a job not override", and it deliberately
+# EXCLUDES traits_to_use: choosing which traits a job scores is the entire reason a job
+# exists, and ng_cp__batch_apply_job() subsets ctx$trait_spec per job precisely so a job can
+# override it.
+#
+# ng_shared_artifact_key() (R/55) answers a different question: "what does the persisted
+# artefact depend on". ng_cp__stage_qc() builds trait_spec from direction, traits_to_use and
+# trait_weights (ng_run_cp_trait_spec(), R/39) -- or, under prediction_mode =
+# "index_as_trait", from index_col and index_direction (ng_run_cp_index_spec(), R/39) -- and
+# trait_spec is one of the fields ng_shared_artifact_fields (R/55) persists into the
+# artefact. So the artefact's content depends on all five even though a job may freely
+# override them.
+#
+# Keying the artefact on ng_cp__batch_shared_keys alone -- the bug this set exists to
+# prevent -- would let two batches that differ ONLY in traits_to_use collide on the same
+# key: the second batch would silently reuse the first batch's artefact, inheriting the
+# FIRST batch's trait_spec (and hence its traits) instead of computing its own. No error, no
+# warning -- a crossing plan scored against the wrong traits. Because that failure is
+# artefact-key-shaped, not override-guard-shaped, it needs its own set rather than a
+# broadened ng_cp__batch_shared_keys: broadening the shared-keys set would also make
+# traits_to_use unoverridable, which breaks the one thing a job is for.
+#
+# So there are two sets, deliberately different, and the artefact set is a superset of the
+# override-guard set.
+ng_cp__batch_artifact_keys <- c(
+  ng_cp__batch_shared_keys,
+  "traits_to_use", "trait_weights", "prediction_mode", "index_col", "index_direction"
 )
 
 # Restrict a shared context to one job's traits and apply its overrides.
@@ -126,14 +161,34 @@ ng_cp__batch_apply_job <- function(ctx, job, output_root) {
 # serialised back through the daemon socket for no reason, when each has already written
 # itself to disk.
 ng_cp__batch_run_one <- function(job, shared_path, output_root,
-                                 generated_at = NULL, package_version = NULL) {
+                                 generated_at = NULL, package_version = NULL,
+                                 config = NULL) {
   t0 <- Sys.time()
   seen <- character(0)
   value <- withCallingHandlers(
     tryCatch({
-      shared <- get0(".ngcd_batch_shared", envir = globalenv(), inherits = FALSE)
-      if (is.null(shared)) shared <- readRDS(shared_path)
-      ctx <- ng_cp__batch_apply_job(shared, job, output_root)
+      ng_job_trait_status_write(output_root, job$id, "running")
+      # Rebuild the context the same way the parent does: THIS batch's config, with the
+      # artefact's shared work laid over it. The artefact is never the config -- see the
+      # comment on ng_shared_artifact_fields in R/55. The expensive half (a genotype matrix
+      # and a GRM) is cached per DAEMON by the everywhere() block below; ng_cp__build_ctx()
+      # is match.arg() bookkeeping and is cheap enough to redo per job, which is what keeps
+      # it inside this withCallingHandlers -- a warning raised here reaches the breeder
+      # attributed to the trait rather than dying unheard in a daemon.
+      fields <- get0(".ngcd_batch_artifact", envir = globalenv(), inherits = FALSE)
+      if (is.null(fields)) {
+        fields <- ng_shared_artifact_read(shared_path)
+        if (is.null(fields)) {
+          ng_stop("the shared artefact at ", shared_path, " is missing, unreadable, or was ",
+                  "written by a different version of this package. Re-run the batch without ",
+                  "resume so quality control is recomputed.")
+        }
+      }
+      cfg <- get0(".ngcd_batch_config", envir = globalenv(), inherits = FALSE)
+      if (is.null(cfg)) cfg <- config
+      if (is.null(cfg)) ng_stop("no batch configuration reached the worker for job '", job$id, "'")
+      ctx <- ng_cp__batch_ctx(cfg, fields)
+      ctx <- ng_cp__batch_apply_job(ctx, job, output_root)
       for (s in setdiff(ng_cp_stage_order(), "qc")) ctx <- ng_cp_pipeline[[s]](ctx)
       r <- ng_cp__assemble_result(ctx)
       job_dir <- file.path(output_root, job$id)
@@ -142,6 +197,26 @@ ng_cp__batch_run_one <- function(job, shared_path, output_root,
       result_path <- file.path(job_dir, "result.json")
       ng_write_result_json(env, result_path)
       es <- r$effect_summary
+      summary_fields <- list(
+        cv_predictive_r2 = if (!is.null(es) && "cv_predictive_r2" %in% names(es))
+          as.numeric(es$cv_predictive_r2)[[1L]] else NA_real_,
+        mean_source = if (!is.null(es) && "mean_source" %in% names(es))
+          as.character(es$mean_source)[[1L]] else NA_character_,
+        # The gate verdict needs no new computation -- effect_gate already sits on the
+        # effect_summary row this function reads for cv_predictive_r2 (R/39:1432) -- but it
+        # is a new FIELD, and it is what tells a reader whether a plan rests on markers the
+        # engine would otherwise have refused.
+        effect_gate = if (!is.null(es) && "effect_gate" %in% names(es))
+          as.character(es$effect_gate)[[1L]] else NA_character_,
+        n_selected = if (is.data.frame(r$selected_crosses)) nrow(r$selected_crosses) else NA_integer_,
+        # Recorded here so a RESUMED job can reproduce it (see the carried-forward branch of
+        # ng_run_cross_prediction_batch()). Without this, output_files exists only on a job's
+        # in-memory return value -- fine for a run that finishes in one process, but a
+        # carried-forward entry is rebuilt from THIS FILE, and a manifest is how a consumer
+        # finds the deliverable. Losing it here means resuming a job silently drops the
+        # workbook path for every already-finished trait, even though the file is on disk.
+        output_files = r$output_files)
+      ng_job_trait_status_write(output_root, job$id, "done", summary_fields)
       list(
         status = "ok",
         traits = job$traits,
@@ -153,8 +228,11 @@ ng_cp__batch_run_one <- function(job, shared_path, output_root,
         result_json = result_path,
         output_files = r$output_files
       )
-    }, error = function(e) list(status = "error", traits = job$traits,
-                                error_message = conditionMessage(e))),
+    }, error = function(e) {
+      ng_job_trait_status_write(output_root, job$id, "error",
+                                list(error_message = conditionMessage(e)))
+      list(status = "error", traits = job$traits, error_message = conditionMessage(e))
+    }),
     warning = function(w) { seen <<- c(seen, conditionMessage(w)); invokeRestart("muffleWarning") }
   )
   value$id <- job$id
@@ -206,19 +284,35 @@ ng_write_json_atomic <- function(x, path) {
 # mirai::everywhere(expr, ...) injects its named arguments into the expression at daemon
 # evaluation time, so codetools cannot see those bindings any more than it can see the ones
 # list2env() creates for the ng_cp__* stages. Same convention, declared here beside its use.
-utils::globalVariables(c(".root", ".shared", ".use_cpp", ".rng"))
+utils::globalVariables(c(".root", ".shared", ".use_cpp", ".rng", ".config"))
 
 ng_run_cross_prediction_batch <- function(config,
                                           jobs = NULL,
                                           output_root,
                                           batch_workers = NULL,
                                           memory_budget_bytes = NULL,
+                                          job_dir = NULL,
+                                          shared_dir = NULL,
                                           generated_at = NULL,
-                                          package_version = NULL) {
+                                          package_version = NULL,
+                                          resume = FALSE) {
   if (!is.list(config)) ng_stop("config must be a list of ng_run_cross_prediction() arguments")
   if (!length(output_root) || !nzchar(output_root)) ng_stop("output_root is required")
   dir.create(output_root, recursive = TRUE, showWarnings = FALSE)
   if (is.null(generated_at)) generated_at <- format(Sys.time(), "%Y-%m-%dT%H:%M:%S%z")
+
+  # When a job directory is given, this batch IS a job: it says so before the expensive work
+  # starts, and says how it ended. Without one the function behaves exactly as in 0.36.0, so
+  # a direct caller pays nothing for machinery it is not using.
+  if (!is.null(job_dir)) {
+    if (!file.exists(file.path(job_dir, "job.json"))) ng_job_create(job_dir, config = NULL)
+    # `phase` is what a reader needs to tell "still doing shared setup" from "dead". R is
+    # single-threaded, so nothing can beat the heartbeat while quality control, the duplicate
+    # scan, LD pruning and the GRM run -- the most expensive phase on a real panel -- and a
+    # reader with only a heartbeat mtime has to guess. See ng_job_stale_after_default.
+    ng_job_mark(job_dir, "running", list(pid = Sys.getpid(), phase = "shared_setup"))
+    ng_job_heartbeat(job_dir)
+  }
 
   # Back-fill every missing formal from the runner's own defaults. ng_cp__build_ctx()
   # match.arg()s every enum, and an ABSENT enum arrives as its whole choices vector rather
@@ -228,14 +322,43 @@ ng_run_cross_prediction_batch <- function(config,
     config[nm] <- list(tryCatch(eval(fm[[nm]], envir = environment()), error = function(e) NULL))
   }
 
-  # Shared work, once: build, QC, then the trait-independent predict prologue.
-  ctx <- ng_cp__build_ctx(config)
-  ctx <- ng_cp__stage_qc(ctx)
+  # The key is computed on the RESOLVED config, after back-fill -- not on what the caller
+  # happened to type. 14 names in ng_cp__batch_shared_keys carry non-NULL package defaults
+  # (duplicate_threshold, duplicate_maf_min, ld_pruning, ld_window among them), and every one
+  # of those materially changes the artefact. Keying on the pre-back-fill config would mean a
+  # config that OMITS duplicate_threshold gets the same key forever -- so if a future release
+  # changes that default, the stale key would still resolve to an artefact built under the
+  # OLD default, and the batch would silently reuse it instead of rebuilding. Wrong numbers,
+  # no error: the same shape of defect as the mean-source GEBV bug and the 0.36.0 RNG-kind
+  # bug, both of which produced different results from what the caller asked for with
+  # nothing to signal it. The key must describe the settings the artefact was ACTUALLY built
+  # with, and those are the resolved ones.
+  if (is.null(shared_dir)) shared_dir <- file.path(output_root, "_shared")
+  key <- ng_shared_artifact_key(config)
+
+  # Reuse before recomputing. The key covers every setting the batch spends plus the content
+  # of each input file, so a hit means the SHARED WORK was built from exactly this data.
+  #
+  # A hit reuses that work and nothing else. ng_cp__batch_ctx() builds a fresh context from
+  # THIS batch's config and lays only the artefact-owned fields over it, so n_crosses, the
+  # scoring metric, the acceptability bar, the seed and every other per-batch setting come
+  # from the caller who is running now -- see ng_shared_artifact_fields in R/55 for why that
+  # distinction is the difference between a cache and a silent wrong answer.
+  reuse_path <- file.path(shared_dir, key, "shared.rds")
+  artifact <- ng_shared_artifact_read(reuse_path)
+  if (!is.null(artifact)) {
+    ctx <- ng_cp__batch_ctx(config, artifact)
+  } else {
+    ctx <- ng_cp__build_ctx(config)
+    ctx <- ng_cp__stage_qc(ctx)
+  }
   if (identical(ctx$qc$status, "blocker")) {
     ng_stop("QC blocker -- resolve before running a batch: ",
             paste(utils::head(ctx$qc$issues$message, 3L), collapse = "; "))
   }
-  ctx <- ng_ctx_put(ctx, predict_prologue = ng_cp__predict_prologue(ctx))
+  if (is.null(ctx$predict_prologue)) {
+    ctx <- ng_ctx_put(ctx, predict_prologue = ng_cp__predict_prologue(ctx))
+  }
 
   # Default to one job per trait in the direction table -- the case this exists for.
   if (is.null(jobs)) {
@@ -256,10 +379,45 @@ ng_run_cross_prediction_batch <- function(config,
   # Fail before spending hours, not after: validate every job's overrides up front.
   for (j in jobs) invisible(ng_cp__batch_apply_job(ctx, j, output_root))
 
-  shared_dir <- file.path(output_root, "_shared")
-  dir.create(shared_dir, recursive = TRUE, showWarnings = FALSE)
-  shared_path <- file.path(shared_dir, "shared.rds")
-  saveRDS(ctx, shared_path)   # on disk, so a killed batch resumes without redoing QC
+  # On disk, so a killed batch resumes without redoing QC -- and CONTENT-ADDRESSED when a
+  # store is given, so a second batch on the same data reuses it rather than recomputing
+  # quality control, LD pruning and the GRM it has already paid for.
+  # `key` was computed above for the reuse check -- do not recompute it. For an in-memory
+  # genotype matrix that means one serialisation per batch rather than two.
+  art_dir <- ng_shared_artifact_dir(shared_dir, key)
+  shared_path <- file.path(art_dir, "shared.rds")
+  # Only on a miss. Rewriting an artefact a concurrent batch may be reading buys nothing --
+  # the content is a function of the key -- and a schema-rejected artefact is rebuilt here,
+  # which is the one case where the existing file must be replaced.
+  if (is.null(artifact)) ng_shared_artifact_write(ctx, shared_path)
+  # Record the reference unconditionally, and be exact about what that buys.
+  #
+  # ng_job_prune() reads meta.json$referenced_by and honours any entry naming a job directory
+  # that still exists, so for a batch running AS A JOB this is a genuine second source of
+  # protection, independent of the job's own shared_ref file (which prune deliberately treats
+  # as referencing nothing when it cannot be read). For a batch invoked DIRECTLY there is no
+  # job directory, so what gets recorded here is basename(output_root) and prune cannot
+  # honour it -- that caller is outside the job store, gets its own private shared_dir by
+  # default, and is not something retention over jobs_dir can reason about. The entry is
+  # still written because it is the only provenance record of who built the artefact.
+  #
+  # When this batch IS a job, also drop the pointer beside it so a killed-and-resumed job can
+  # find the artefact it already claimed without recomputing the key.
+  ref_id <- if (!is.null(job_dir)) basename(job_dir) else basename(output_root)
+  if (!is.null(job_dir)) writeLines(key, file.path(job_dir, "shared_ref"))
+  ng_shared_artifact_reference(shared_dir, key, ref_id)
+
+  # The job now knows how many traits it is for. Without this, ng_job_status() falls back to
+  # counting the status files that exist, so the DENOMINATOR grows as workers start and
+  # "k of n done" is underivable -- the one number the overview exists to show. The parent is
+  # the only place that knows length(jobs) before any worker has written anything.
+  #
+  # Marked together with the phase change, so the transition out of shared setup and the
+  # trait count reach job.json in one atomic write.
+  if (!is.null(job_dir)) {
+    ng_job_mark(job_dir, "running",
+                list(n_traits = length(jobs), phase = "scoring"))
+  }
 
   pro <- ctx$predict_prologue
   per_job <- ng_batch_job_bytes(
@@ -273,8 +431,55 @@ ng_run_cross_prediction_batch <- function(config,
   workers <- min(as.integer(batch_workers), length(jobs))
   basis <- attr(batch_workers, "basis")
 
-  results <- ng_cp__batch_dispatch(jobs, workers, shared_path, output_root,
-                                   generated_at, package_version, use_cpp = ctx$use_cpp)
+  # Resuming finishes a job rather than restarting it. A batch may have run for hours, so
+  # re-running the traits that already succeeded is its own kind of loss. A trait counts as
+  # finished only when its own status.json says "done" -- an "error" (or "running", from a
+  # dead worker) must be re-run, because skipping it is exactly the loss resume exists to
+  # avoid.
+  carried <- list()
+  run_jobs <- jobs
+  if (isTRUE(resume)) {
+    done_of <- function(id) {
+      f <- file.path(output_root, id, "status.json")
+      if (!file.exists(f)) return(FALSE)
+      st <- tryCatch(jsonlite::fromJSON(f, simplifyVector = TRUE), error = function(e) NULL)
+      identical(st$state, "done")
+    }
+    keep <- !vapply(names(jobs), done_of, logical(1))
+    carried <- lapply(names(jobs)[!keep], function(id) {
+      st <- jsonlite::fromJSON(file.path(output_root, id, "status.json"), simplifyVector = TRUE)
+      list(id = id, traits = jobs[[id]]$traits, status = "ok",
+           cv_predictive_r2 = as.numeric(st$cv_predictive_r2 %||% NA_real_),
+           mean_source = as.character(st$mean_source %||% NA_character_),
+           n_selected = as.integer(st$n_selected %||% NA_integer_),
+           result_json = file.path(output_root, id, "result.json"),
+           # FIX B: output_files is what a reader needs to FIND the deliverable, and a
+           # carried entry (built here, not by a fresh run) can only reproduce it because
+           # ng_cp__batch_run_one() now records it in status.json on the "done" write.
+           output_files = st$output_files,
+           warnings = character(0), elapsed_sec = NA_real_, resumed = TRUE)
+    })
+    # No names(carried) <- ...: an R list-name here was never load-bearing (every element
+    # already carries its own $id, which is what the ordering below and every caller key on)
+    # and naming it would re-introduce exactly the shape inconsistency ng_cp__batch_dispatch()
+    # was just fixed to stop producing. One place decides whether `results` is named --
+    # nowhere -- rather than a dispatch-shape fix here being undone a few lines later.
+    run_jobs <- jobs[keep]
+  }
+
+  results <- if (!length(run_jobs)) list() else
+    ng_cp__batch_dispatch(run_jobs, min(workers, length(run_jobs)), shared_path, output_root,
+                          generated_at, package_version, use_cpp = ctx$use_cpp,
+                          job_dir = job_dir, config = config)
+  # The manifest describes the whole job. A resumed batch that listed only the traits it
+  # re-ran would misrepresent what the breeder actually has on disk.
+  results <- c(results, carried)
+  # Order by each result's own $id, never by the list's R names(): ng_cp__batch_dispatch()
+  # now always returns an unnamed list and `carried` is never named either (see above), but
+  # ordering by $id keeps this correct even if that ever changes -- every result, carried or
+  # freshly dispatched, always carries its own trait id.
+  results <- results[order(match(
+    vapply(results, function(r) as.character(r$id), character(1)), names(jobs)))]
 
   # Re-emit what the workers could only return. Attributed to the trait, because an
   # unattributed advisory in a 17-job batch tells the breeder nothing actionable.
@@ -295,10 +500,37 @@ ng_run_cross_prediction_batch <- function(config,
     per_job_bytes_estimate = per_job,
     jobs = lapply(results, function(r) {
       r$warnings <- NULL
+      # I(): `traits` is conceptually plural and jsonlite's auto_unbox = TRUE renders a
+      # length-1 character vector as a bare JSON string. A one-trait job's manifest entry
+      # therefore read {"traits": "YIELD"} and a two-trait job's {"traits": ["A","B"]} -- the
+      # same defect this file's `jobs` field was already fixed for, one level down. A
+      # consumer would have to handle both shapes and would break on whichever it had not
+      # tested, and the default batch is ONE trait per job, so the string form is the common
+      # case and the array form the surprise. Applied here, at the serialisation boundary,
+      # rather than on `results`: the R return value is indexed by callers and must keep its
+      # ordinary character vectors.
+      r$traits <- I(as.character(r$traits))
       r
     })
   )
   manifest_path <- ng_write_json_atomic(manifest, file.path(output_root, "manifest.json"))
+
+  if (!is.null(job_dir)) {
+    any_failed <- any(vapply(results, function(r) identical(r$status, "error"), logical(1)))
+    # "finished" means the BATCH completed, not that every trait succeeded -- a failed trait
+    # is recorded per trait, and marking the whole job failed would hide sixteen good plans
+    # behind one bad one.
+    # phase is left meaningful at rest too: "complete" rather than a stale "scoring", so a
+    # reader never has to cross-check it against state to know it is out of date. A FAILED
+    # job keeps whichever phase it died in -- that is the diagnostic.
+    ng_job_mark(job_dir, "finished", list(n_ok = sum(!vapply(
+      results, function(r) identical(r$status, "error"), logical(1))),
+      any_failed = any_failed, phase = "complete"))
+  }
+
+  # `results` is unnamed by construction (see ng_cp__batch_dispatch() and the carried-forward
+  # comment above), so there is nothing to normalise here. Callers index this list by each
+  # element's own $id field (see by_id() in the batch test suite), never by R list-name.
   structure(list(manifest = manifest, manifest_path = manifest_path, jobs = results),
             class = c("ng_cross_prediction_batch", "list"))
 }
@@ -312,14 +544,27 @@ ng_run_cross_prediction_batch <- function(config,
 # only the failures need re-running. At hours per job its dispatch cost is irrelevant --
 # what it buys here is isolation and uniformity, not speed.
 ng_cp__batch_dispatch <- function(jobs, workers, shared_path, output_root,
-                                  generated_at, package_version, use_cpp = FALSE) {
+                                  generated_at, package_version, use_cpp = FALSE,
+                                  job_dir = NULL, config = NULL) {
+  # unname() every return path here, not just some of them: `jobs` carries R list-names (the
+  # trait ids) on every path, but only lapply() over a NAMED list propagates them into the
+  # result. Leaving even one path named made the manifest's `jobs` field serialise as a JSON
+  # OBJECT on that path and a JSON ARRAY on the others -- a shape a consumer would have to
+  # handle twice and would break on whichever it had not tested. Every result already carries
+  # its own `id` field, so the R list-name was never load-bearing; only jsonlite's rendering
+  # of it was.
   if (workers <= 1L || !requireNamespace("mirai", quietly = TRUE)) {
     if (workers > 1L) {
       warning("mirai is not available; running the batch one job at a time.", call. = FALSE)
     }
-    return(lapply(jobs, ng_cp__batch_run_one, shared_path = shared_path,
-                  output_root = output_root, generated_at = generated_at,
-                  package_version = package_version))
+    return(unname(lapply(jobs, function(j) {
+      # Serial jobs beat the heart between traits. The loop over unresolved() below never
+      # runs on this path, and a job that goes quiet is indistinguishable from a dead one.
+      if (!is.null(job_dir)) ng_job_heartbeat(job_dir)
+      ng_cp__batch_run_one(j, shared_path = shared_path, output_root = output_root,
+                           generated_at = generated_at, package_version = package_version,
+                           config = config)
+    })))
   }
   # In a dev tree the package is sourced, not installed, so a daemon must load it the same
   # way. Detecting the namespace is what tells the two apart.
@@ -341,9 +586,9 @@ ng_cp__batch_dispatch <- function(jobs, workers, shared_path, output_root,
     if (!nzchar(dev_root)) {
       warning("the package is neither installed nor locatable as a source tree, so batch ",
               "daemons could not load it; running the batch one job at a time.", call. = FALSE)
-      return(lapply(jobs, ng_cp__batch_run_one, shared_path = shared_path,
+      return(unname(lapply(jobs, ng_cp__batch_run_one, shared_path = shared_path,
                     output_root = output_root, generated_at = generated_at,
-                    package_version = package_version))
+                    package_version = package_version, config = config)))
     }
   }
 
@@ -378,20 +623,41 @@ ng_cp__batch_dispatch <- function(jobs, workers, shared_path, output_root,
       try(RhpcBLASctl::blas_set_num_threads(1L), silent = TRUE)
       try(RhpcBLASctl::omp_set_num_threads(1L), silent = TRUE)
     }
-    # Read the shared context ONCE per daemon rather than once per job: it carries the
-    # genotype matrix, and a daemon may serve several jobs in turn.
-    assign(".ngcd_batch_shared", readRDS(.shared), envir = globalenv())
-  }, .root = dev_root, .use_cpp = isTRUE(use_cpp), .shared = shared_path, .rng = parent_rng)
+    # Read the shared ARTEFACT once per daemon rather than once per job: it carries the
+    # genotype matrix and the GRM, and a daemon may serve several jobs in turn. The batch's
+    # own config rides along beside it -- the two are assembled into a context per job by
+    # ng_cp__batch_ctx(), because the artefact must never supply a caller's settings.
+    assign(".ngcd_batch_artifact", ng_shared_artifact_read(.shared), envir = globalenv())
+    assign(".ngcd_batch_config", .config, envir = globalenv())
+  }, .root = dev_root, .use_cpp = isTRUE(use_cpp), .shared = shared_path, .rng = parent_rng,
+     .config = config)
 
   m <- mirai::mirai_map(
     jobs, ng_cp__batch_run_one,
     .args = list(shared_path = shared_path, output_root = output_root,
                  generated_at = generated_at, package_version = package_version))
+  # NOTE: `config` is NOT in .args -- mirai serialises .args per call, and a config carrying
+  # an in-memory genotype matrix would then cross the socket once per trait. It reaches the
+  # daemons once, through the everywhere() block above.
+  # Collect by polling rather than with a bare m[], for one reason: m[] blocks until every
+  # job resolves, and a job that is working hard for two hours would be indistinguishable
+  # from a job whose process died an hour ago. Touching an mtime is all this costs -- no file
+  # content is rewritten, and progress itself still comes from the workers' own status files.
+  if (!is.null(job_dir)) {
+    while (any(mirai::unresolved(m))) {
+      ng_job_heartbeat(job_dir)
+      Sys.sleep(2)
+    }
+  }
   out <- m[]
   # A daemon that died leaves a miraiError in place of the job's result. Convert it to the
   # same failure shape a caught error produces, so one dead worker cannot make the manifest
   # a different shape from a failed run.
-  lapply(seq_along(out), function(i) {
+  #
+  # unname(): explicit here even though lapply(seq_along(out), ...) already drops names, so
+  # this path's shape does not depend on that incidental fact holding across a future edit --
+  # see the comment on the serial return above.
+  unname(lapply(seq_along(out), function(i) {
     r <- out[[i]]
     if (inherits(r, "miraiError") || inherits(r, "errorValue")) {
       return(list(id = jobs[[i]]$id, traits = jobs[[i]]$traits, status = "error",
@@ -399,5 +665,5 @@ ng_cp__batch_dispatch <- function(jobs, workers, shared_path, output_root,
                   warnings = character(0), elapsed_sec = NA_real_))
     }
     r
-  })
+  }))
 }

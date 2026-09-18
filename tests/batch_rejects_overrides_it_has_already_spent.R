@@ -18,23 +18,43 @@ source(helper[file.exists(helper)][[1L]])
 
 # The list must name real settings. A typo, or a formal renamed by a later release, would
 # silently stop protecting the key it was written for -- the guard would still "pass"
-# while admitting exactly the override it exists to reject.
+# while admitting exactly the override it exists to reject. The same check covers
+# ng_cp__batch_artifact_keys (R/54), the artefact-content sibling of this override-guard
+# list -- see the comment on ng_shared_artifact_key() in R/55 for why the two lists exist
+# and are deliberately different.
 formal_names <- names(formals(ng_run_cross_prediction))
 unknown <- setdiff(ng_cp__batch_shared_keys, formal_names)
 if (length(unknown)) {
   stop("ng_cp__batch_shared_keys names settings that are not runner arguments (renamed or ",
        "removed?): ", paste(unknown, collapse = ", "))
 }
+unknown_artifact <- setdiff(ng_cp__batch_artifact_keys, formal_names)
+if (length(unknown_artifact)) {
+  stop("ng_cp__batch_artifact_keys names settings that are not runner arguments (renamed or ",
+       "removed?): ", paste(unknown_artifact, collapse = ", "))
+}
 # And it must actually cover the things the batch computes once.
 for (k in c("duplicate_threshold", "ld_window", "grm_method", "training_genotype", "genotype")) {
   stopifnot(k %in% ng_cp__batch_shared_keys)
 }
-# traits_to_use must NOT be in it -- selecting the trait is the entire point of a job.
+# traits_to_use must NOT be in the override guard -- selecting the trait is the entire point
+# of a job.
 stopifnot(!("traits_to_use" %in% ng_cp__batch_shared_keys))
-# Nor may it swallow ordinary per-job settings, which the breeder was promised they could vary.
+# Nor may the override guard swallow ordinary per-job settings, which the breeder was
+# promised they could vary.
 for (k in c("n_crosses", "min_cv_predictive_r2", "trait_value_metric", "selection_prop")) {
   stopifnot(!(k %in% ng_cp__batch_shared_keys))
 }
+# But the ARTEFACT key must cover exactly the settings that feed trait_spec at QC time --
+# traits_to_use included, precisely because it is overridable per job yet still bakes into
+# the persisted trait_spec (ng_run_cp_trait_spec()/ng_run_cp_index_spec(), R/39).
+for (k in c("traits_to_use", "trait_weights", "prediction_mode", "index_col", "index_direction")) {
+  stopifnot(k %in% ng_cp__batch_artifact_keys)
+}
+# The artefact set is the shared-guard set PLUS those five, not a disjoint list.
+stopifnot(identical(sort(ng_cp__batch_artifact_keys),
+                    sort(unique(c(ng_cp__batch_shared_keys, "traits_to_use", "trait_weights",
+                                 "prediction_mode", "index_col", "index_direction")))))
 
 set.seed(1313)
 n <- 20L; m <- 24L

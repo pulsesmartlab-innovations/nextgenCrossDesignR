@@ -71,6 +71,12 @@ ng_backend_controls <- function() {
       c(family_variance          = "Family variance",
         reliable_family_variance = "Prediction-aware family variance (PMV)"),
       depends_on = "trait_value_metric=usefulness"),
+    num("keep_jobs", "Finished jobs to keep", "run", 20, min = 1, max = 500, step = 1,
+        note = paste0("How many finished batch jobs are retained before the oldest are ",
+                      "removed. A running job is never removed however old it is, and a ",
+                      "shared data artefact is never removed while any surviving job still ",
+                      "references it -- so lowering this frees finished results, never work ",
+                      "in progress.")),
     # --- marker-effect reliability gate -------------------------------------------
     num("batch_workers", "Traits analysed at the same time", "run", NA_real_,
         min = 1, max = 64, step = 1,

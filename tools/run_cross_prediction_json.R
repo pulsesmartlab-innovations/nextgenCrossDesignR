@@ -60,14 +60,65 @@ stage    <- if (!is.null(cfg$stage)) as.character(cfg$stage) else NULL
 batch_jobs <- cfg$batch_jobs
 batch_output_root <- if (!is.null(cfg$batch_output_root)) as.character(cfg$batch_output_root) else NULL
 batch_workers <- if (!is.null(cfg$batch_workers)) as.integer(cfg$batch_workers) else NULL
+batch_job_dir <- if (!is.null(cfg$job_dir)) as.character(cfg$job_dir) else NULL
+batch_shared_dir <- if (!is.null(cfg$shared_dir)) as.character(cfg$shared_dir) else NULL
+batch_resume <- isTRUE(cfg$resume)
 cfg$workflow <- NULL; cfg$stage <- NULL
 cfg$batch_jobs <- NULL; cfg$batch_output_root <- NULL; cfg$batch_workers <- NULL
+cfg$job_dir <- NULL; cfg$shared_dir <- NULL; cfg$resume <- NULL
+
+# Write the job record FIRST. The frontend spawns this process detached and then looks for
+# job.json; if the backend cannot load or the config is bad, a job that never wrote a record
+# is indistinguishable from one that was never launched, and "nothing happened" is the worst
+# possible feedback for a run expected to take hours.
+if (!is.null(batch_job_dir)) {
+  ng_job_create(batch_job_dir, config = cfg, label = basename(batch_job_dir))
+}
+
+# Every way this script can die AFTER the record exists must move the job to "failed".
+#
+# A job left at "queued" is unrecoverable by design: ng_job_status() never reinterprets
+# "queued" (there is nothing to reinterpret -- no heartbeat was ever written), ng_job_prune()
+# protects it unconditionally, and ng_job_mark() is not exported, so a breeder has no
+# supported way to collect it. It would sit in the Jobs tab forever claiming it was about to
+# start. So the config validation below reports through this rather than through a bare
+# stop(), which is what used to leave exactly that state behind.
+ng_json_fail_job <- function(msg) {
+  if (!is.null(batch_job_dir) && file.exists(file.path(batch_job_dir, "job.json"))) {
+    ng_job_mark(batch_job_dir, "failed", list(error_message = msg))
+  }
+  invisible(NULL)
+}
+
 valid_args <- names(formals(ng_run_cross_prediction))
 unknown <- setdiff(names(cfg), valid_args)
 if (length(unknown)) {
-  stop("Unknown config key(s) (not ng_run_cross_prediction arguments): ",
-       paste(unknown, collapse = ", "),
-       ". See docs/frontend/contracts/config_schema.json.", call. = FALSE)
+  msg <- paste0("Unknown config key(s) (not ng_run_cross_prediction arguments): ",
+                paste(unknown, collapse = ", "),
+                ". See docs/frontend/contracts/config_schema.json.")
+  ng_json_fail_job(msg)
+  stop(msg, call. = FALSE)
+}
+
+# job_dir and batch_output_root are the SAME directory, and saying so is the only way the
+# two halves of the contract meet: workers write <output_root>/<trait>/status.json, while
+# ng_job_status() scans <job_dir> for them. Defaulting output_root beside result.json -- as
+# the non-job batch path does -- would give a caller who passed only job_dir a job whose
+# traits were permanently invisible: the record would say "running" and then "finished" with
+# nothing under it, forever. Default it, and refuse a mismatch rather than produce that.
+if (!is.null(batch_job_dir)) {
+  norm <- function(p) normalizePath(p, winslash = "/", mustWork = FALSE)
+  if (is.null(batch_output_root)) {
+    batch_output_root <- batch_job_dir
+  } else if (!identical(norm(batch_output_root), norm(batch_job_dir))) {
+    msg <- paste0("batch_output_root (", batch_output_root, ") must be the same directory as ",
+                  "job_dir (", batch_job_dir, "). Workers write each trait's status.json ",
+                  "under batch_output_root and ng_job_status() reads them from job_dir, so a ",
+                  "job pointed at a different output root reports no traits at all. Omit ",
+                  "batch_output_root to have it follow job_dir.")
+    ng_json_fail_job(msg)
+    stop(msg, call. = FALSE)
+  }
 }
 # A JSON object of scalars (e.g. {"yield":0.4,...}) parses to a named list; the runner wants a
 # named numeric vector for trait_weights.
@@ -105,12 +156,17 @@ batched <- identical(workflow, "batch")
 res <- tryCatch(
   withCallingHandlers(
     if (batched) {
-      # Default the output root beside result.json, matching how run_dir is derived for the
-      # staged workflow -- a caller that says nothing still gets its files somewhere sensible.
+      # With a job_dir, batch_output_root has already been resolved to it above -- the two
+      # must be the same directory or the job's traits are invisible. Without one, default
+      # beside result.json, matching how run_dir is derived for the staged workflow, so a
+      # caller that says nothing still gets its files somewhere sensible.
       root_dir <- if (!is.null(batch_output_root)) batch_output_root else
         file.path(dirname(result_path), "batch")
       ng_run_cross_prediction_batch(cfg, jobs = batch_jobs, output_root = root_dir,
                                     batch_workers = batch_workers,
+                                    job_dir = batch_job_dir,
+                                    shared_dir = batch_shared_dir,
+                                    resume = batch_resume,
                                     generated_at = generated_at, package_version = version)
     } else if (staged) {
       if (is.null(stage)) ng_stop("workflow = 'stage' requires a 'stage' key")
@@ -127,6 +183,7 @@ res <- tryCatch(
 )
 
 if (inherits(res, "ng_run_json_error")) {
+  ng_json_fail_job(res$message)
   write_result(list(
     schema          = "ng_run_result.v1",
     status          = "error",
@@ -136,7 +193,7 @@ if (inherits(res, "ng_run_json_error")) {
     error_message   = res$message,         # flat field the frontend renders
     generated_at    = generated_at,
     package_version = version,
-    warnings        = run_warnings
+    warnings        = I(as.character(run_warnings))
   ))
   cat("Run blocked: ", res$message, "\n", sep = "", file = stderr())
   cat("Wrote error result: ", normalizePath(result_path, winslash = "/", mustWork = FALSE), "\n", sep = "")
@@ -167,7 +224,7 @@ if (batched) {
     workers = mf$workers, worker_basis = mf$worker_basis,
     manifest_path = res$manifest_path,
     jobs = mf$jobs,
-    warnings = run_warnings))
+    warnings = I(as.character(run_warnings))))
   cat("Wrote batch manifest: ",
       normalizePath(result_path, winslash = "/", mustWork = FALSE), "\n", sep = "")
   for (j in mf$jobs) cat("  ", j$id, ": ", j$status, "\n", sep = "")
@@ -182,12 +239,14 @@ if (staged) {
   if (!is.null(full)) {
     envelope <- full_envelope(full)
     envelope$stage <- res$stage
-    envelope$files <- res$files
+    # Plural field, pinned: a stage that wrote one artifact must not serialise `files` as a
+    # bare string when a stage that wrote three serialises an array.
+    envelope$files <- I(as.character(res$files))
   } else {
     envelope <- list(
       schema = "ng_run_result.v1", status = res$status, ok = TRUE, stage = res$stage,
-      files = res$files, generated_at = generated_at, package_version = version,
-      warnings = run_warnings)
+      files = I(as.character(res$files)), generated_at = generated_at,
+      package_version = version, warnings = I(as.character(run_warnings)))
   }
   write_result(envelope)
   cat("Wrote stage result (", res$stage, ", ", res$status, "): ",
