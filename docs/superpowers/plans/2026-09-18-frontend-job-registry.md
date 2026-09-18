@@ -241,9 +241,10 @@ test_that("the frontend does not reimplement the backend's derived states", {
   # `crashed` and `incomplete` are derived by ng_job_status() from a stale heartbeat and
   # from a trait's state relative to its job's. If this package computed either itself, the
   # two would drift. Nothing in R/jobs.R may mention them outside a comment.
-  src <- readLines(system.file("R", "jobs.R", package = "nextgenCrossWorkbench"),
-                   warn = FALSE)
-  if (!length(src)) src <- readLines(file.path("..", "..", "R", "jobs.R"), warn = FALSE)
+  # testthat runs from tests/testthat/, so the source is two levels up. Read it directly
+  # rather than via system.file(): the package is not installed during test_local(), and
+  # readLines("") only warns instead of failing, which would make this assertion vacuous.
+  src <- readLines(file.path("..", "..", "R", "jobs.R"), warn = FALSE)
   code <- grep("^\\s*#", src, value = TRUE, invert = TRUE)
   expect_false(any(grepl("heartbeat", code)))
   expect_false(any(grepl('"crashed"', code, fixed = TRUE)))
