@@ -627,7 +627,18 @@ ng_cp__batch_dispatch <- function(jobs, workers, shared_path, output_root,
     # genotype matrix and the GRM, and a daemon may serve several jobs in turn. The batch's
     # own config rides along beside it -- the two are assembled into a context per job by
     # ng_cp__batch_ctx(), because the artefact must never supply a caller's settings.
-    assign(".ngcd_batch_artifact", ng_shared_artifact_read(.shared), envir = globalenv())
+    #
+    # everywhere() evaluates in the daemon's GLOBAL environment. On the dev path ng_load()
+    # has just sourced every internal (ng_shared_artifact_read included) into that same
+    # global environment, so a plain call resolves. On the installed path library() exposes
+    # only EXPORTED functions -- ng_shared_artifact_read is internal, so it must be fetched
+    # from the namespace explicitly instead. Getting this wrong fails in exactly one
+    # direction -- the dev tree works, production does not -- which is how it reached a
+    # release: every batch test lived under tests/*.R, which runs against the source tree,
+    # and none lived under tests/testthat/, which runs against the installed package.
+    .read_artifact <- if (nzchar(.root)) get("ng_shared_artifact_read", envir = globalenv())
+                       else getFromNamespace("ng_shared_artifact_read", "nextgenCrossDesign")
+    assign(".ngcd_batch_artifact", .read_artifact(.shared), envir = globalenv())
     assign(".ngcd_batch_config", .config, envir = globalenv())
   }, .root = dev_root, .use_cpp = isTRUE(use_cpp), .shared = shared_path, .rng = parent_rng,
      .config = config)
